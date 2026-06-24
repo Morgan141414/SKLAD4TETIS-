@@ -102,6 +102,24 @@ class SupplierUpdate(SupplierCreate):
     pass
 
 
+class SupplierApplicationCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=240)
+    bin: str | None = Field(default=None, max_length=32)
+    phone: str | None = Field(default=None, max_length=64)
+    email: str = Field(min_length=3, max_length=254)
+    contact_person: str | None = Field(default=None, max_length=200)
+    address: str | None = Field(default=None, max_length=500)
+    city: str | None = Field(default=None, max_length=200)
+    delivery_days: int | None = Field(default=None, ge=1, le=365)
+    notes: str | None = Field(default=None, max_length=2000)
+
+
+class SupplierApplicationReview(BaseModel):
+    status: str = Field(pattern="^(approved|rejected|needs_changes|suspended)$")
+    reason: str | None = Field(default=None, max_length=1000)
+    supplier_id: int | None = None
+
+
 class WarehouseCreate(BaseModel):
     name: str = Field(min_length=1, max_length=200)
     department: str | None = Field(default=None, max_length=200)
@@ -376,6 +394,41 @@ class Supplier(Row):
     city: str | None = None
     delivery_days: int | None = None
     portal_access_enabled: bool = False
+
+
+class SupplierApplication(Row):
+    id: int
+    actor_id: str
+    supplier_id: int | None = None
+    status: str
+    name: str
+    bin: str | None = None
+    phone: str | None = None
+    email: str
+    contact_person: str | None = None
+    address: str | None = None
+    city: str | None = None
+    delivery_days: int | None = None
+    notes: str | None = None
+    review_reason: str | None = None
+    submitted_at: datetime
+    reviewed_by: str | None = None
+    reviewed_at: datetime | None = None
+    supplier_name: str | None = None
+
+
+class SupplierApplicationPage(BaseModel):
+    items: list[SupplierApplication]
+    total: int
+    limit: int
+    offset: int
+
+
+class SupplierApplicationReviewResponse(BaseModel):
+    application: SupplierApplication
+    supplier_id: int | None = None
+    email: str | None = None
+    generated_password: str | None = None
 
 
 class Warehouse(Row):

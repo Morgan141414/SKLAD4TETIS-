@@ -19,6 +19,52 @@
         </label>
         <div id="login-error" style="color:var(--danger); margin:10px 0; font-size:.85rem; display:none"></div>
         <button id="login-submit" class="primary" style="margin-top:6px; width:100%">Войти</button>
+        <button id="show-application-form" class="secondary" style="margin-top:10px; width:100%">Стать поставщиком</button>
+      </div>
+    </div>
+
+    <div id="application-screen" style="display:none; position:fixed; inset:0; background:var(--bg); align-items:center; justify-content:center; z-index:1001; overflow:auto; padding:18px">
+      <div class="form-panel" style="width:100%; max-width:720px">
+        <div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start">
+          <div>
+            <h2>Заявка поставщика</h2>
+            <p style="color:var(--muted);font-size:.9rem;margin-bottom:14px">После проверки Tetis выдаст доступ в этот портал.</p>
+          </div>
+          <button id="hide-application-form" class="icon-button" type="button" title="Закрыть">×</button>
+        </div>
+        <form id="supplier-application-form" class="form-grid">
+          <label>Название компании
+            <input name="name" required maxlength="240" />
+          </label>
+          <label>БИН
+            <input name="bin" maxlength="32" />
+          </label>
+          <label>Email для входа
+            <input name="email" type="email" required maxlength="254" />
+          </label>
+          <label>Телефон
+            <input name="phone" maxlength="64" />
+          </label>
+          <label>Контактное лицо
+            <input name="contact_person" maxlength="200" />
+          </label>
+          <label>Город
+            <input name="city" maxlength="200" />
+          </label>
+          <label class="full">Адрес
+            <input name="address" maxlength="500" />
+          </label>
+          <label>Срок поставки, дней
+            <input name="delivery_days" type="number" min="1" max="365" />
+          </label>
+          <label class="full">Комментарий
+            <textarea name="notes" maxlength="2000"></textarea>
+          </label>
+          <div id="application-result" class="full" style="display:none"></div>
+          <div class="actions full">
+            <button class="primary" type="submit">Отправить заявку</button>
+          </div>
+        </form>
       </div>
     </div>
 

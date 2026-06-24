@@ -263,4 +263,57 @@ el("nav-toggle").addEventListener("click", () => {
   document.querySelector(".sidebar")?.classList.toggle("nav-open");
 });
 
+el("show-application-form").addEventListener("click", () => {
+  el("application-result").style.display = "none";
+  el("application-result").textContent = "";
+  el("supplier-application-form").reset();
+  el("supplier-application-form").style.display = "";
+  el("supplier-application-form").querySelector("button[type=submit]").disabled = false;
+  el("application-screen").style.display = "flex";
+});
+
+el("hide-application-form").addEventListener("click", () => {
+  el("application-screen").style.display = "none";
+});
+
+el("supplier-application-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const form = event.target;
+  const resultBox = el("application-result");
+  resultBox.style.display = "none";
+  const payload = {
+    name: form.name.value.trim(),
+    bin: form.bin.value.trim() || null,
+    email: form.email.value.trim(),
+    phone: form.phone.value.trim() || null,
+    contact_person: form.contact_person.value.trim() || null,
+    city: form.city.value.trim() || null,
+    address: form.address.value.trim() || null,
+    delivery_days: form.delivery_days.value ? Number(form.delivery_days.value) : null,
+    notes: form.notes.value.trim() || null,
+  };
+  const submitButton = form.querySelector("button[type=submit]");
+  submitButton.disabled = true;
+  try {
+    const resp = await fetch(`${API}/supplier-applications`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    const body = await resp.json().catch(() => ({}));
+    if (!resp.ok) {
+      throw new Error(body?.detail?.message || body?.detail || "Не удалось отправить заявку");
+    }
+    resultBox.style.color = "var(--success, #1a7f37)";
+    resultBox.textContent = "Заявка отправлена. После проверки Tetis вы получите доступ в этот портал на указанный email.";
+    resultBox.style.display = "block";
+    form.style.display = "none";
+  } catch (err) {
+    resultBox.style.color = "var(--danger)";
+    resultBox.textContent = err.message;
+    resultBox.style.display = "block";
+    submitButton.disabled = false;
+  }
+});
+
 boot();

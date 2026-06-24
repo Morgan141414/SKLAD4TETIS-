@@ -33,6 +33,8 @@ from app.domain.schemas import (
     ReservationUseCreate,
     SensorDeviceCreate,
     SensorReadingCreate,
+    SupplierApplicationCreate,
+    SupplierApplicationReview,
     SupplierCreate,
     SupplierUpdate,
     SupplierReturnDocumentCreate,
@@ -2908,3 +2910,104 @@ class MisProcedureIntegrationTest(TestCase):
         self.service.delete_procedure_consumption_template(self.template["id"], actor_id="admin")
         templates = self.service.list_procedure_consumption_templates(mis_clinic_id="clinic-1")
         self.assertEqual(templates, [])
+
+
+class SupplierApplicationTest(TestCase):
+    def setUp(self) -> None:
+        self.database = SQLiteDatabase(":memory:")
+        self.database.init_schema()
+        self.service = WarehouseService(self.database)
+
+    def submit(self, email: str = "newsupplier@example.kz", **overrides) -> dict:
+        payload = {
+            "name": "ТОО Новый Поставщик",
+            "bin": "123456789012",
+            "email": email,
+            "phone": "+77001234567",
+            "contact_person": "Иванов Иван",
+            "city": "Алматы",
+            "delivery_days": 5,
+            "notes": "Готовы поставлять расходники",
+        }
+        payload.update(overrides)
+        return self.service.submit_supplier_application(SupplierApplicationCreate(**payload), actor_id=email)
+
+    def test_submit_creates_pending_application(self) -> None:
+        application = self.submit()
+        self.assertEqual(application["status"], "pending")
+        self.assertEqual(application["supplier_id"], None)
+        self.assertEqual(self.service.count_supplier_applications("pending"), 1)
+
+    def test_duplicate_active_application_for_same_email_is_rejected(self) -> None:
+        self.submit()
+        with self.assertRaises(ValidationError):
+            self.submit()
+
+    def test_resubmission_allowed_after_rejection(self) -> None:
+        application = self.submit()
+        self.service.review_supplier_application(
+            application["id"], SupplierApplicationReview(status="rejected", reason="БИН не подтверждён"), "admin"
+        )
+        # No exception: a new application for the same email is allowed once the old one is resolved.
+        second = self.submit()
+        self.assertEqual(second["status"], "pending")
+
+    def test_approve_creates_supplier_and_grants_portal_access(self) -> None:
+        application = self.submit()
+        approved = self.service.review_supplier_application(
+            application["id"],
+            SupplierApplicationReview(status="approved"),
+            "admin",
+            password_hash="hashed-secret",
+        )
+        self.assertEqual(approved["status"], "approved")
+        self.assertIsNotNone(approved["supplier_id"])
+        suppliers = self.service.list_suppliers()
+        supplier = next(s for s in suppliers if s["id"] == approved["supplier_id"])
+        self.assertEqual(supplier["name"], "ТОО Новый Поставщик")
+        self.assertEqual(supplier["email"], "newsupplier@example.kz")
+        self.assertTrue(supplier["portal_access_enabled"])
+        self.assertIsNotNone(supplier["password_hash"])
+
+    def test_approve_matches_existing_supplier_by_bin_instead_of_duplicating(self) -> None:
+        existing = self.service.create_supplier(SupplierCreate(name="ТОО Старый Поставщик", bin="123456789012"))
+        application = self.submit()
+        approved = self.service.review_supplier_application(
+            application["id"], SupplierApplicationReview(status="approved"), "admin"
+        )
+        self.assertEqual(approved["supplier_id"], existing["id"])
+        suppliers = self.service.list_suppliers()
+        matching = [s for s in suppliers if s["bin"] == "123456789012"]
+        self.assertEqual(len(matching), 1)
+
+    def test_reject_does_not_create_supplier(self) -> None:
+        application = self.submit()
+        rejected = self.service.review_supplier_application(
+            application["id"], SupplierApplicationReview(status="rejected", reason="Недостаточно данных"), "admin"
+        )
+        self.assertEqual(rejected["status"], "rejected")
+        self.assertIsNone(rejected["supplier_id"])
+        self.assertEqual(self.service.list_suppliers(), [])
+
+    def test_needs_changes_does_not_create_supplier_and_can_be_resubmitted_later(self) -> None:
+        application = self.submit()
+        updated = self.service.review_supplier_application(
+            application["id"],
+            SupplierApplicationReview(status="needs_changes", reason="Уточните БИН"),
+            "admin",
+        )
+        self.assertEqual(updated["status"], "needs_changes")
+        self.assertIsNone(updated["supplier_id"])
+
+    def test_list_supplier_applications_filters_by_status(self) -> None:
+        app1 = self.submit(email="one@example.kz")
+        self.submit(email="two@example.kz")
+        self.service.review_supplier_application(
+            app1["id"], SupplierApplicationReview(status="approved"), "admin"
+        )
+        pending = self.service.list_supplier_applications(status="pending")
+        self.assertEqual(len(pending), 1)
+        self.assertEqual(pending[0]["email"], "two@example.kz")
+        approved = self.service.list_supplier_applications(status="approved")
+        self.assertEqual(len(approved), 1)
+        self.assertEqual(approved[0]["email"], "one@example.kz")

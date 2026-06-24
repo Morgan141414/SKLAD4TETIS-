@@ -47,6 +47,8 @@ from app.domain.schemas import (
     SensorDeviceCreate,
     SensorDeviceUpdate,
     SensorReadingCreate,
+    SupplierApplicationCreate,
+    SupplierApplicationReview,
     SupplierCreate,
     SupplierUpdate,
     SupplierReturnDocumentCreate,
@@ -322,6 +324,208 @@ class WarehouseService:
                 "supplier",
                 supplier_id,
                 {"before": before, "after": updated},
+            )
+            return updated
+
+    def submit_supplier_application(
+        self, data: SupplierApplicationCreate, actor_id: str = "public"
+    ) -> dict[str, Any]:
+        with self.database.transaction() as connection:
+            existing = connection.execute(
+                """
+                SELECT id FROM supplier_applications
+                WHERE lower(email) = lower(?)
+                  AND status IN ('pending', 'needs_changes')
+                """,
+                (data.email,),
+            ).fetchone()
+            if existing:
+                raise ValidationError("Active supplier application already exists for this email")
+            now = now_iso()
+            application_id = insert_and_get_id(
+                connection,
+                """
+                INSERT INTO supplier_applications(
+                  actor_id, supplier_id, status, name, bin, phone, email,
+                  contact_person, address, city, delivery_days, notes,
+                  review_reason, submitted_at, reviewed_by, reviewed_at
+                ) VALUES (?, NULL, 'pending', ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, NULL, NULL)
+                """,
+                (
+                    actor_id,
+                    data.name,
+                    data.bin,
+                    data.phone,
+                    data.email,
+                    data.contact_person,
+                    data.address,
+                    data.city,
+                    data.delivery_days,
+                    data.notes,
+                    now,
+                ),
+            )
+            application = self._get_supplier_application(connection, application_id)
+            self._audit(connection, actor_id, AuditAction.CREATE, "supplier_application", application_id, application)
+            return application
+
+    def get_supplier_application(self, application_id: int) -> dict[str, Any]:
+        connection = self.database.connect()
+        try:
+            return self._get_supplier_application(connection, application_id)
+        finally:
+            self._close_connection(connection)
+
+    def list_supplier_applications(
+        self, status: str | None = None, limit: int = 100, offset: int = 0
+    ) -> list[dict[str, Any]]:
+        safe_limit = max(1, min(limit, 500))
+        safe_offset = max(0, offset)
+        params: tuple[Any, ...] = ()
+        where = ""
+        if status:
+            where = "WHERE sa.status = ?"
+            params = (status,)
+        connection = self.database.connect()
+        try:
+            rows = connection.execute(
+                f"""
+                SELECT sa.*, s.name AS supplier_name
+                FROM supplier_applications sa
+                LEFT JOIN suppliers s ON s.id = sa.supplier_id
+                {where}
+                ORDER BY sa.submitted_at DESC, sa.id DESC
+                LIMIT ? OFFSET ?
+                """,
+                (*params, safe_limit, safe_offset),
+            ).fetchall()
+            return [dict(row) for row in rows]
+        finally:
+            self._close_connection(connection)
+
+    def count_supplier_applications(self, status: str | None = None) -> int:
+        connection = self.database.connect()
+        try:
+            if status:
+                row = connection.execute(
+                    "SELECT COUNT(*) AS total FROM supplier_applications WHERE status = ?",
+                    (status,),
+                ).fetchone()
+            else:
+                row = connection.execute("SELECT COUNT(*) AS total FROM supplier_applications").fetchone()
+            return int(row["total"])
+        finally:
+            self._close_connection(connection)
+
+    def review_supplier_application(
+        self,
+        application_id: int,
+        data: SupplierApplicationReview,
+        reviewer_id: str,
+        password_hash: str | None = None,
+    ) -> dict[str, Any]:
+        with self.database.transaction() as connection:
+            application = self._get_supplier_application(connection, application_id)
+            supplier_id = data.supplier_id or application.get("supplier_id")
+            if data.status == "approved":
+                if supplier_id is None:
+                    matched = None
+                    if application.get("bin"):
+                        matched = connection.execute(
+                            "SELECT id FROM suppliers WHERE bin = ? ORDER BY id LIMIT 1",
+                            (application["bin"],),
+                        ).fetchone()
+                    if matched is None:
+                        matched = connection.execute(
+                            "SELECT id FROM suppliers WHERE lower(email) = lower(?) ORDER BY id LIMIT 1",
+                            (application["email"],),
+                        ).fetchone()
+                    supplier_id = int(matched["id"]) if matched else None
+                if supplier_id is None:
+                    supplier_id = insert_and_get_id(
+                        connection,
+                        """
+                        INSERT INTO suppliers(
+                          name, bin, phone, address, rating, is_preferred,
+                          contact_person, email, contract_number, contract_expires_on,
+                          payment_terms, notes, lat, lng, city, delivery_days
+                        ) VALUES (?, ?, ?, ?, NULL, ?, ?, ?, NULL, NULL, NULL, ?, NULL, NULL, ?, ?)
+                        """,
+                        (
+                            application["name"],
+                            application.get("bin"),
+                            application.get("phone"),
+                            application.get("address"),
+                            0,
+                            application.get("contact_person"),
+                            application.get("email"),
+                            application.get("notes"),
+                            application.get("city"),
+                            application.get("delivery_days"),
+                        ),
+                    )
+                else:
+                    self._require(connection, "suppliers", supplier_id)
+                    connection.execute(
+                        """
+                        UPDATE suppliers
+                        SET name = ?,
+                            bin = COALESCE(?, bin),
+                            phone = COALESCE(?, phone),
+                            address = COALESCE(?, address),
+                            contact_person = COALESCE(?, contact_person),
+                            email = COALESCE(?, email),
+                            notes = COALESCE(?, notes),
+                            city = COALESCE(?, city),
+                            delivery_days = COALESCE(?, delivery_days)
+                        WHERE id = ?
+                        """,
+                        (
+                            application["name"],
+                            application.get("bin"),
+                            application.get("phone"),
+                            application.get("address"),
+                            application.get("contact_person"),
+                            application.get("email"),
+                            application.get("notes"),
+                            application.get("city"),
+                            application.get("delivery_days"),
+                            supplier_id,
+                        ),
+                    )
+                if password_hash:
+                    connection.execute(
+                        "UPDATE suppliers SET password_hash = ?, portal_access_enabled = TRUE WHERE id = ?",
+                        (password_hash, supplier_id),
+                    )
+            now = now_iso()
+            connection.execute(
+                """
+                UPDATE supplier_applications
+                SET status = ?,
+                    supplier_id = ?,
+                    review_reason = ?,
+                    reviewed_by = ?,
+                    reviewed_at = ?
+                WHERE id = ?
+                """,
+                (
+                    data.status,
+                    supplier_id,
+                    data.reason,
+                    reviewer_id,
+                    now,
+                    application_id,
+                ),
+            )
+            updated = self._get_supplier_application(connection, application_id)
+            self._audit(
+                connection,
+                reviewer_id,
+                AuditAction.UPDATE,
+                "supplier_application",
+                application_id,
+                {"before": application, "after": updated},
             )
             return updated
 
@@ -6381,6 +6585,24 @@ class WarehouseService:
         ).fetchone()
         if row is None:
             raise NotFoundError(f"purchase_requests#{request_id} not found")
+        return dict(row)
+
+    def _get_supplier_application(
+        self, connection: Connection, application_id: int
+    ) -> dict[str, Any]:
+        row = connection.execute(
+            """
+            SELECT
+              sa.*,
+              s.name AS supplier_name
+            FROM supplier_applications sa
+            LEFT JOIN suppliers s ON s.id = sa.supplier_id
+            WHERE sa.id = ?
+            """,
+            (application_id,),
+        ).fetchone()
+        if row is None:
+            raise NotFoundError(f"supplier_applications#{application_id} not found")
         return dict(row)
 
     def _get_abc_xyz_run(self, connection: Connection, run_id: int) -> dict[str, Any]:

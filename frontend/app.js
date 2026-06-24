@@ -487,6 +487,7 @@ const state = {
     repackings: { items: [], total: 0 },
     repackTemplates: [],
     procedureConsumptionTemplates: [],
+    supplierApplications: { items: [], total: 0 },
     analytics: { items: [], analysis_days: 90, warehouse_id: null, generated_at: null },
     abcXyzRuns: { items: [], total: 0 },
     sensorDevices: [],
@@ -4718,6 +4719,7 @@ function renderUsers() {
       </div>
       ${renderJobStatus()}
     </div>
+    ${renderSupplierApplications()}
     <div class="panel" style="margin-top:1rem">
       <div class="toolbar">
         <div>
@@ -4775,6 +4777,116 @@ function renderUsers() {
       <div id="esf-status-panel" style="padding:.5rem 0;font-size:.85rem;color:#6b7280">Статус не проверялся</div>
     </div>
   `;
+}
+
+function renderSupplierApplications() {
+  const filter = state.ui.supplierApplicationStatusFilter || "pending";
+  const apps = pageItems(state.data.supplierApplications);
+  const filtered = filter === "all" ? apps : apps.filter((a) => a.status === filter);
+  const statusLabels = {
+    pending: "На рассмотрении",
+    approved: "Одобрена",
+    rejected: "Отклонена",
+    needs_changes: "Нужны правки",
+    suspended: "Приостановлена",
+  };
+  return `
+    <div class="panel" style="margin-top:1rem">
+      <div class="toolbar">
+        <div>
+          <h2>Заявки поставщиков</h2>
+          <span class="helper-text">Самостоятельные заявки «Стать поставщиком», отправленные из портала поставщика. После одобрения создаётся поставщик и доступ в портал.</span>
+        </div>
+        <select id="supplier-application-status-filter" style="padding:.35rem .5rem;border:1px solid var(--line);border-radius:4px">
+          ${["pending", "needs_changes", "approved", "rejected", "suspended", "all"].map((value) => `
+            <option value="${value}" ${filter === value ? "selected" : ""}>${value === "all" ? "Все" : statusLabels[value]}</option>
+          `).join("")}
+        </select>
+      </div>
+      ${table([
+        { label: "Компания", render: (row) => escapeHtml(row.name) },
+        { label: "БИН", render: (row) => escapeHtml(row.bin || "—") },
+        { label: "Email", render: (row) => escapeHtml(row.email) },
+        { label: "Телефон", render: (row) => escapeHtml(row.phone || "—") },
+        { label: "Город", render: (row) => escapeHtml(row.city || "—") },
+        { label: "Статус", render: (row) => {
+          const cls = { approved: "ok", rejected: "bad", suspended: "bad", needs_changes: "warn", pending: "warn" }[row.status] || "";
+          return `<span class="badge ${cls}">${escapeHtml(statusLabels[row.status] || row.status)}</span>`;
+        } },
+        { label: "Подана", render: (row) => dateText(row.submitted_at) },
+        { label: "Причина решения", render: (row) => escapeHtml((row.review_reason || "").slice(0, 80) || "—") },
+        { label: "", render: (row) => ["pending", "needs_changes"].includes(row.status) ? `
+          <div class="row-actions">
+            <button class="primary" data-supplier-application-review="${escapeAttr(row.id)}" data-supplier-application-next-status="approved">Одобрить</button>
+            <button class="secondary" data-supplier-application-review="${escapeAttr(row.id)}" data-supplier-application-next-status="needs_changes">На доработку</button>
+            <button class="danger" data-supplier-application-review="${escapeAttr(row.id)}" data-supplier-application-next-status="rejected">Отклонить</button>
+          </div>
+        ` : (row.status === "approved" ? `<button class="secondary" data-supplier-application-review="${escapeAttr(row.id)}" data-supplier-application-next-status="suspended">Приостановить</button>` : "") },
+      ], filtered, "Заявок с таким статусом пока нет.")}
+    </div>
+  `;
+}
+
+function showSupplierApplicationReviewModal(nextStatus, application) {
+  const labels = {
+    approved: { title: "Одобрить заявку поставщика", confirm: "Одобрить", tone: "primary", reasonRequired: false },
+    rejected: { title: "Отклонить заявку поставщика", confirm: "Отклонить", tone: "danger", reasonRequired: true },
+    needs_changes: { title: "Вернуть заявку на доработку", confirm: "Отправить на доработку", tone: "primary", reasonRequired: true },
+    suspended: { title: "Приостановить поставщика", confirm: "Приостановить", tone: "danger", reasonRequired: true },
+  };
+  const cfg = labels[nextStatus];
+  return new Promise((resolve) => {
+    const backdrop = document.createElement("div");
+    backdrop.className = "modal-backdrop";
+    backdrop.innerHTML = `
+      <section class="confirm-modal" role="dialog" aria-modal="true" style="max-width:520px">
+        <header><h2>${escapeHtml(cfg.title)}</h2></header>
+        <p class="confirm-message">${escapeHtml(application.name)} (${escapeHtml(application.email)})</p>
+        <div style="padding:.5rem 0">
+          <label style="display:block;font-size:.85rem;margin-bottom:.25rem">Комментарий${cfg.reasonRequired ? ' <span style="color:#dc2626">*</span>' : " (необязательно)"}</label>
+          <textarea id="sa-reason" rows="3" style="width:100%;box-sizing:border-box;padding:.4rem;border:1px solid #ccc;border-radius:4px;font-size:.9rem"></textarea>
+        </div>
+        <footer>
+          <button class="secondary" type="button" id="sa-cancel">Отмена</button>
+          <button class="${cfg.tone === "danger" ? "danger" : "primary"}" type="button" id="sa-ok">${escapeHtml(cfg.confirm)}</button>
+        </footer>
+      </section>
+    `;
+    document.body.appendChild(backdrop);
+    const close = (result) => { backdrop.remove(); resolve(result); };
+    backdrop.querySelector("#sa-cancel").addEventListener("click", () => close(null));
+    backdrop.addEventListener("click", (e) => { if (e.target === backdrop) close(null); });
+    backdrop.querySelector("#sa-ok").addEventListener("click", () => {
+      const reason = backdrop.querySelector("#sa-reason").value.trim();
+      if (cfg.reasonRequired && !reason) {
+        backdrop.querySelector("#sa-reason").style.outline = "2px solid red";
+        return;
+      }
+      close({ reason: reason || null });
+    });
+    backdrop.querySelector("#sa-reason").focus();
+  });
+}
+
+function showGeneratedPasswordModal({ title, message, password }) {
+  return new Promise((resolve) => {
+    const backdrop = document.createElement("div");
+    backdrop.className = "modal-backdrop";
+    backdrop.innerHTML = `
+      <section class="confirm-modal" role="dialog" aria-modal="true" style="max-width:520px">
+        <header><h2>${escapeHtml(title)}</h2></header>
+        <div class="panel" style="background:var(--ok-bg);border-color:var(--ok-border);margin:.5rem 0">
+          <strong>${escapeHtml(message)}</strong>
+          <div style="margin-top:6px;font-family:monospace;font-size:1rem;user-select:all">${escapeHtml(password)}</div>
+        </div>
+        <footer><button class="primary" type="button" id="gp-close">Закрыть</button></footer>
+      </section>
+    `;
+    document.body.appendChild(backdrop);
+    const close = () => { backdrop.remove(); resolve(); };
+    backdrop.querySelector("#gp-close").addEventListener("click", close);
+    backdrop.addEventListener("click", (e) => { if (e.target === backdrop) close(); });
+  });
 }
 
 function renderJobStatus() {
@@ -5298,7 +5410,7 @@ async function loadAll() {
     const wf = warehouseFilterParam();
     const query = wf ? `?${wf}` : "";
 
-    const [balances, batches, batchRecalls, reservations, quarantineReviews, purchaseRequests, notifications, audit, documents, inventorySessions, movements, repackings, analytics, abcXyzRuns, sensorDevices, sensorReadings, repackTemplates, procedureConsumptionTemplates] = await Promise.all([
+    const [balances, batches, batchRecalls, reservations, quarantineReviews, purchaseRequests, notifications, audit, documents, inventorySessions, movements, repackings, analytics, abcXyzRuns, sensorDevices, sensorReadings, repackTemplates, procedureConsumptionTemplates, supplierApplications] = await Promise.all([
       request(`/balances${query ? `${query}&limit=100` : "?limit=100"}`),
       request(`/batches${query ? `${query}&limit=100` : "?limit=100"}`),
       loadOptional("Отзывы партий", request("/batch-recalls?limit=200"), { items: [], total: 0 }),
@@ -5319,6 +5431,9 @@ async function loadAll() {
       loadOptional("Журнал условий хранения", request(`/sensor-readings${query ? `${query}&limit=100` : "?limit=100"}`), { items: [], total: 0 }),
       loadOptional("Шаблоны фасовки", request("/repack-templates"), []),
       loadOptional("Шаблоны расхода по процедурам", request("/procedure-consumption-templates"), []),
+      hasPermission("admin:users")
+        ? loadOptional("Заявки поставщиков", request("/tetis/supplier-applications?limit=200"), { items: [], total: 0 })
+        : Promise.resolve({ items: [], total: 0 }),
     ]);
     state.data.balances = balances;
     state.data.batches = batches;
@@ -5341,6 +5456,7 @@ async function loadAll() {
     state.data.sensorReadings = sensorReadings;
     state.data.repackTemplates = repackTemplates;
     state.data.procedureConsumptionTemplates = procedureConsumptionTemplates;
+    state.data.supplierApplications = supplierApplications;
     // Load supplier map data
     if (hasPermission("audit:read")) {
       try {
@@ -6798,6 +6914,43 @@ function bindActions() {
         showAlert("Шаблон удалён", "ok");
         await loadAll();
       } catch (error) { showAlert(error.message, "error"); }
+    });
+  });
+
+  document.getElementById("supplier-application-status-filter")?.addEventListener("change", (event) => {
+    state.ui.supplierApplicationStatusFilter = event.target.value;
+    render();
+  });
+
+  document.querySelectorAll("[data-supplier-application-review]").forEach((button) => {
+    button.addEventListener("click", async () => {
+      const applicationId = button.dataset.supplierApplicationReview;
+      const nextStatus = button.dataset.supplierApplicationNextStatus;
+      const application = pageItems(state.data.supplierApplications).find(
+        (a) => String(a.id) === String(applicationId)
+      );
+      if (!application) return;
+      const result = await showSupplierApplicationReviewModal(nextStatus, application);
+      if (!result) return;
+      try {
+        setPending(button, true);
+        const response = await request(`/tetis/supplier-applications/${applicationId}/review`, {
+          method: "POST",
+          body: JSON.stringify({ status: nextStatus, reason: result.reason }),
+        });
+        if (response.generated_password) {
+          await loadAll();
+          await showGeneratedPasswordModal({
+            title: "Поставщик одобрен",
+            message: `Пароль для входа в портал «${response.email || application.email}» — сохраните и передайте поставщику, повторно он не отобразится:`,
+            password: response.generated_password,
+          });
+        } else {
+          showAlert("Заявка обновлена", "ok");
+          await loadAll();
+        }
+      } catch (error) { showAlert(error.message, "error"); }
+      finally { setPending(button, false); }
     });
   });
 

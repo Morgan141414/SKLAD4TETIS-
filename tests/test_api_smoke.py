@@ -457,6 +457,44 @@ class APISmokeTest(TestCase):
         resp2 = self.client.post("/api/v1/webhooks/grafana", json={"alerts": []})
         self.assertEqual(resp2.status_code, 204, resp2.text)
 
+    def test_supplier_application_full_lifecycle_over_http(self) -> None:
+        # Public submission requires no auth.
+        submit_resp = self.client.post(
+            "/api/v1/supplier-applications",
+            json={
+                "name": "ТОО Тест Поставщик",
+                "bin": "987654321098",
+                "email": "test-supplier@example.kz",
+                "phone": "+77071112233",
+            },
+        )
+        self.assertEqual(submit_resp.status_code, 201, submit_resp.text)
+        application = submit_resp.json()
+        self.assertEqual(application["status"], "pending")
+
+
+        list_resp = self.client.get("/api/v1/tetis/supplier-applications", headers=self.headers)
+        self.assertEqual(list_resp.status_code, 200, list_resp.text)
+        self.assertEqual(list_resp.json()["total"], 1)
+
+        review_resp = self.client.post(
+            f"/api/v1/tetis/supplier-applications/{application['id']}/review",
+            json={"status": "approved"},
+            headers=self.headers,
+        )
+        self.assertEqual(review_resp.status_code, 200, review_resp.text)
+        review_body = review_resp.json()
+        self.assertIsNotNone(review_body["generated_password"])
+        self.assertIsNotNone(review_body["supplier_id"])
+
+        # The newly approved supplier can log into the supplier portal with the generated password.
+        login_resp = self.client.post(
+            "/api/v1/auth/supplier-login",
+            json={"email": "test-supplier@example.kz", "password": review_body["generated_password"]},
+        )
+        self.assertEqual(login_resp.status_code, 200, login_resp.text)
+        self.assertIn("access_token", login_resp.json())
+
     def test_mis_procedure_event_requires_valid_token(self) -> None:
         from app.core.config import get_settings
 

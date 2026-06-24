@@ -33,6 +33,26 @@ CREATE TABLE IF NOT EXISTS suppliers (
   notes TEXT
 );
 
+CREATE TABLE IF NOT EXISTS supplier_applications (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  actor_id TEXT NOT NULL,
+  supplier_id INTEGER REFERENCES suppliers(id),
+  status TEXT NOT NULL,
+  name TEXT NOT NULL,
+  bin TEXT,
+  phone TEXT,
+  email TEXT NOT NULL,
+  contact_person TEXT,
+  address TEXT,
+  city TEXT,
+  delivery_days INTEGER,
+  notes TEXT,
+  review_reason TEXT,
+  submitted_at TEXT NOT NULL,
+  reviewed_by TEXT,
+  reviewed_at TEXT
+);
+
 CREATE TABLE IF NOT EXISTS warehouses (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   name TEXT NOT NULL,
@@ -498,6 +518,9 @@ class SQLiteDatabase:
             self._ensure_column(connection, "suppliers", "city", "TEXT")
             self._ensure_column(connection, "warehouses", "controlled_substance_limit", "TEXT")
             self._ensure_column(connection, "suppliers", "delivery_days", "INTEGER")
+            self._ensure_column(connection, "suppliers", "password_hash", "TEXT")
+            self._ensure_column(connection, "suppliers", "portal_access_enabled", "INTEGER NOT NULL DEFAULT 0")
+            self._ensure_supplier_application_schema(connection)
             self._ensure_column(connection, "batches", "serial_number", "TEXT")
             self._ensure_column(connection, "products", "label_needs_reprint", "INTEGER NOT NULL DEFAULT 0")
             self._ensure_column(connection, "products", "last_label_price", "TEXT")
@@ -598,6 +621,37 @@ class SQLiteDatabase:
             self._ensure_sensor_schema(connection)
             self._ensure_inventory_metadata_schema(connection)
             self._ensure_supplier_price_history_schema(connection)
+
+    def _ensure_supplier_application_schema(self, connection: sqlite3.Connection) -> None:
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS supplier_applications (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              actor_id TEXT NOT NULL,
+              supplier_id INTEGER REFERENCES suppliers(id),
+              status TEXT NOT NULL,
+              name TEXT NOT NULL,
+              bin TEXT,
+              phone TEXT,
+              email TEXT NOT NULL,
+              contact_person TEXT,
+              address TEXT,
+              city TEXT,
+              delivery_days INTEGER,
+              notes TEXT,
+              review_reason TEXT,
+              submitted_at TEXT NOT NULL,
+              reviewed_by TEXT,
+              reviewed_at TEXT
+            )
+            """
+        )
+        connection.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_supplier_applications_status_submitted
+            ON supplier_applications(status, submitted_at DESC, id DESC)
+            """
+        )
 
     def _ensure_inventory_metadata_schema(self, connection: sqlite3.Connection) -> None:
         connection.execute(

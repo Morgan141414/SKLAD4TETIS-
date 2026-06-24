@@ -84,6 +84,11 @@ from app.domain.schemas import (
     StockMovement,
     StockMovementPage,
     Supplier,
+    SupplierApplication,
+    SupplierApplicationCreate,
+    SupplierApplicationPage,
+    SupplierApplicationReview,
+    SupplierApplicationReviewResponse,
     SupplierCreate,
     SupplierPriceHistoryPage,
     SupplierUpdate,
@@ -355,6 +360,86 @@ def revoke_supplier_portal_access(
     require_permission(actor_ctx, Permission.ADMIN_USERS)
     service.revoke_supplier_portal_access(supplier_id, actor_ctx.actor_id)
     return {"supplier_id": supplier_id, "portal_access_enabled": False}
+
+
+@router.post("/supplier-applications", status_code=status.HTTP_201_CREATED, response_model=SupplierApplication, tags=["suppliers"])
+def submit_supplier_application(
+    payload: SupplierApplicationCreate,
+    service: WarehouseService = Depends(get_warehouse_service),
+) -> SupplierApplication:
+    try:
+        return service.submit_supplier_application(payload, actor_id=payload.email)
+    except Exception as error:
+        raise map_error(error) from error
+
+
+@router.get("/tetis/supplier-applications", response_model=SupplierApplicationPage, tags=["suppliers"])
+def list_supplier_applications(
+    status_filter: str | None = None,
+    limit: int = 100,
+    offset: int = 0,
+    service: WarehouseService = Depends(get_warehouse_service),
+    actor_ctx: ActorContext = Depends(get_actor_context),
+):
+    try:
+        require_permission(actor_ctx, Permission.ADMIN_USERS)
+        safe_limit, safe_offset = pagination_meta(limit, offset)
+        return {
+            "items": service.list_supplier_applications(status_filter, safe_limit, safe_offset),
+            "total": service.count_supplier_applications(status_filter),
+            "limit": safe_limit,
+            "offset": safe_offset,
+        }
+    except Exception as error:
+        raise map_error(error) from error
+
+
+@router.get("/tetis/supplier-applications/{application_id}", response_model=SupplierApplication, tags=["suppliers"])
+def get_supplier_application(
+    application_id: int,
+    service: WarehouseService = Depends(get_warehouse_service),
+    actor_ctx: ActorContext = Depends(get_actor_context),
+):
+    try:
+        require_permission(actor_ctx, Permission.ADMIN_USERS)
+        return service.get_supplier_application(application_id)
+    except Exception as error:
+        raise map_error(error) from error
+
+
+@router.post(
+    "/tetis/supplier-applications/{application_id}/review",
+    response_model=SupplierApplicationReviewResponse,
+    tags=["suppliers"],
+)
+def review_supplier_application(
+    application_id: int,
+    payload: SupplierApplicationReview,
+    service: WarehouseService = Depends(get_warehouse_service),
+    actor_ctx: ActorContext = Depends(get_actor_context),
+):
+    try:
+        require_permission(actor_ctx, Permission.ADMIN_USERS)
+        generated_password = None
+        password_hash = None
+        if payload.status == "approved":
+            import secrets
+            generated_password = secrets.token_urlsafe(9)
+            password_hash = hash_password(generated_password)
+        application = service.review_supplier_application(
+            application_id,
+            payload,
+            reviewer_id=actor_ctx.actor_id,
+            password_hash=password_hash,
+        )
+        return {
+            "application": application,
+            "supplier_id": application.get("supplier_id"),
+            "email": application.get("email"),
+            "generated_password": generated_password if application.get("supplier_id") else None,
+        }
+    except Exception as error:
+        raise map_error(error) from error
 
 
 @router.post("/sklad/token", response_model=TokenResponse, tags=["auth"])
