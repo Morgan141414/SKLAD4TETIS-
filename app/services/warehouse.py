@@ -7076,6 +7076,14 @@ class WarehouseService:
             self._audit(conn, "repack_template.deleted", actor_id=actor_id,
                         payload={"template_id": template_id})
 
+    def count_mis_mapped_warehouses(self) -> int:
+        with self.database.transaction() as conn:
+            row = conn.execute(
+                "SELECT COUNT(*) AS c FROM warehouses"
+                " WHERE mis_clinic_id IS NOT NULL AND mis_room_id IS NOT NULL"
+            ).fetchone()
+            return int(row["c"])
+
     # === MIS PROCEDURE CONSUMPTION TEMPLATES ===
 
     def create_procedure_consumption_template(self, data: dict, actor_id: str) -> dict:

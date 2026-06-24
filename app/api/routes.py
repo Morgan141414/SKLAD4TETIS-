@@ -1,8 +1,9 @@
 import logging
 from datetime import date
+from decimal import Decimal
 
 from fastapi import APIRouter, Body, Depends, File, Header, HTTPException, Response, UploadFile, WebSocket, WebSocketDisconnect, status
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.core.config import get_settings
 from app.domain.errors import (
@@ -4400,15 +4401,24 @@ async def reject_pending_controlled_writeoff(
 # ── МИС-интеграция ────────────────────────────────────────────────────────────
 
 @router.get("/mis/status", tags=["mis"])
-def mis_status(actor_ctx: ActorContext = Depends(get_actor_context)):
-    """Check MIS integration configuration."""
+def mis_status(
+    service: WarehouseService = Depends(get_warehouse_service),
+    actor_ctx: ActorContext = Depends(get_actor_context),
+):
+    """Check MIS integration configuration (outbound webhook + inbound procedure events)."""
     try:
         require_permission(actor_ctx, Permission.ADMIN_USERS)
         from app.core.config import get_settings
         settings = get_settings()
+        mapped_warehouses = service.count_mis_mapped_warehouses()
+        templates = service.list_procedure_consumption_templates()
         return {
             "configured": bool(settings.mis_webhook_url),
             "webhook_url": settings.mis_webhook_url or None,
+            "inbound_configured": bool(settings.mis_inbound_webhook_token),
+            "inbound_endpoint": "/api/v1/mis/procedure-event",
+            "mapped_warehouses": mapped_warehouses,
+            "procedure_templates": len(templates),
         }
     except Exception as error:
         raise map_error(error) from error
@@ -4429,6 +4439,136 @@ def mis_test_connection(actor_ctx: ActorContext = Depends(get_actor_context)):
         if not ok:
             raise ValidationError("МИС вернула ошибку. Проверьте URL и доступность системы.")
         return {"status": "ok", "message": "Тестовое событие отправлено в МИС"}
+    except Exception as error:
+        raise map_error(error) from error
+
+
+class ProcedureConsumptionItemIn(BaseModel):
+    product_id: int
+    quantity: Decimal = Field(gt=0)
+
+
+class ProcedureConsumptionItemOut(BaseModel):
+    id: int
+    product_id: int
+    product_name: str | None = None
+    quantity: str
+
+
+class ProcedureConsumptionTemplateCreate(BaseModel):
+    mis_clinic_id: str
+    service_code: str
+    name: str
+    items: list[ProcedureConsumptionItemIn]
+
+
+class ProcedureConsumptionTemplateOut(BaseModel):
+    id: int
+    mis_clinic_id: str
+    service_code: str
+    name: str
+    created_by: str
+    created_at: str
+    items: list[ProcedureConsumptionItemOut]
+
+
+@router.get(
+    "/procedure-consumption-templates",
+    response_model=list[ProcedureConsumptionTemplateOut],
+    tags=["mis"],
+)
+def list_procedure_consumption_templates(
+    mis_clinic_id: str | None = None,
+    service: WarehouseService = Depends(get_warehouse_service),
+    actor_ctx: ActorContext = Depends(get_actor_context),
+):
+    try:
+        require_permission(actor_ctx, Permission.STOCK_READ)
+        return service.list_procedure_consumption_templates(mis_clinic_id=mis_clinic_id)
+    except Exception as error:
+        raise map_error(error) from error
+
+
+@router.post(
+    "/procedure-consumption-templates",
+    status_code=201,
+    response_model=ProcedureConsumptionTemplateOut,
+    tags=["mis"],
+)
+def create_procedure_consumption_template(
+    body: ProcedureConsumptionTemplateCreate,
+    service: WarehouseService = Depends(get_warehouse_service),
+    actor_ctx: ActorContext = Depends(get_actor_context),
+):
+    try:
+        require_permission(actor_ctx, Permission.CATALOG_WRITE)
+        return service.create_procedure_consumption_template(
+            body.model_dump(), actor_id=actor_ctx.actor_id
+        )
+    except Exception as error:
+        raise map_error(error) from error
+
+
+@router.delete("/procedure-consumption-templates/{template_id}", status_code=204, tags=["mis"])
+def delete_procedure_consumption_template(
+    template_id: int,
+    service: WarehouseService = Depends(get_warehouse_service),
+    actor_ctx: ActorContext = Depends(get_actor_context),
+):
+    try:
+        require_permission(actor_ctx, Permission.CATALOG_WRITE)
+        service.delete_procedure_consumption_template(template_id, actor_id=actor_ctx.actor_id)
+    except Exception as error:
+        raise map_error(error) from error
+
+
+class MisProcedureEventIn(BaseModel):
+    mis_clinic_id: str
+    mis_room_id: str
+    service_code: str
+    mis_event_id: str
+    patient_id: str | None = None
+    doctor_id: str | None = None
+    medical_record_no: str | None = None
+
+
+@router.post("/mis/procedure-event", tags=["mis"])
+def mis_procedure_event(
+    body: MisProcedureEventIn,
+    authorization: str | None = Header(default=None, alias="Authorization"),
+    service: WarehouseService = Depends(get_warehouse_service),
+):
+    """Inbound webhook: MIS notifies sklad that a procedure was completed.
+
+    Sklad resolves the cabinet + procedure recipe and performs the FEFO
+    write-off itself, so it keeps working even if MIS is briefly unreachable
+    afterwards.
+    """
+    import secrets
+
+    settings = get_settings()
+    if not settings.mis_inbound_webhook_token:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={"code": "not_configured", "message": "МИС inbound webhook не настроен", "details": {}},
+        )
+    expected = f"Bearer {settings.mis_inbound_webhook_token}"
+    if not authorization or not secrets.compare_digest(authorization, expected):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail={"code": "unauthorized", "message": "Invalid or missing webhook token", "details": {}},
+        )
+    try:
+        return service.process_mis_procedure_event(
+            mis_clinic_id=body.mis_clinic_id,
+            mis_room_id=body.mis_room_id,
+            service_code=body.service_code,
+            mis_event_id=body.mis_event_id,
+            patient_id=body.patient_id,
+            doctor_id=body.doctor_id,
+            medical_record_no=body.medical_record_no,
+            actor_id="mis-integration",
+        )
     except Exception as error:
         raise map_error(error) from error
 
