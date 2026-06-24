@@ -1,0 +1,158 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master, staging]
+  pull_request:
+    branches: [main, master, staging]
+
+env:
+  PYTHON_VERSION: "3.12"
+
+jobs:
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: Install ruff
+        run: pip install ruff
+
+      - name: Lint with ruff
+        run: ruff check app/ tests/
+
+  test-sqlite:
+    name: Test (SQLite)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt -r requirements-dev.txt
+
+      - name: Install cryptography (for OIDC tests)
+        run: pip install cryptography
+
+      - name: Run tests
+        env:
+          SKLAD_DATABASE_BACKEND: sqlite
+          SKLAD_DATABASE_URL: "sqlite:///./test.db"
+          SKLAD_DEV_AUTH_ENABLED: "true"
+          SKLAD_BACKGROUND_JOBS_ENABLED: "false"
+        run: python -m pytest tests/ -q --tb=short
+
+  test-postgres:
+    name: Test (PostgreSQL)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_USER: testuser
+          POSTGRES_PASSWORD: testpass
+          POSTGRES_DB: sklad_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt -r requirements-dev.txt
+
+      - name: Install cryptography
+        run: pip install cryptography
+
+      - name: Run Alembic migrations
+        env:
+          SKLAD_DATABASE_BACKEND: postgresql
+          SKLAD_DATABASE_URL: "postgresql://testuser:testpass@localhost:5432/sklad_test"
+        run: python -m alembic upgrade head
+
+      - name: Run tests
+        env:
+          SKLAD_DATABASE_BACKEND: postgresql
+          SKLAD_DATABASE_URL: "postgresql://testuser:testpass@localhost:5432/sklad_test"
+          SKLAD_DEV_AUTH_ENABLED: "true"
+          SKLAD_BACKGROUND_JOBS_ENABLED: "false"
+        run: python -m pytest tests/ -q --tb=short
+
+  docker:
+    name: Docker build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build Docker image
+        run: docker build -t sklad:ci .
+
+      - name: Smoke test image
+        run: |
+          docker run -d --name sklad-ci \
+            -e SKLAD_DATABASE_BACKEND=sqlite \
+            -e SKLAD_DATABASE_URL=sqlite:///./test.db \
+            -e SKLAD_DEV_AUTH_ENABLED=true \
+            -p 8000:8000 sklad:ci
+          sleep 5
+          curl -sf http://localhost:8000/api/v1/health
+          docker stop sklad-ci
+
+  deploy:
+    name: Deploy to production
+    needs: [lint, test-sqlite, test-postgres, docker]
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    environment: production
+    concurrency:
+      group: production-deploy
+      cancel-in-progress: false
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Deploy via SSH
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          script: |
+            set -e
+            cd /opt/sklad
+
+            # Pull latest code (assumes git remote is configured)
+            git pull origin main
+
+            # Install/update Python deps
+            .venv/bin/pip install -r requirements.txt --quiet
+
+            # Run migrations
+            .venv/bin/alembic upgrade head
+
+            # Reload service
+            systemctl restart sklad
+
+            # Health check
+            sleep 3
+            curl -sf http://localhost:8120/api/v1/health

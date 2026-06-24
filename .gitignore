@@ -1,0 +1,12 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.venv/
+.env
+sklad.db
+*.sqlite
+*.log
+server-projects/
+.playwright/
+uploads/

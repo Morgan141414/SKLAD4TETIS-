@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+    <meta name="theme-color" content="#14745f" />
+    <title>Портал поставщика — Склад</title>
+    <link rel="stylesheet" href="/app/styles.css" />
+  </head>
+  <body>
+    <div id="login-screen" style="display:flex; position:fixed; inset:0; background:var(--bg); align-items:center; justify-content:center; z-index:1000">
+      <div class="form-panel" style="width:100%; max-width:360px">
+        <h2>Портал поставщика</h2>
+        <label>Email
+          <input id="login-email" type="email" placeholder="postavshik@example.com" />
+        </label>
+        <label style="margin-top:10px">Пароль
+          <input id="login-password" type="password" />
+        </label>
+        <div id="login-error" style="color:var(--danger); margin:10px 0; font-size:.85rem; display:none"></div>
+        <button id="login-submit" class="primary" style="margin-top:6px; width:100%">Войти</button>
+      </div>
+    </div>
+
+    <div id="app-root" class="app" style="display:none">
+      <aside class="sidebar">
+        <div class="brand">
+          <div class="brand-mark">П</div>
+          <div><strong>Портал поставщика</strong><span id="supplier-name-label">—</span></div>
+          <button id="nav-toggle" type="button" aria-label="Открыть меню">&#9776;</button>
+        </div>
+        <nav class="nav" id="nav"></nav>
+        <button id="logout-button" class="secondary" style="margin-top:16px; width:100%">Выйти</button>
+      </aside>
+      <main class="workspace" id="content"></main>
+    </div>
+
+    <script src="portal.js"></script>
+  </body>
+</html>

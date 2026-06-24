@@ -1,0 +1,207 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+    <meta name="theme-color" content="#25636f" />
+    <link rel="manifest" href="manifest.webmanifest" />
+    <title>Склад медицинской организации</title>
+    <link rel="stylesheet" href="styles.css" />
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  </head>
+  <body>
+    <!-- Barcode scanner overlay — lives outside #content so render() never destroys it -->
+    <div id="barcode-overlay" class="barcode-overlay" style="display:none" role="dialog" aria-modal="true" aria-label="Сканер штрихкода">
+      <div class="barcode-overlay-inner">
+        <div class="barcode-overlay-header">
+          <span id="barcode-overlay-title">Наведите камеру на штрихкод</span>
+          <div style="display:flex;align-items:center;gap:.5rem">
+            <button id="barcode-overlay-torch" type="button" aria-label="Фонарик" style="display:none">🔦</button>
+            <button id="barcode-overlay-close" type="button" aria-label="Закрыть сканер">✕</button>
+          </div>
+        </div>
+        <div id="barcode-reader"></div>
+        <div id="barcode-overlay-status" style="min-height:1.5rem;text-align:center;font-size:.9rem;color:#64748b;padding:.5rem 0"></div>
+      </div>
+    </div>
+    <div class="app">
+      <aside class="sidebar">
+        <div class="brand">
+          <div class="brand-mark">S</div>
+          <div>
+            <strong>Склад</strong>
+            <span>медицинский учет</span>
+          </div>
+          <button id="nav-toggle" type="button" aria-label="Открыть меню" aria-expanded="false">&#9776;</button>
+        </div>
+        <nav class="nav" id="nav"></nav>
+      </aside>
+
+      <main class="workspace">
+        <header class="topbar">
+          <div>
+            <p class="eyebrow">Рабочее место склада</p>
+            <h1 id="view-title">Главная</h1>
+          </div>
+          <div class="status-strip">
+            <input id="global-search" class="search-input" aria-label="Глобальный поиск по складу" placeholder="Поиск по товару, партии, складу" />
+            <button id="density-button" class="secondary" type="button" title="Сделать строки таблиц компактнее" aria-pressed="false">Компактно</button>
+            <span id="api-status" class="status-dot muted">Проверяем связь</span>
+            <span id="offline-badge" class="offline-badge" style="display:none" title="Нет соединения — операции сохраняются в очередь">
+              📵 Офлайн
+              <span id="offline-queue-count" style="display:none"> · <strong id="offline-queue-num">0</strong> в очереди</span>
+            </span>
+            <button id="lang-toggle" class="secondary" type="button" title="Переключить язык / Тілді ауыстыру" style="font-weight:600;min-width:2.5rem">KZ</button>
+            <button id="refresh-button" class="icon-button" title="Обновить данные">↻</button>
+          </div>
+        </header>
+
+        <section class="operator-panel work-context" aria-label="Рабочие настройки">
+          <div class="context-title">
+            <strong>Работаем как</strong>
+            <span>Выберите роль и склад, остальное система отфильтрует сама</span>
+          </div>
+          <label class="demo-auth-field">
+            Сотрудник
+            <input id="actor-id" value="manager" />
+          </label>
+          <label class="demo-auth-field">
+            Должность
+            <select id="actor-role">
+              <option value="warehouse_manager">Зав. склада</option>
+              <option value="head_nurse">Старшая медсестра</option>
+              <option value="nurse">Медсестра</option>
+              <option value="doctor">Врач</option>
+              <option value="other">Прочий пользователь</option>
+            </select>
+          </label>
+          <label>
+            Склад
+            <select id="warehouse-filter">
+              <option value="">Все доступные склады</option>
+            </select>
+          </label>
+          <p id="auth-context" class="auth-context full">Проверяем вход через Tetis</p>
+          <details class="advanced-settings full">
+            <summary>Настройки администратора</summary>
+            <div class="advanced-grid">
+              <label>
+                Доступные склады
+                <input id="actor-warehouses" placeholder="например: 1,2" />
+              </label>
+              <label>
+                Токен входа
+                <input id="auth-token" type="password" autocomplete="off" placeholder="заполняет администратор" />
+              </label>
+            </div>
+          </details>
+        </section>
+
+        <section id="alerts" class="alerts" aria-live="polite"></section>
+        <section id="content" class="content"></section>
+      </main>
+    </div>
+
+
+    <div id="login-screen" style="display:none; position:fixed; inset:0; background:#f5f5f5; align-items:center; justify-content:center; z-index:1000">
+      <div style="background:white; padding:2rem; border-radius:8px; box-shadow:0 2px 16px rgba(0,0,0,0.12); min-width:320px">
+        <h2 style="margin:0 0 1.5rem">Склад — Вход</h2>
+        <div style="margin-bottom:1rem">
+          <label style="display:block; margin-bottom:.25rem; font-size:.85rem">Логин</label>
+          <input id="login-username" type="text" style="width:100%; box-sizing:border-box; padding:.5rem; border:1px solid #ccc; border-radius:4px" placeholder="admin">
+        </div>
+        <div style="margin-bottom:1.5rem">
+          <label style="display:block; margin-bottom:.25rem; font-size:.85rem">Пароль</label>
+          <input id="login-password" type="password" style="width:100%; box-sizing:border-box; padding:.5rem; border:1px solid #ccc; border-radius:4px"
+                 onkeydown="if(event.key==='Enter') doLogin()">
+        </div>
+        <div id="login-error" style="color:red; margin-bottom:1rem; font-size:.85rem; display:none"></div>
+        <button onclick="doLogin()" style="width:100%; padding:.6rem; background:#2563eb; color:white; border:none; border-radius:4px; cursor:pointer; font-size:1rem">Войти</button>
+      </div>
+    </div>
+    <script src="html5-qrcode.min.js"></script>
+    <script src="app.js?v=68"></script>
+    <script>
+      if ("serviceWorker" in navigator) {
+        let refreshedByWorker = false;
+        navigator.serviceWorker.addEventListener("controllerchange", () => {
+          if (refreshedByWorker) return;
+          refreshedByWorker = true;
+          window.location.reload();
+        });
+
+        // Handle messages from the service worker
+        navigator.serviceWorker.addEventListener("message", (event) => {
+          if (!event.data) return;
+
+          if (event.data.type === "QUEUE_COUNT_UPDATE") {
+            const count = event.data.count;
+            const badge = document.getElementById("offline-badge");
+            const countBadge = document.getElementById("offline-queue-count");
+            const countNum = document.getElementById("offline-queue-num");
+            if (badge && count > 0) {
+              badge.style.display = "inline-flex";
+              if (countBadge && countNum) {
+                countBadge.style.display = "inline";
+                countNum.textContent = count;
+              }
+            } else if (badge && count === 0) {
+              if (countBadge) countBadge.style.display = "none";
+            }
+          }
+
+          if (event.data.type === "SYNC_COMPLETE") {
+            const { replayed, failed, remaining } = event.data;
+            if (replayed > 0) {
+              // Trigger data refresh in the app
+              window.dispatchEvent(new CustomEvent("sklad:sync-complete", { detail: { replayed, failed, remaining } }));
+              if (typeof showAlert === "function") {
+                showAlert(`Синхронизировано ${replayed} отложенных операций${failed > 0 ? `, ${failed} ошибок` : ""}.`);
+              }
+              // Refresh current view
+              if (typeof renderCurrentView === "function") renderCurrentView();
+            }
+          }
+        });
+
+        // Track online/offline status
+        function updateOnlineStatus() {
+          const badge = document.getElementById("offline-badge");
+          if (!badge) return;
+          if (!navigator.onLine) {
+            badge.style.display = "inline-flex";
+          } else {
+            // Online — try to replay queue
+            if (navigator.serviceWorker.controller) {
+              navigator.serviceWorker.controller.postMessage({ type: "REPLAY_QUEUE" });
+            }
+            // Ask SW for current count
+            navigator.serviceWorker.ready.then((registration) => {
+              if (registration.sync) {
+                registration.sync.register("sklad-offline-sync").catch(() => {});
+              }
+            });
+          }
+        }
+        window.addEventListener("online", updateOnlineStatus);
+        window.addEventListener("offline", () => {
+          const badge = document.getElementById("offline-badge");
+          if (badge) badge.style.display = "inline-flex";
+        });
+
+        window.addEventListener("load", () => {
+          navigator.serviceWorker
+            .register("service-worker.js", { scope: "./" })
+            .then((registration) => {
+              registration.update();
+              // Ask SW for pending queue count on load
+              if (navigator.serviceWorker.controller) {
+                navigator.serviceWorker.controller.postMessage({ type: "GET_QUEUE_COUNT" });
+              }
+            });
+        });
+      }
+    </script>
+  </body>
+</html>

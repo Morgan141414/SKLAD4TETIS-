@@ -1,0 +1,2 @@
+"""Warehouse service package."""
+

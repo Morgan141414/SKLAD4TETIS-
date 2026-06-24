@@ -1,0 +1,14 @@
+{
+  "name": "Склад медицинской организации",
+  "short_name": "Склад",
+  "description": "Планшетное рабочее место для медицинского складского учета.",
+  "id": ".",
+  "start_url": ".",
+  "scope": ".",
+  "display": "standalone",
+  "orientation": "landscape-primary",
+  "background_color": "#f5f7f8",
+  "theme_color": "#25636f",
+  "categories": ["business", "medical", "productivity"],
+  "lang": "ru"
+}

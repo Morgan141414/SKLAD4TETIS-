@@ -1,0 +1,15 @@
+services:
+  api:
+    build: .
+    environment:
+      SKLAD_DEPLOYMENT_MODE: demo
+      SKLAD_DATABASE_BACKEND: sqlite
+      SKLAD_DATABASE_URL: sqlite:////data/sklad.db
+      SKLAD_DEV_AUTH_ENABLED: "true"
+    ports:
+      - "8120:8000"
+    volumes:
+      - sklad-sqlite:/data
+
+volumes:
+  sklad-sqlite:

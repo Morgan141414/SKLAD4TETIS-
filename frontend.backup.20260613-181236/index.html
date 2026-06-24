@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#25636f" />
+    <link rel="manifest" href="manifest.webmanifest" />
+    <title>Склад медицинской организации</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <div class="app">
+      <aside class="sidebar">
+        <div class="brand">
+          <div class="brand-mark">S</div>
+          <div>
+            <strong>Склад</strong>
+            <span>медицинский учет</span>
+          </div>
+        </div>
+        <nav class="nav" id="nav"></nav>
+      </aside>
+
+      <main class="workspace">
+        <header class="topbar">
+          <div>
+            <p class="eyebrow">Рабочее место склада</p>
+            <h1 id="view-title">Главная</h1>
+          </div>
+          <div class="status-strip">
+            <input id="global-search" class="search-input" aria-label="Глобальный поиск по складу" placeholder="Поиск по товару, партии, складу" />
+            <button id="density-button" class="secondary" type="button" title="Сделать строки таблиц компактнее" aria-pressed="false">Компактно</button>
+            <span id="api-status" class="status-dot muted">Проверяем связь</span>
+            <button id="refresh-button" class="icon-button" title="Обновить данные">↻</button>
+          </div>
+        </header>
+
+        <section class="operator-panel work-context" aria-label="Рабочие настройки">
+          <div class="context-title">
+            <strong>Работаем как</strong>
+            <span>Выберите роль и склад, остальное система отфильтрует сама</span>
+          </div>
+          <label class="demo-auth-field">
+            Сотрудник
+            <input id="actor-id" value="manager" />
+          </label>
+          <label class="demo-auth-field">
+            Должность
+            <select id="actor-role">
+              <option value="warehouse_manager">Зав. склада</option>
+              <option value="head_nurse">Старшая медсестра</option>
+              <option value="nurse">Медсестра</option>
+              <option value="doctor">Врач</option>
+              <option value="other">Прочий пользователь</option>
+            </select>
+          </label>
+          <label>
+            Склад
+            <select id="warehouse-filter">
+              <option value="">Все доступные склады</option>
+            </select>
+          </label>
+          <p id="auth-context" class="auth-context full">Проверяем вход через Tetis</p>
+          <details class="advanced-settings full">
+            <summary>Настройки администратора</summary>
+            <div class="advanced-grid">
+              <label>
+                Доступные склады
+                <input id="actor-warehouses" placeholder="например: 1,2" />
+              </label>
+              <label>
+                Токен входа
+                <input id="auth-token" type="password" autocomplete="off" placeholder="заполняет администратор" />
+              </label>
+            </div>
+          </details>
+        </section>
+
+        <section id="alerts" class="alerts" aria-live="polite"></section>
+        <section id="content" class="content"></section>
+      </main>
+    </div>
+
+    <script src="app.js"></script>
+    <script>
+      if ("serviceWorker" in navigator) {
+        window.addEventListener("load", () => {
+          navigator.serviceWorker.register("service-worker.js", { scope: "./" });
+        });
+      }
+    </script>
+  </body>
+</html>
