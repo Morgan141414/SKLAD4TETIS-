@@ -40,6 +40,8 @@ CREATE TABLE IF NOT EXISTS warehouses (
   inventory_lock INTEGER NOT NULL DEFAULT 0,
   tetis_org_id TEXT,
   external_tetis_id TEXT,
+  mis_clinic_id TEXT,
+  mis_room_id TEXT,
   storage_zone TEXT,
   capacity_limit TEXT,
   storage_conditions TEXT,
@@ -378,6 +380,32 @@ CREATE TABLE IF NOT EXISTS repack_templates (
   target_unit_price TEXT,
   reason TEXT,
   created_by TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS procedure_consumption_templates (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  mis_clinic_id TEXT NOT NULL,
+  service_code TEXT NOT NULL,
+  name TEXT NOT NULL,
+  created_by TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  UNIQUE (mis_clinic_id, service_code)
+);
+
+CREATE TABLE IF NOT EXISTS procedure_consumption_items (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  template_id INTEGER NOT NULL REFERENCES procedure_consumption_templates(id),
+  product_id INTEGER NOT NULL REFERENCES products(id),
+  quantity TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_procedure_consumption_items_template
+  ON procedure_consumption_items(template_id);
+
+CREATE TABLE IF NOT EXISTS mis_processed_events (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  mis_event_id TEXT NOT NULL UNIQUE,
   created_at TEXT NOT NULL
 );
 

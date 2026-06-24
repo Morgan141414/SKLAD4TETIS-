@@ -31,6 +31,7 @@ class Settings(BaseSettings):
     grafana_webhook_token: str | None = None
     mis_webhook_url: str | None = None
     mis_api_key: str | None = None
+    mis_inbound_webhook_token: str | None = None
     redis_url: str | None = None
     telegram_bot_token: str | None = None
     telegram_chat_id: str | None = None
