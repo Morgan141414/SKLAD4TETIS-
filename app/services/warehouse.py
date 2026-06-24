@@ -7131,6 +7131,7 @@ class WarehouseService:
         if not row:
             raise NotFoundError(f"Procedure consumption template {template_id} not found")
         tpl = dict(row)
+        tpl["created_at"] = str(tpl["created_at"])
         item_rows = conn.execute(
             "SELECT pci.id, pci.product_id, pci.quantity, p.name AS product_name"
             " FROM procedure_consumption_items pci"
@@ -7138,7 +7139,10 @@ class WarehouseService:
             " WHERE pci.template_id=? ORDER BY pci.id",
             (template_id,),
         ).fetchall()
-        tpl["items"] = [dict(r) for r in item_rows]
+        items = [dict(r) for r in item_rows]
+        for item in items:
+            item["quantity"] = str(item["quantity"])
+        tpl["items"] = items
         return tpl
 
     def list_procedure_consumption_templates(self, mis_clinic_id: str | None = None) -> list[dict]:

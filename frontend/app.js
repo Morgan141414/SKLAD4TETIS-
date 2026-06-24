@@ -5848,7 +5848,7 @@ function bindActions() {
   });
 
   bindSubmit("product-form", (payload) => mutate("/products", normalizeProductPayload(payload)));
-  bindSubmit("procedure-template-form", async (payload) => {
+  bindSubmit("procedure-template-form", (payload) => {
     const items = (payload.items_raw || "")
       .split("\n")
       .map((line) => line.trim())
@@ -5857,18 +5857,12 @@ function bindActions() {
         const [productId, quantity] = line.split(":").map((part) => part.trim());
         return { product_id: Number(productId), quantity };
       });
-    const tpl = await request("/procedure-consumption-templates", {
-      method: "POST",
-      body: JSON.stringify({
-        mis_clinic_id: payload.mis_clinic_id,
-        service_code: payload.service_code,
-        name: payload.name,
-        items,
-      }),
+    return mutate("/procedure-consumption-templates", {
+      mis_clinic_id: payload.mis_clinic_id,
+      service_code: payload.service_code,
+      name: payload.name,
+      items,
     });
-    state.data.procedureConsumptionTemplates = [...state.data.procedureConsumptionTemplates, tpl];
-    showAlert("Шаблон расхода создан", "success");
-    render();
   });
   bindSubmit("category-form", (payload) => mutate("/categories", payload));
   bindSubmit("supplier-form", (payload) => mutate("/suppliers", normalizeSupplierPayload(payload)));
@@ -6801,11 +6795,8 @@ function bindActions() {
       if (!(await confirmAction("Удалить шаблон расхода?", {}))) return;
       try {
         await request(`/procedure-consumption-templates/${templateId}`, { method: "DELETE" });
-        state.data.procedureConsumptionTemplates = state.data.procedureConsumptionTemplates.filter(
-          (t) => String(t.id) !== String(templateId)
-        );
         showAlert("Шаблон удалён", "ok");
-        render();
+        await loadAll();
       } catch (error) { showAlert(error.message, "error"); }
     });
   });
