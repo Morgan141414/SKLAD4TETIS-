@@ -1898,71 +1898,108 @@ class WarehouseService:
         self, data: WriteOffFefoCreate, actor_id: str = "system"
     ) -> dict[str, Any]:
         with self.database.transaction() as connection:
-            self._ensure_warehouse_open(connection, data.warehouse_id)
-            self._require(connection, "products", data.product_id)
-            self._require_controlled_writeoff_metadata(
+            return self._write_off_fefo_within(
                 connection,
+                actor_id=actor_id,
                 product_id=data.product_id,
+                warehouse_id=data.warehouse_id,
+                quantity=data.quantity,
+                reason=data.reason,
                 patient_id=data.patient_id,
                 doctor_id=data.doctor_id,
                 medical_record_no=data.medical_record_no,
                 second_approver_id=data.second_approver_id,
+                second_approval_note=data.second_approval_note,
             )
-            rows = connection.execute(
-                """
-                SELECT
-                  sb.batch_id,
-                  sb.quantity,
-                  sb.reserved_quantity
-                FROM stock_balances sb
-                JOIN batches b ON b.id = sb.batch_id
-                WHERE b.product_id = ?
-                  AND sb.warehouse_id = ?
-                  AND b.status = ?
-                  AND CAST(sb.quantity AS REAL) - CAST(sb.reserved_quantity AS REAL) > 0
-                ORDER BY b.expires_on IS NULL, b.expires_on, sb.batch_id
-                """,
-                (data.product_id, data.warehouse_id, BatchStatus.AVAILABLE),
-            ).fetchall()
-            remaining = data.quantity
-            movement_ids: list[int] = []
-            for row in rows:
-                if remaining <= 0:
-                    break
-                free = Decimal(row["quantity"]) - Decimal(row["reserved_quantity"])
-                quantity = min(free, remaining)
-                movement_ids.append(
-                    self._apply_writeoff_line(
-                        connection,
-                        batch_id=row["batch_id"],
-                        warehouse_id=data.warehouse_id,
-                        quantity=quantity,
-                        reason=data.reason,
-                        patient_id=data.patient_id,
-                        doctor_id=data.doctor_id,
-                        medical_record_no=data.medical_record_no,
-                        second_approver_id=data.second_approver_id,
-                        second_approval_note=data.second_approval_note,
-                    )
+
+    def _write_off_fefo_within(
+        self,
+        connection: Connection,
+        *,
+        actor_id: str,
+        product_id: int,
+        warehouse_id: int,
+        quantity: Decimal,
+        reason: str,
+        patient_id: str | None = None,
+        doctor_id: str | None = None,
+        medical_record_no: str | None = None,
+        second_approver_id: str | None = None,
+        second_approval_note: str | None = None,
+    ) -> dict[str, Any]:
+        self._ensure_warehouse_open(connection, warehouse_id)
+        self._require(connection, "products", product_id)
+        self._require_controlled_writeoff_metadata(
+            connection,
+            product_id=product_id,
+            patient_id=patient_id,
+            doctor_id=doctor_id,
+            medical_record_no=medical_record_no,
+            second_approver_id=second_approver_id,
+        )
+        rows = connection.execute(
+            """
+            SELECT
+              sb.batch_id,
+              sb.quantity,
+              sb.reserved_quantity
+            FROM stock_balances sb
+            JOIN batches b ON b.id = sb.batch_id
+            WHERE b.product_id = ?
+              AND sb.warehouse_id = ?
+              AND b.status = ?
+              AND CAST(sb.quantity AS REAL) - CAST(sb.reserved_quantity AS REAL) > 0
+            ORDER BY b.expires_on IS NULL, b.expires_on, sb.batch_id
+            """,
+            (product_id, warehouse_id, BatchStatus.AVAILABLE),
+        ).fetchall()
+        remaining = quantity
+        movement_ids: list[int] = []
+        for row in rows:
+            if remaining <= 0:
+                break
+            free = Decimal(row["quantity"]) - Decimal(row["reserved_quantity"])
+            line_quantity = min(free, remaining)
+            movement_ids.append(
+                self._apply_writeoff_line(
+                    connection,
+                    batch_id=row["batch_id"],
+                    warehouse_id=warehouse_id,
+                    quantity=line_quantity,
+                    reason=reason,
+                    patient_id=patient_id,
+                    doctor_id=doctor_id,
+                    medical_record_no=medical_record_no,
+                    second_approver_id=second_approver_id,
+                    second_approval_note=second_approval_note,
                 )
-                remaining -= quantity
-            if remaining > 0:
-                raise InsufficientStockError("Not enough FEFO stock for write-off")
-            self._audit(
-                connection,
-                actor_id,
-                AuditAction.WRITE_OFF,
-                "product",
-                data.product_id,
-                {"request": data, "movement_ids": movement_ids},
-                warehouse_id=data.warehouse_id,
             )
-            return {
-                "product_id": data.product_id,
-                "warehouse_id": data.warehouse_id,
-                "quantity": decimal_to_db(data.quantity),
+            remaining -= line_quantity
+        if remaining > 0:
+            raise InsufficientStockError("Not enough FEFO stock for write-off")
+        self._audit(
+            connection,
+            actor_id,
+            AuditAction.WRITE_OFF,
+            "product",
+            product_id,
+            {
+                "request": {
+                    "product_id": product_id,
+                    "warehouse_id": warehouse_id,
+                    "quantity": decimal_to_db(quantity),
+                    "reason": reason,
+                },
                 "movement_ids": movement_ids,
-            }
+            },
+            warehouse_id=warehouse_id,
+        )
+        return {
+            "product_id": product_id,
+            "warehouse_id": warehouse_id,
+            "quantity": decimal_to_db(quantity),
+            "movement_ids": movement_ids,
+        }
 
     def transfer(self, data: TransferCreate, actor_id: str = "system") -> dict[str, Any]:
         if data.source_warehouse_id == data.target_warehouse_id:
@@ -7038,6 +7075,158 @@ class WarehouseService:
             conn.execute("DELETE FROM repack_templates WHERE id=?", (template_id,))
             self._audit(conn, "repack_template.deleted", actor_id=actor_id,
                         payload={"template_id": template_id})
+
+    # === MIS PROCEDURE CONSUMPTION TEMPLATES ===
+
+    def create_procedure_consumption_template(self, data: dict, actor_id: str) -> dict:
+        items = data.get("items") or []
+        if not items:
+            raise ValidationError("Template must contain at least one item")
+        with self.database.transaction() as conn:
+            for item in items:
+                self._require(conn, "products", item["product_id"])
+            tpl_id = insert_and_get_id(
+                conn,
+                "INSERT INTO procedure_consumption_templates"
+                " (mis_clinic_id, service_code, name, created_by, created_at)"
+                " VALUES (?,?,?,?,?)",
+                (
+                    data["mis_clinic_id"],
+                    data["service_code"],
+                    data["name"],
+                    actor_id,
+                    now_iso(),
+                ),
+            )
+            for item in items:
+                conn.execute(
+                    "INSERT INTO procedure_consumption_items (template_id, product_id, quantity)"
+                    " VALUES (?,?,?)",
+                    (tpl_id, item["product_id"], str(item["quantity"])),
+                )
+            self._audit(
+                conn, actor_id, AuditAction.CREATE, "procedure_consumption_template", tpl_id, data
+            )
+            return self._get_procedure_consumption_template(conn, tpl_id)
+
+    def _get_procedure_consumption_template(self, conn: Connection, template_id: int) -> dict:
+        row = conn.execute(
+            "SELECT * FROM procedure_consumption_templates WHERE id=?", (template_id,)
+        ).fetchone()
+        if not row:
+            raise NotFoundError(f"Procedure consumption template {template_id} not found")
+        tpl = dict(row)
+        item_rows = conn.execute(
+            "SELECT pci.id, pci.product_id, pci.quantity, p.name AS product_name"
+            " FROM procedure_consumption_items pci"
+            " JOIN products p ON p.id = pci.product_id"
+            " WHERE pci.template_id=? ORDER BY pci.id",
+            (template_id,),
+        ).fetchall()
+        tpl["items"] = [dict(r) for r in item_rows]
+        return tpl
+
+    def list_procedure_consumption_templates(self, mis_clinic_id: str | None = None) -> list[dict]:
+        where = "WHERE mis_clinic_id = ?" if mis_clinic_id else ""
+        params: tuple = (mis_clinic_id,) if mis_clinic_id else ()
+        with self.database.transaction() as conn:
+            rows = conn.execute(
+                f"SELECT id FROM procedure_consumption_templates {where}"
+                f" ORDER BY mis_clinic_id, service_code",
+                params,
+            ).fetchall()
+            return [self._get_procedure_consumption_template(conn, row["id"]) for row in rows]
+
+    def delete_procedure_consumption_template(self, template_id: int, actor_id: str) -> None:
+        with self.database.transaction() as conn:
+            row = conn.execute(
+                "SELECT id FROM procedure_consumption_templates WHERE id=?", (template_id,)
+            ).fetchone()
+            if not row:
+                raise ValueError(f"Procedure consumption template {template_id} not found")
+            conn.execute("DELETE FROM procedure_consumption_items WHERE template_id=?", (template_id,))
+            conn.execute("DELETE FROM procedure_consumption_templates WHERE id=?", (template_id,))
+            self._audit(
+                conn,
+                actor_id,
+                AuditAction.DELETE,
+                "procedure_consumption_template",
+                template_id,
+                {"template_id": template_id},
+            )
+
+    # === MIS PROCEDURE EVENTS ===
+
+    def process_mis_procedure_event(
+        self,
+        *,
+        mis_clinic_id: str,
+        mis_room_id: str,
+        service_code: str,
+        mis_event_id: str,
+        patient_id: str | None = None,
+        doctor_id: str | None = None,
+        medical_record_no: str | None = None,
+        actor_id: str = "mis-integration",
+    ) -> dict:
+        with self.database.transaction() as conn:
+            already = conn.execute(
+                "SELECT id FROM mis_processed_events WHERE mis_event_id = ?", (mis_event_id,)
+            ).fetchone()
+            if already:
+                return {"status": "already_processed", "mis_event_id": mis_event_id, "write_offs": []}
+
+            warehouse = conn.execute(
+                "SELECT id FROM warehouses WHERE mis_clinic_id = ? AND mis_room_id = ?",
+                (mis_clinic_id, mis_room_id),
+            ).fetchone()
+            if not warehouse:
+                raise NotFoundError(
+                    f"Кабинет (clinic={mis_clinic_id}, room={mis_room_id}) "
+                    f"не сопоставлен со складом в sklad"
+                )
+            warehouse_id = warehouse["id"]
+
+            template = conn.execute(
+                "SELECT id FROM procedure_consumption_templates"
+                " WHERE mis_clinic_id = ? AND service_code = ?",
+                (mis_clinic_id, service_code),
+            ).fetchone()
+            if not template:
+                raise NotFoundError(f"Расход для процедуры «{service_code}» не настроен")
+            items = conn.execute(
+                "SELECT product_id, quantity FROM procedure_consumption_items WHERE template_id = ?",
+                (template["id"],),
+            ).fetchall()
+            if not items:
+                raise ValidationError(f"Шаблон расхода для процедуры «{service_code}» пуст")
+
+            write_offs = [
+                self._write_off_fefo_within(
+                    conn,
+                    actor_id=actor_id,
+                    product_id=item["product_id"],
+                    warehouse_id=warehouse_id,
+                    quantity=Decimal(str(item["quantity"])),
+                    reason=f"МИС: процедура {service_code}",
+                    patient_id=patient_id,
+                    doctor_id=doctor_id,
+                    medical_record_no=medical_record_no,
+                )
+                for item in items
+            ]
+
+            conn.execute(
+                "INSERT INTO mis_processed_events (mis_event_id, created_at) VALUES (?, ?)",
+                (mis_event_id, now_iso()),
+            )
+
+            return {
+                "status": "processed",
+                "mis_event_id": mis_event_id,
+                "warehouse_id": warehouse_id,
+                "write_offs": write_offs,
+            }
 
     # === AUCTIONS ===
 
