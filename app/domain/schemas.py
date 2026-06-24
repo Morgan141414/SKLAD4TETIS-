@@ -107,6 +107,8 @@ class WarehouseCreate(BaseModel):
     department: str | None = Field(default=None, max_length=200)
     tetis_org_id: str | None = Field(default=None, max_length=128)
     external_tetis_id: str | None = Field(default=None, max_length=128)
+    mis_clinic_id: str | None = Field(default=None, max_length=128)
+    mis_room_id: str | None = Field(default=None, max_length=128)
     storage_zone: str | None = Field(default=None, max_length=200)
     capacity_limit: Decimal | None = Field(default=None, ge=0)
     storage_conditions: str | None = Field(default=None, max_length=500)
@@ -383,6 +385,8 @@ class Warehouse(Row):
     inventory_lock: bool
     tetis_org_id: str | None = None
     external_tetis_id: str | None = None
+    mis_clinic_id: str | None = None
+    mis_room_id: str | None = None
     storage_zone: str | None = None
     capacity_limit: Decimal | None = None
     storage_conditions: str | None = None

@@ -457,6 +457,41 @@ class APISmokeTest(TestCase):
         resp2 = self.client.post("/api/v1/webhooks/grafana", json={"alerts": []})
         self.assertEqual(resp2.status_code, 204, resp2.text)
 
+    def test_mis_procedure_event_requires_valid_token(self) -> None:
+        from app.core.config import get_settings
+
+        payload = {
+            "mis_clinic_id": "clinic-x",
+            "mis_room_id": "room-x",
+            "service_code": "INJECTION",
+            "mis_event_id": "evt-http-1",
+        }
+        # Not configured -> 503
+        resp = self.client.post("/api/v1/mis/procedure-event", json=payload)
+        self.assertEqual(resp.status_code, 503, resp.text)
+
+        with patch.dict(os.environ, {"SKLAD_MIS_INBOUND_WEBHOOK_TOKEN": "secret-token"}):
+            get_settings.cache_clear()
+            try:
+                # Missing/wrong token -> 401
+                resp = self.client.post("/api/v1/mis/procedure-event", json=payload)
+                self.assertEqual(resp.status_code, 401, resp.text)
+                resp = self.client.post(
+                    "/api/v1/mis/procedure-event",
+                    json=payload,
+                    headers={"Authorization": "Bearer wrong-token"},
+                )
+                self.assertEqual(resp.status_code, 401, resp.text)
+                # Correct token, but cabinet not mapped -> 404, not 401/500
+                resp = self.client.post(
+                    "/api/v1/mis/procedure-event",
+                    json=payload,
+                    headers={"Authorization": "Bearer secret-token"},
+                )
+                self.assertEqual(resp.status_code, 404, resp.text)
+            finally:
+                get_settings.cache_clear()
+
     def test_product_barcode_lookup_over_http(self) -> None:
         category = self.post("/api/v1/categories", {"name": "Штрихкод"})
         product = self.post(

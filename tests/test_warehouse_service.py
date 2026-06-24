@@ -7,6 +7,7 @@ from app.domain.errors import (
     BatchUnavailableError,
     InsufficientStockError,
     InventoryLockedError,
+    NotFoundError,
     ValidationError,
 )
 from app.domain.schemas import (
@@ -2784,3 +2785,126 @@ class WarehouseServiceTest(TestCase):
         items = self.service.list_notifications()
         types = [i["notification_type"] for i in items]
         self.assertIn("grafana_alert", types)
+
+
+class MisProcedureIntegrationTest(TestCase):
+    def setUp(self) -> None:
+        self.database = SQLiteDatabase(":memory:")
+        self.database.init_schema()
+        self.service = WarehouseService(self.database)
+        self.category = self.service.create_category(CategoryCreate(name="Медикаменты"))
+        self.supplier = self.service.create_supplier(SupplierCreate(name="ТОО Поставщик"))
+        self.warehouse = self.service.create_warehouse(
+            WarehouseCreate(name="Кабинет 101", mis_clinic_id="clinic-1", mis_room_id="room-101")
+        )
+        self.product = self.service.create_product(
+            ProductCreate(
+                name="Шприц 5 мл",
+                sku="SYR-005",
+                unit="шт",
+                category_id=self.category["id"],
+            )
+        )
+        self.service.receive(
+            ReceiptCreate(
+                product_id=self.product["id"],
+                supplier_id=self.supplier["id"],
+                warehouse_id=self.warehouse["id"],
+                quantity=Decimal("10"),
+                unit_price=Decimal("100"),
+                lot="LOT-1",
+                expires_on=date(2027, 1, 1),
+                quarantine=False,
+            )
+        )
+        self.template = self.service.create_procedure_consumption_template(
+            {
+                "mis_clinic_id": "clinic-1",
+                "service_code": "INJECTION",
+                "name": "Внутримышечная инъекция",
+                "items": [{"product_id": self.product["id"], "quantity": "2"}],
+            },
+            actor_id="admin",
+        )
+
+    def test_procedure_event_writes_off_stock(self) -> None:
+        result = self.service.process_mis_procedure_event(
+            mis_clinic_id="clinic-1",
+            mis_room_id="room-101",
+            service_code="INJECTION",
+            mis_event_id="evt-1",
+            patient_id="patient-1",
+            doctor_id="doctor-1",
+            medical_record_no="mr-1",
+        )
+        self.assertEqual(result["status"], "processed")
+        self.assertEqual(result["warehouse_id"], self.warehouse["id"])
+        balances = self.service.list_balances(self.product["id"])
+        self.assertEqual(balances[0]["free_quantity"], Decimal("8"))
+
+    def test_duplicate_event_is_idempotent(self) -> None:
+        self.service.process_mis_procedure_event(
+            mis_clinic_id="clinic-1",
+            mis_room_id="room-101",
+            service_code="INJECTION",
+            mis_event_id="evt-dup",
+        )
+        result = self.service.process_mis_procedure_event(
+            mis_clinic_id="clinic-1",
+            mis_room_id="room-101",
+            service_code="INJECTION",
+            mis_event_id="evt-dup",
+        )
+        self.assertEqual(result["status"], "already_processed")
+        balances = self.service.list_balances(self.product["id"])
+        # Only the first delivery should have decremented stock
+        self.assertEqual(balances[0]["free_quantity"], Decimal("8"))
+
+    def test_missing_warehouse_mapping_raises_not_found(self) -> None:
+        with self.assertRaises(NotFoundError):
+            self.service.process_mis_procedure_event(
+                mis_clinic_id="clinic-1",
+                mis_room_id="room-999",
+                service_code="INJECTION",
+                mis_event_id="evt-2",
+            )
+
+    def test_missing_template_raises_not_found(self) -> None:
+        with self.assertRaises(NotFoundError):
+            self.service.process_mis_procedure_event(
+                mis_clinic_id="clinic-1",
+                mis_room_id="room-101",
+                service_code="UNKNOWN-PROCEDURE",
+                mis_event_id="evt-3",
+            )
+
+    def test_insufficient_stock_propagates_and_event_not_marked_processed(self) -> None:
+        self.service.create_procedure_consumption_template(
+            {
+                "mis_clinic_id": "clinic-1",
+                "service_code": "BIG-PROCEDURE",
+                "name": "Большая процедура",
+                "items": [{"product_id": self.product["id"], "quantity": "999"}],
+            },
+            actor_id="admin",
+        )
+        with self.assertRaises(InsufficientStockError):
+            self.service.process_mis_procedure_event(
+                mis_clinic_id="clinic-1",
+                mis_room_id="room-101",
+                service_code="BIG-PROCEDURE",
+                mis_event_id="evt-4",
+            )
+        # Failed event must not be marked processed, so a retry after restocking can succeed
+        result = self.service.process_mis_procedure_event(
+            mis_clinic_id="clinic-1",
+            mis_room_id="room-101",
+            service_code="INJECTION",
+            mis_event_id="evt-4",
+        )
+        self.assertEqual(result["status"], "processed")
+
+    def test_delete_procedure_consumption_template(self) -> None:
+        self.service.delete_procedure_consumption_template(self.template["id"], actor_id="admin")
+        templates = self.service.list_procedure_consumption_templates(mis_clinic_id="clinic-1")
+        self.assertEqual(templates, [])

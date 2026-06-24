@@ -332,14 +332,17 @@ class WarehouseService:
                 """
                 INSERT INTO warehouses(
                   name, department, tetis_org_id, external_tetis_id,
+                  mis_clinic_id, mis_room_id,
                   storage_zone, capacity_limit, storage_conditions, responsible_person
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     data.name,
                     data.department,
                     data.tetis_org_id,
                     data.external_tetis_id,
+                    data.mis_clinic_id,
+                    data.mis_room_id,
                     data.storage_zone,
                     self._optional_decimal_to_db(data.capacity_limit),
                     data.storage_conditions,
@@ -644,6 +647,8 @@ class WarehouseService:
                     department = ?,
                     tetis_org_id = ?,
                     external_tetis_id = ?,
+                    mis_clinic_id = ?,
+                    mis_room_id = ?,
                     storage_zone = ?,
                     capacity_limit = ?,
                     storage_conditions = ?,
@@ -655,6 +660,8 @@ class WarehouseService:
                     data.department,
                     data.tetis_org_id,
                     data.external_tetis_id,
+                    data.mis_clinic_id,
+                    data.mis_room_id,
                     data.storage_zone,
                     self._optional_decimal_to_db(data.capacity_limit),
                     data.storage_conditions,
