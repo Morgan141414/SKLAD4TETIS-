@@ -467,8 +467,13 @@ class APISmokeTest(TestCase):
             "mis_event_id": "evt-http-1",
         }
         # Not configured -> 503
-        resp = self.client.post("/api/v1/mis/procedure-event", json=payload)
-        self.assertEqual(resp.status_code, 503, resp.text)
+        with patch.dict(os.environ, {"SKLAD_MIS_INBOUND_WEBHOOK_TOKEN": ""}):
+            get_settings.cache_clear()
+            try:
+                resp = self.client.post("/api/v1/mis/procedure-event", json=payload)
+                self.assertEqual(resp.status_code, 503, resp.text)
+            finally:
+                get_settings.cache_clear()
 
         with patch.dict(os.environ, {"SKLAD_MIS_INBOUND_WEBHOOK_TOKEN": "secret-token"}):
             get_settings.cache_clear()

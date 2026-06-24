@@ -486,6 +486,7 @@ const state = {
     movements: [],
     repackings: { items: [], total: 0 },
     repackTemplates: [],
+    procedureConsumptionTemplates: [],
     analytics: { items: [], analysis_days: 90, warehouse_id: null, generated_at: null },
     abcXyzRuns: { items: [], total: 0 },
     sensorDevices: [],
@@ -1927,6 +1928,8 @@ function catalogEditConfig(kind, row) {
         { label: "Отделение", name: "department", value: row.department || "" },
         { label: "ID компании Tetis", name: "tetis_org_id", value: row.tetis_org_id || "" },
         { label: "ID склада в Tetis", name: "external_tetis_id", value: row.external_tetis_id || "" },
+        { label: "ID клиники в МИС", name: "mis_clinic_id", value: row.mis_clinic_id || "" },
+        { label: "ID кабинета в МИС", name: "mis_room_id", value: row.mis_room_id || "" },
         { label: "Зона хранения", name: "storage_zone", value: row.storage_zone || "" },
         { label: "Лимит вместимости", name: "capacity_limit", type: "number", step: "0.001", min: "0", value: row.capacity_limit || "" },
         { label: "Условия хранения", name: "storage_conditions", value: row.storage_conditions || "" },
@@ -1937,6 +1940,8 @@ function catalogEditConfig(kind, row) {
         department: payload.department || null,
         tetis_org_id: payload.tetis_org_id || null,
         external_tetis_id: payload.external_tetis_id || null,
+        mis_clinic_id: payload.mis_clinic_id || null,
+        mis_room_id: payload.mis_room_id || null,
         storage_zone: payload.storage_zone || null,
         capacity_limit: payload.capacity_limit ? Number(payload.capacity_limit) : null,
         storage_conditions: payload.storage_conditions || null,
@@ -3328,6 +3333,8 @@ function renderCatalog() {
           { label: "Отделение", name: "department" },
           { label: "ID компании Tetis", name: "tetis_org_id" },
           { label: "ID склада в Tetis", name: "external_tetis_id" },
+          { label: "ID клиники в МИС", name: "mis_clinic_id" },
+          { label: "ID кабинета в МИС", name: "mis_room_id" },
           { label: "Зона хранения", name: "storage_zone" },
           { label: "Лимит вместимости", name: "capacity_limit", type: "number", step: "0.001", min: "0" },
           { label: "Условия хранения", name: "storage_conditions" },
@@ -3373,7 +3380,7 @@ function renderCatalog() {
         { label: "Тип", render: (row) => row.kind },
         { label: "Номер", key: "id" },
         { label: "Название", key: "name" },
-        { label: "Детали", render: (row) => escapeHtml([row.department, row.storage_zone ? `Зона: ${row.storage_zone}` : "", row.capacity_limit ? `Лимит: ${row.capacity_limit}` : "", row.storage_conditions, row.responsible_person ? `Ответственный: ${row.responsible_person}` : "", row.bin, row.phone, row.email, row.contact_person, row.address, row.contract_number ? `Договор: ${row.contract_number}` : "", row.contract_expires_on ? `до ${row.contract_expires_on}` : "", row.rating ? `Рейтинг: ${"★".repeat(row.rating)}${"☆".repeat(5-row.rating)}` : "", row.is_preferred ? "Постоянный" : "", row.tetis_org_id ? `Tetis: ${row.tetis_org_id}` : "", row.external_tetis_id ? `Склад Tetis: ${row.external_tetis_id}` : ""].filter(Boolean).join(" · ") || "—") },
+        { label: "Детали", render: (row) => escapeHtml([row.department, row.storage_zone ? `Зона: ${row.storage_zone}` : "", row.capacity_limit ? `Лимит: ${row.capacity_limit}` : "", row.storage_conditions, row.responsible_person ? `Ответственный: ${row.responsible_person}` : "", row.bin, row.phone, row.email, row.contact_person, row.address, row.contract_number ? `Договор: ${row.contract_number}` : "", row.contract_expires_on ? `до ${row.contract_expires_on}` : "", row.rating ? `Рейтинг: ${"★".repeat(row.rating)}${"☆".repeat(5-row.rating)}` : "", row.is_preferred ? "Постоянный" : "", row.tetis_org_id ? `Tetis: ${row.tetis_org_id}` : "", row.external_tetis_id ? `Склад Tetis: ${row.external_tetis_id}` : "", row.mis_clinic_id ? `МИС-клиника: ${row.mis_clinic_id}` : "", row.mis_room_id ? `МИС-кабинет: ${row.mis_room_id}` : ""].filter(Boolean).join(" · ") || "—") },
         { label: "Статус", render: (row) => row.kind === "Склад" ? badge(row.inventory_lock ? "locked" : "open") : "—" },
         { label: "", render: (row) => row.kind === "Склад"
           ? `<button class="${row.inventory_lock ? "secondary" : "danger"}" data-lock-warehouse="${row.id}" data-lock-value="${row.inventory_lock ? "false" : "true"}">${row.inventory_lock ? "Разблокировать" : "Заблокировать"}</button>`
@@ -4714,12 +4721,38 @@ function renderUsers() {
     <div class="panel" style="margin-top:1rem">
       <div class="toolbar">
         <div>
-          <h2>МИС-интеграция</h2>
-          <span class="helper-text">Webhook для отправки событий списания/прихода в медицинскую информационную систему. Настройте SKLAD_MIS_WEBHOOK_URL.</span>
+          <h2>Интеграция с МИС</h2>
+          <span class="helper-text">Двусторонняя синхронизация с медицинской информационной системой (mis.qormed.kz). МИС сообщает о завершённой процедуре, sklad сам списывает лекарства по настроенному составу в нужном кабинете.</span>
         </div>
         <button class="secondary" data-action="test-mis-connect" id="btn-test-mis">Проверить соединение</button>
       </div>
       <div id="mis-status-panel" style="padding:.5rem 0;font-size:.85rem;color:#6b7280">Статус не проверялся</div>
+      <div style="padding:.5rem 0;font-size:.82rem;color:#6b7280">
+        Для настройки на стороне МИС укажите URL вебхука <code>{ваш домен sklad}/api/v1/mis/procedure-event</code>
+        и токен из переменной <code>SKLAD_MIS_INBOUND_WEBHOOK_TOKEN</code> на сервере sklad (заголовок <code>Authorization: Bearer &lt;токен&gt;</code>).
+        Чтобы кабинет МИС находил свой склад — впишите его ID клиники/кабинета в карточке склада (раздел «Склады»).
+      </div>
+    </div>
+    <div class="panel" style="margin-top:1rem">
+      <div class="toolbar">
+        <div>
+          <h2>Шаблоны расхода по процедурам</h2>
+          <span class="helper-text">Что списывается со склада кабинета, когда МИС сообщает о завершении процедуры. Один шаблон на пару (клиника МИС, код процедуры).</span>
+        </div>
+      </div>
+      ${form("procedure-template-form", [
+        { label: "ID клиники в МИС", name: "mis_clinic_id", required: true },
+        { label: "Код процедуры в МИС", name: "service_code", required: true },
+        { label: "Название", name: "name", required: true },
+        { label: "Состав (ID товара:количество, по одной позиции на строку)", name: "items_raw", type: "textarea", full: true, required: true },
+      ], "Добавить шаблон")}
+      ${table([
+        { label: "Клиника", render: (row) => escapeHtml(row.mis_clinic_id) },
+        { label: "Процедура", render: (row) => escapeHtml(row.service_code) },
+        { label: "Название", render: (row) => escapeHtml(row.name) },
+        { label: "Состав", render: (row) => escapeHtml((row.items || []).map(i => `${i.product_name || i.product_id} × ${i.quantity}`).join(", ") || "—") },
+        { label: "", render: (row) => `<button class="secondary compact-action" type="button" data-delete-procedure-template="${escapeAttr(row.id)}">Удалить</button>` },
+      ], state.data.procedureConsumptionTemplates, "Шаблонов пока нет.")}
     </div>
     <div class="panel" style="margin-top:1rem">
       <div class="toolbar">
@@ -5265,7 +5298,7 @@ async function loadAll() {
     const wf = warehouseFilterParam();
     const query = wf ? `?${wf}` : "";
 
-    const [balances, batches, batchRecalls, reservations, quarantineReviews, purchaseRequests, notifications, audit, documents, inventorySessions, movements, repackings, analytics, abcXyzRuns, sensorDevices, sensorReadings, repackTemplates] = await Promise.all([
+    const [balances, batches, batchRecalls, reservations, quarantineReviews, purchaseRequests, notifications, audit, documents, inventorySessions, movements, repackings, analytics, abcXyzRuns, sensorDevices, sensorReadings, repackTemplates, procedureConsumptionTemplates] = await Promise.all([
       request(`/balances${query ? `${query}&limit=100` : "?limit=100"}`),
       request(`/batches${query ? `${query}&limit=100` : "?limit=100"}`),
       loadOptional("Отзывы партий", request("/batch-recalls?limit=200"), { items: [], total: 0 }),
@@ -5285,6 +5318,7 @@ async function loadAll() {
       loadOptional("Датчики условий хранения", request(`/sensor-devices${query ? `${query}&limit=100` : "?limit=100"}`), []),
       loadOptional("Журнал условий хранения", request(`/sensor-readings${query ? `${query}&limit=100` : "?limit=100"}`), { items: [], total: 0 }),
       loadOptional("Шаблоны фасовки", request("/repack-templates"), []),
+      loadOptional("Шаблоны расхода по процедурам", request("/procedure-consumption-templates"), []),
     ]);
     state.data.balances = balances;
     state.data.batches = batches;
@@ -5306,6 +5340,7 @@ async function loadAll() {
     state.data.sensorDevices = sensorDevices;
     state.data.sensorReadings = sensorReadings;
     state.data.repackTemplates = repackTemplates;
+    state.data.procedureConsumptionTemplates = procedureConsumptionTemplates;
     // Load supplier map data
     if (hasPermission("audit:read")) {
       try {
@@ -5813,6 +5848,28 @@ function bindActions() {
   });
 
   bindSubmit("product-form", (payload) => mutate("/products", normalizeProductPayload(payload)));
+  bindSubmit("procedure-template-form", async (payload) => {
+    const items = (payload.items_raw || "")
+      .split("\n")
+      .map((line) => line.trim())
+      .filter(Boolean)
+      .map((line) => {
+        const [productId, quantity] = line.split(":").map((part) => part.trim());
+        return { product_id: Number(productId), quantity };
+      });
+    const tpl = await request("/procedure-consumption-templates", {
+      method: "POST",
+      body: JSON.stringify({
+        mis_clinic_id: payload.mis_clinic_id,
+        service_code: payload.service_code,
+        name: payload.name,
+        items,
+      }),
+    });
+    state.data.procedureConsumptionTemplates = [...state.data.procedureConsumptionTemplates, tpl];
+    showAlert("Шаблон расхода создан", "success");
+    render();
+  });
   bindSubmit("category-form", (payload) => mutate("/categories", payload));
   bindSubmit("supplier-form", (payload) => mutate("/suppliers", normalizeSupplierPayload(payload)));
   bindSubmit("warehouse-form", (payload) => mutate("/warehouses", {
@@ -5820,6 +5877,8 @@ function bindActions() {
     department: payload.department || null,
     tetis_org_id: payload.tetis_org_id || null,
     external_tetis_id: payload.external_tetis_id || null,
+    mis_clinic_id: payload.mis_clinic_id || null,
+    mis_room_id: payload.mis_room_id || null,
     storage_zone: payload.storage_zone || null,
     capacity_limit: payload.capacity_limit ? Number(payload.capacity_limit) : null,
     storage_conditions: payload.storage_conditions || null,
@@ -6722,14 +6781,32 @@ function bindActions() {
       setPending(button, true, 'Проверка...');
       try {
         const st = await request('/mis/status');
+        const parts = [];
+        parts.push(st.inbound_configured ? `✓ Входящий webhook настроен (${st.mapped_warehouses} складов сопоставлено, ${st.procedure_templates} шаблонов)` : '⚠ Входящий webhook не настроен (SKLAD_MIS_INBOUND_WEBHOOK_TOKEN)');
         if (st.configured) {
           const res = await request('/mis/test', { method: 'POST' });
-          document.getElementById('mis-status-panel').textContent = '✓ ' + res.message;
+          parts.push('✓ Исходящий webhook: ' + res.message);
         } else {
-          document.getElementById('mis-status-panel').textContent = '⚠ МИС не настроена. Укажите SKLAD_MIS_WEBHOOK_URL в .env';
+          parts.push('⚠ Исходящий webhook не настроен (SKLAD_MIS_WEBHOOK_URL)');
         }
+        document.getElementById('mis-status-panel').innerHTML = parts.join('<br>');
       } catch(e) { document.getElementById('mis-status-panel').textContent = '✗ ' + e.message; }
       setPending(button, false);
+    });
+  });
+
+  document.querySelectorAll("[data-delete-procedure-template]").forEach((button) => {
+    button.addEventListener("click", async () => {
+      const templateId = button.dataset.deleteProcedureTemplate;
+      if (!(await confirmAction("Удалить шаблон расхода?", {}))) return;
+      try {
+        await request(`/procedure-consumption-templates/${templateId}`, { method: "DELETE" });
+        state.data.procedureConsumptionTemplates = state.data.procedureConsumptionTemplates.filter(
+          (t) => String(t.id) !== String(templateId)
+        );
+        showAlert("Шаблон удалён", "ok");
+        render();
+      } catch (error) { showAlert(error.message, "error"); }
     });
   });
 
