@@ -118,10 +118,56 @@
         </div>
         <div id="login-error" style="color:red; margin-bottom:1rem; font-size:.85rem; display:none"></div>
         <button onclick="doLogin()" style="width:100%; padding:.6rem; background:#2563eb; color:white; border:none; border-radius:4px; cursor:pointer; font-size:1rem">Войти</button>
+        <button id="show-supplier-application" type="button" class="secondary" style="width:100%; margin-top:.75rem">Стать поставщиком</button>
+      </div>
+    </div>
+
+    <div id="supplier-application-screen" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,.35); align-items:center; justify-content:center; z-index:1001; overflow:auto; padding:18px">
+      <div class="form-panel" style="width:100%; max-width:720px; margin:auto">
+        <div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start">
+          <div>
+            <h2 style="margin:0 0 .25rem">Заявка поставщика</h2>
+            <p style="color:var(--muted, #64748b);font-size:.9rem;margin-bottom:14px">После проверки Tetis выдаст вам доступ в портал поставщика на указанный email.</p>
+          </div>
+          <button id="hide-supplier-application" class="icon-button" type="button" title="Закрыть">×</button>
+        </div>
+        <form id="supplier-application-form" class="form-grid">
+          <label>Название компании
+            <input name="name" required maxlength="240" />
+          </label>
+          <label>БИН
+            <input name="bin" maxlength="32" />
+          </label>
+          <label>Email для входа
+            <input name="email" type="email" required maxlength="254" />
+          </label>
+          <label>Телефон
+            <input name="phone" maxlength="64" />
+          </label>
+          <label>Контактное лицо
+            <input name="contact_person" maxlength="200" />
+          </label>
+          <label>Город
+            <input name="city" maxlength="200" />
+          </label>
+          <label class="full">Адрес
+            <input name="address" maxlength="500" />
+          </label>
+          <label>Срок поставки, дней
+            <input name="delivery_days" type="number" min="1" max="365" />
+          </label>
+          <label class="full">Комментарий
+            <textarea name="notes" maxlength="2000"></textarea>
+          </label>
+          <div id="supplier-application-result" class="full" style="display:none"></div>
+          <div class="actions full">
+            <button class="primary" type="submit">Отправить заявку</button>
+          </div>
+        </form>
       </div>
     </div>
     <script src="html5-qrcode.min.js"></script>
-    <script src="app.js?v=70"></script>
+    <script src="app.js?v=71"></script>
     <script>
       if ("serviceWorker" in navigator) {
         let refreshedByWorker = false;

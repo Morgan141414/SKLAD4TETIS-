@@ -640,6 +640,67 @@ function hideLoginScreen() {
   }
 }
 
+function showSupplierApplicationScreen() {
+  const form = el("supplier-application-form");
+  const result = el("supplier-application-result");
+  if (form) {
+    form.reset();
+    form.style.display = "";
+    form.querySelector("button[type=submit]").disabled = false;
+  }
+  if (result) {
+    result.style.display = "none";
+    result.textContent = "";
+  }
+  const screen = el("supplier-application-screen");
+  if (screen) screen.style.display = "flex";
+}
+
+function hideSupplierApplicationScreen() {
+  const screen = el("supplier-application-screen");
+  if (screen) screen.style.display = "none";
+}
+
+async function submitSupplierApplication(event) {
+  event.preventDefault();
+  const form = event.target;
+  const resultBox = el("supplier-application-result");
+  resultBox.style.display = "none";
+  const payload = {
+    name: form.name.value.trim(),
+    bin: form.bin.value.trim() || null,
+    email: form.email.value.trim(),
+    phone: form.phone.value.trim() || null,
+    contact_person: form.contact_person.value.trim() || null,
+    city: form.city.value.trim() || null,
+    address: form.address.value.trim() || null,
+    delivery_days: form.delivery_days.value ? Number(form.delivery_days.value) : null,
+    notes: form.notes.value.trim() || null,
+  };
+  const submitButton = form.querySelector("button[type=submit]");
+  submitButton.disabled = true;
+  try {
+    const resp = await fetch(`${API}/supplier-applications`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    const body = await resp.json().catch(() => ({}));
+    if (!resp.ok) {
+      throw new Error(body?.detail?.message || body?.detail || "Не удалось отправить заявку");
+    }
+    resultBox.style.color = "var(--success, #1a7f37)";
+    resultBox.textContent = "Заявка отправлена. После проверки Tetis вы получите доступ в портал поставщика на указанный email.";
+    resultBox.style.display = "block";
+    form.style.display = "none";
+  } catch (err) {
+    resultBox.style.color = "var(--danger)";
+    resultBox.textContent = err.message;
+    resultBox.style.display = "block";
+    submitButton.disabled = false;
+  }
+}
+
 async function doLogin() {
   const username = el("login-username")?.value?.trim() || "";
   const password = el("login-password")?.value || "";
@@ -7114,6 +7175,14 @@ el("nav-toggle")?.addEventListener("click", () => {
   const open = sidebar?.classList.toggle("nav-open");
   el("nav-toggle")?.setAttribute("aria-expanded", open ? "true" : "false");
 });
+
+el("show-supplier-application")?.addEventListener("click", () => {
+  showSupplierApplicationScreen();
+});
+el("hide-supplier-application")?.addEventListener("click", () => {
+  hideSupplierApplicationScreen();
+});
+el("supplier-application-form")?.addEventListener("submit", submitSupplierApplication);
 
 // === ПКУ PENDING WRITEOFFS UI ===
 
