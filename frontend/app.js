@@ -451,6 +451,7 @@ const state = {
     actor: null,
     blockedMessage: "",
     loginToken: "",
+    supplierId: null,
   },
   ui: {
     density: "comfortable",
@@ -460,6 +461,8 @@ const state = {
     scannerTarget: null,
     _scanRawTarget: null,
     batchFilterProductId: null,
+    supplierMode: false,
+    supplierView: "auctions",
   },
   data: {
     health: null,
@@ -488,6 +491,7 @@ const state = {
     repackTemplates: [],
     procedureConsumptionTemplates: [],
     supplierApplications: { items: [], total: 0 },
+    supplierPortal: { auctions: [], myBids: {}, priceHistory: [], shipments: [], reviews: [] },
     analytics: { items: [], analysis_days: 90, warehouse_id: null, generated_at: null },
     abcXyzRuns: { items: [], total: 0 },
     sensorDevices: [],
@@ -701,50 +705,6 @@ async function submitSupplierApplication(event) {
   }
 }
 
-async function doLogin() {
-  const username = el("login-username")?.value?.trim() || "";
-  const password = el("login-password")?.value || "";
-  const errorEl = el("login-error");
-  if (errorEl) { errorEl.style.display = "none"; errorEl.textContent = ""; }
-  if (!username || !password) {
-    if (errorEl) { errorEl.textContent = "Введите логин и пароль"; errorEl.style.display = "block"; }
-    return;
-  }
-  await tryLoginWithCredentials(username, password);
-}
-
-async function tryLoginWithCredentials(username, password) {
-  const errorEl = el("login-error");
-  try {
-    const response = await fetch(`${API}/auth/login`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ username, password }),
-    });
-    if (!response.ok) {
-      const err = await response.json().catch(() => ({}));
-      const msg = err?.detail?.message || "Неверный логин или пароль";
-      if (errorEl) { errorEl.textContent = msg; errorEl.style.display = "block"; }
-      return;
-    }
-    const data = await response.json();
-    const token = data.access_token;
-    if (!token) {
-      if (errorEl) { errorEl.textContent = "Сервер не вернул токен"; errorEl.style.display = "block"; }
-      return;
-    }
-    state.auth.loginToken = token;
-    state.auth.source = "login";
-    state.auth.blockedMessage = "";
-    // Store token in auth-token input so it reaches request()
-    el("auth-token").value = token;
-    hideLoginScreen();
-    await loadAll();
-  } catch (e) {
-    if (errorEl) { errorEl.textContent = "Ошибка соединения: " + e.message; errorEl.style.display = "block"; }
-  }
-}
-
 function applyActorProfile(profile) {
   if (!profile) return;
   if (!Array.isArray(profile.roles) || !profile.roles.length) {
@@ -764,6 +724,13 @@ function applyActorProfile(profile) {
     context.textContent = state.auth.source === "tetis"
       ? `Вход через Tetis: ${profile.actor_id}. ${warehouses}.`
       : "Демо-режим: роль и доступ задаются вручную.";
+  }
+  state.auth.supplierId = profile.supplier_id ?? null;
+  const supplierToggle = el("supplier-mode-toggle");
+  if (supplierToggle) {
+    const canBeSupplier = (profile.roles || []).includes("supplier") && profile.supplier_id != null;
+    supplierToggle.style.display = canBeSupplier ? "" : "none";
+    if (!canBeSupplier) state.ui.supplierMode = false;
   }
 }
 
@@ -2100,15 +2067,8 @@ async function showSupplierCard(id) {
           ], [supplier], "Реквизиты договора пока не заполнены.")}
         </div>
         <div class="trace-section">
-          <h3>${t("Доступ в портал поставщика")}</h3>
-          ${supplier.portal_access_enabled
-            ? `<p class="confirm-message" style="color:var(--ok)">Доступ выдан · логин: ${escapeHtml(supplier.email || "—")}</p>
-               <button class="secondary" type="button" data-supplier-portal-action="rotate" data-supplier-id="${escapeAttr(supplier.id)}">Сбросить пароль</button>
-               <button class="danger" type="button" data-supplier-portal-action="revoke" data-supplier-id="${escapeAttr(supplier.id)}" style="margin-left:8px">Отключить доступ</button>`
-            : `<p class="confirm-message">${supplier.email ? "Поставщик пока не может войти в свой портал." : "Укажите email поставщика, чтобы выдать доступ."}</p>
-               <button class="primary" type="button" data-supplier-portal-action="grant" data-supplier-id="${escapeAttr(supplier.id)}" ${supplier.email ? "" : "disabled"}>Выдать доступ в портал</button>`
-          }
-          <div id="supplier-portal-result" style="margin-top:8px"></div>
+          <h3>${t("Доступ в режим поставщика")}</h3>
+          <p class="confirm-message">Пароли больше не используются. Чтобы дать этому поставщику доступ: 1) убедитесь, что у него есть аккаунт на tetis1.kz; 2) в разделе «Пользователи» этого склада свяжите его пользователя с ID поставщика <strong>${escapeAttr(supplier.id)}</strong> — после этого он сможет переключиться в «Режим: Поставщик» в верхней панели склада.</p>
         </div>
         <div class="trace-section">
           <h3>${t("Последние цены")}</h3>
@@ -2164,40 +2124,6 @@ async function showSupplierCard(id) {
   }).catch(() => {
     const el = backdrop.querySelector("#supplier-reviews-list");
     if (el) el.innerHTML = '<span style="color:var(--muted)">Не удалось загрузить.</span>';
-  });
-  backdrop.querySelectorAll("[data-supplier-portal-action]").forEach((button) => {
-    button.addEventListener("click", async () => {
-      const action = button.dataset.supplierPortalAction;
-      const sId = button.dataset.supplierId;
-      const resultBox = backdrop.querySelector("#supplier-portal-result");
-      if (action === "revoke") {
-        if (!await confirmAction(`Отключить доступ поставщика «${escapeHtml(supplier.name)}» в портал?`, { tone: "danger" })) return;
-        try {
-          await request(`/suppliers/${sId}/portal-access`, { method: "DELETE" });
-          showAlert("Доступ отключён");
-          await loadAll();
-          close();
-          showSupplierCard(sId);
-        } catch (err) { showAlert(err.message, "error"); }
-        return;
-      }
-      try {
-        button.disabled = true;
-        const result = await request(`/suppliers/${sId}/portal-access`, { method: "POST" });
-        if (resultBox) {
-          resultBox.innerHTML = `
-            <div class="panel" style="background:var(--ok-bg);border-color:var(--ok-border)">
-              <strong>Пароль сгенерирован — сохраните и передайте поставщику, повторно он не отобразится:</strong>
-              <div style="margin-top:6px;font-family:monospace;font-size:1rem;user-select:all">${escapeHtml(result.generated_password)}</div>
-            </div>`;
-        }
-        await loadAll();
-      } catch (err) {
-        showAlert(err.message, "error");
-      } finally {
-        button.disabled = false;
-      }
-    });
   });
   backdrop.querySelector("#submit-review-btn")?.addEventListener("click", async (e) => {
     const btn = e.currentTarget;
@@ -4709,6 +4635,7 @@ function renderUsers() {
         { label: "Роли", render: (row) => escapeHtml((row.roles || []).join(", ")) },
         { label: "Склады", render: (row) => (row.warehouse_ids && row.warehouse_ids.length ? row.warehouse_ids.join(", ") : "Все") },
         { label: "Отдел", render: (row) => escapeHtml(row.department || "—") },
+        { label: "Поставщик", render: (row) => row.supplier_id ? `#${row.supplier_id}` : "—" },
         { label: "Активен", render: (row) => row.is_active ? "✓" : "✗" },
         { label: "Создан", render: (row) => dateText(row.created_at) },
         { label: "", render: (row) => `<button class="secondary" data-action="edit-user" data-user-id="${row.id}">Изменить</button> <button class="secondary danger" data-action="deactivate-user" data-user-id="${row.id}">Деакт.</button>` },
@@ -4742,6 +4669,11 @@ function renderUsers() {
           <div>
             <label style="display:block; font-size:.85rem; margin-bottom:.25rem">Отдел</label>
             <input id="user-form-department" type="text" placeholder="Необязательно" style="width:100%; box-sizing:border-box; padding:.4rem; border:1px solid #ccc; border-radius:4px">
+          </div>
+          <div>
+            <label style="display:block; font-size:.85rem; margin-bottom:.25rem">ID поставщика (для режима «Поставщик»)</label>
+            <input id="user-form-supplier-id" type="number" min="1" placeholder="Необязательно" style="width:100%; box-sizing:border-box; padding:.4rem; border:1px solid #ccc; border-radius:4px">
+            <span class="helper-text">Если указано — пользователь сможет переключиться в «Режим: Поставщик» с данными этого поставщика.</span>
           </div>
         </div>
         <div style="margin-top:1rem; display:flex; gap:.5rem">
@@ -4929,16 +4861,21 @@ function showSupplierApplicationReviewModal(nextStatus, application) {
   });
 }
 
-function showGeneratedPasswordModal({ title, message, password }) {
+function showSupplierApprovedNextStepsModal({ email, supplierId }) {
   return new Promise((resolve) => {
     const backdrop = document.createElement("div");
     backdrop.className = "modal-backdrop";
     backdrop.innerHTML = `
-      <section class="confirm-modal" role="dialog" aria-modal="true" style="max-width:520px">
-        <header><h2>${escapeHtml(title)}</h2></header>
+      <section class="confirm-modal" role="dialog" aria-modal="true" style="max-width:560px">
+        <header><h2>Поставщик одобрен</h2></header>
         <div class="panel" style="background:var(--ok-bg);border-color:var(--ok-border);margin:.5rem 0">
-          <strong>${escapeHtml(message)}</strong>
-          <div style="margin-top:6px;font-family:monospace;font-size:1rem;user-select:all">${escapeHtml(password)}</div>
+          <strong>Карточка поставщика создана (ID ${escapeHtml(supplierId)}, email ${escapeHtml(email || "—")}).</strong>
+          <p style="margin:.5rem 0 0">Доступ выдаётся через tetis1.kz, без пароля:</p>
+          <ol style="margin:.4rem 0 0 1.1rem;padding:0">
+            <li>Убедитесь, что у поставщика есть аккаунт на tetis1.kz.</li>
+            <li>В разделе «Пользователи» этого склада свяжите его пользователя с ID поставщика <strong>${escapeAttr(supplierId)}</strong>.</li>
+            <li>Поставщик переключится в «Режим: Поставщик» в верхней панели склада.</li>
+          </ol>
         </div>
         <footer><button class="primary" type="button" id="gp-close">Закрыть</button></footer>
       </section>
@@ -5404,6 +5341,15 @@ function applyStaticI18n() {
 }
 
 function render() {
+  if (state.ui.supplierMode) {
+    renderSupplierNav();
+    applyStaticI18n();
+    el("view-title").textContent = t(supplierPortalTitles[state.ui.supplierView] || "Режим поставщика");
+    el("content").innerHTML = renderSupplierContent();
+    bindSupplierActions();
+    applyDensity();
+    return;
+  }
   ensureAccessibleView();
   if (state.ui.scannerActive && state.view !== "stock") stopBarcodeScanner();
   renderNav();
@@ -5414,6 +5360,176 @@ function render() {
   bindActions();
   if (state.view === "supplier-map") initSupplierMap();
   applyDensity();
+}
+
+// === SUPPLIER MODE (toggle: сотрудник склада ⇄ поставщик) ===
+
+const supplierPortalNav = [
+  ["auctions", "Аукционы"],
+  ["my-bids", "Мои ставки"],
+  ["price-history", "История цен"],
+  ["shipments", "Мои поставки"],
+  ["reviews", "Отзывы о нас"],
+];
+const supplierPortalTitles = Object.fromEntries(supplierPortalNav);
+
+function renderSupplierNav() {
+  el("nav").innerHTML = supplierPortalNav.map(([id, label]) => `
+    <button class="${state.ui.supplierView === id ? "active" : ""}" data-supplier-view="${id}">${escapeHtml(t(label))}</button>
+  `).join("");
+  el("nav").querySelectorAll("[data-supplier-view]").forEach((button) => {
+    button.addEventListener("click", () => {
+      state.ui.supplierView = button.dataset.supplierView;
+      document.querySelector(".sidebar")?.classList.remove("nav-open");
+      el("nav-toggle")?.setAttribute("aria-expanded", "false");
+      render();
+    });
+  });
+}
+
+function fmtMoneyKzt(value) {
+  return Number(value || 0).toLocaleString("ru-RU");
+}
+
+function renderSupplierAuctions() {
+  const auctions = state.data.supplierPortal.auctions;
+  if (!auctions.length) return `<p style="color:var(--muted)">Открытых аукционов пока нет.</p>`;
+  return auctions.map((a) => `
+    <div class="panel" style="margin-bottom:12px">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:6px">
+        <strong>${escapeHtml(a.title)}</strong>
+        <span class="badge ${a.status === "active" ? "ok" : ""}">${escapeHtml(a.status)}</span>
+      </div>
+      <div style="color:var(--muted);font-size:.85rem;margin-bottom:8px">${escapeHtml(a.product_name || "")} · ${escapeHtml(a.quantity)} ${escapeHtml(a.unit)}</div>
+      <div style="font-size:1.2rem;font-weight:700;margin-bottom:8px">${fmtMoneyKzt(a.current_price)} тг</div>
+      ${a.status === "active" ? `
+        <div style="display:flex;gap:8px">
+          <input type="number" data-supplier-bid-input="${a.id}" placeholder="Ваша ставка &lt; ${fmtMoneyKzt(a.current_price)}" style="max-width:220px" />
+          <button class="primary" data-place-supplier-bid="${a.id}">Сделать ставку</button>
+        </div>
+      ` : ""}
+    </div>
+  `).join("");
+}
+
+function renderSupplierMyBids() {
+  const entries = Object.entries(state.data.supplierPortal.myBids);
+  if (!entries.length) return `<p style="color:var(--muted)">Откройте «Аукционы», чтобы увидеть свои ставки.</p>`;
+  return entries.map(([auctionId, bids]) => `
+    <div class="panel" style="margin-bottom:12px">
+      <strong>Аукцион #${escapeHtml(auctionId)}</strong>
+      <div class="table-wrap" style="margin-top:8px">
+        <table>
+          <tr><th>Дата</th><th>Ваша ставка</th></tr>
+          ${bids.map((b) => `<tr><td>${escapeHtml(String(b.created_at).slice(0, 16))}</td><td>${fmtMoneyKzt(b.bid_amount)} тг</td></tr>`).join("") || '<tr><td colspan="2" style="color:var(--muted)">Ставок пока нет</td></tr>'}
+        </table>
+      </div>
+    </div>
+  `).join("");
+}
+
+function renderSupplierPriceHistory() {
+  const rows = state.data.supplierPortal.priceHistory;
+  return `
+    <div class="table-wrap">
+      <table>
+        <tr><th>Дата</th><th>Товар</th><th>Партия</th><th>Цена</th></tr>
+        ${rows.map((r) => `<tr><td>${escapeHtml(String(r.recorded_at).slice(0, 10))}</td><td>${escapeHtml(r.product_name)}</td><td>${escapeHtml(r.lot || "—")}</td><td>${fmtMoneyKzt(r.unit_price)}</td></tr>`).join("") || '<tr><td colspan="4" style="color:var(--muted)">Истории цен пока нет</td></tr>'}
+      </table>
+    </div>
+  `;
+}
+
+function renderSupplierShipments() {
+  const rows = state.data.supplierPortal.shipments;
+  const statusLabels = { in_transit: "В пути", delivered: "Доставлено", delayed: "Задержка", cancelled: "Отменено" };
+  return `
+    <div class="table-wrap">
+      <table>
+        <tr><th>Номер</th><th>Статус</th><th>Откуда</th><th>Сейчас</th><th>Ожидается</th></tr>
+        ${rows.map((s) => `<tr><td>${escapeHtml(s.reference || "#" + s.id)}</td><td>${escapeHtml(statusLabels[s.status] || s.status)}</td><td>${escapeHtml(s.origin_city || "—")}</td><td>${escapeHtml(s.current_city || "—")}</td><td>${escapeHtml(s.estimated_arrival || "—")}</td></tr>`).join("") || '<tr><td colspan="5" style="color:var(--muted)">Поставок пока нет</td></tr>'}
+      </table>
+    </div>
+  `;
+}
+
+function renderSupplierReviews() {
+  const rows = state.data.supplierPortal.reviews;
+  if (!rows.length) return `<p style="color:var(--muted)">Отзывов пока нет.</p>`;
+  return rows.map((r) => `
+    <div class="panel" style="margin-bottom:10px">
+      <span style="color:var(--warning)">${"★".repeat(r.rating)}${"☆".repeat(5 - r.rating)}</span>
+      <span style="font-size:.78rem;color:var(--muted);margin-left:8px">${escapeHtml(String(r.created_at).slice(0, 10))} · ${escapeHtml(r.status)}</span>
+      ${r.comment ? `<div style="margin-top:6px">${escapeHtml(r.comment)}</div>` : ""}
+    </div>
+  `).join("");
+}
+
+const supplierPortalRenderers = {
+  auctions: renderSupplierAuctions,
+  "my-bids": renderSupplierMyBids,
+  "price-history": renderSupplierPriceHistory,
+  shipments: renderSupplierShipments,
+  reviews: renderSupplierReviews,
+};
+
+function renderSupplierContent() {
+  return supplierPortalRenderers[state.ui.supplierView]?.() || renderSupplierAuctions();
+}
+
+function bindSupplierActions() {
+  document.querySelectorAll("[data-place-supplier-bid]").forEach((button) => {
+    button.addEventListener("click", () => placeSupplierBid(button.dataset.placeSupplierBid));
+  });
+}
+
+async function placeSupplierBid(auctionId) {
+  const input = document.querySelector(`[data-supplier-bid-input="${auctionId}"]`);
+  const amount = Number(input?.value);
+  if (!amount || amount <= 0) return;
+  try {
+    await request(`/auctions/${auctionId}/bids`, {
+      method: "POST",
+      body: JSON.stringify({ supplier_id: state.auth.supplierId, bid_amount: amount }),
+    });
+    await loadSupplierAuctions();
+    await loadSupplierBids(auctionId);
+    render();
+  } catch (err) {
+    showAlert(err.message);
+  }
+}
+
+async function loadSupplierAuctions() {
+  const data = await request("/auctions").catch(() => ({ items: [] }));
+  state.data.supplierPortal.auctions = data.items || data || [];
+}
+
+async function loadSupplierBids(auctionId) {
+  const bids = await request(`/auctions/${auctionId}/bids`).catch(() => []);
+  state.data.supplierPortal.myBids[auctionId] = bids;
+}
+
+async function loadSupplierPortalData() {
+  const supplierId = state.auth.supplierId;
+  if (!supplierId) return;
+  await loadSupplierAuctions();
+  for (const a of state.data.supplierPortal.auctions) {
+    await loadSupplierBids(a.id);
+  }
+  state.data.supplierPortal.priceHistory = (await request(`/suppliers/${supplierId}/price-history?limit=50`).catch(() => ({ items: [] }))).items || [];
+  state.data.supplierPortal.shipments = (await request(`/shipments?supplier_id=${supplierId}`).catch(() => ({ items: [] }))).items || [];
+  state.data.supplierPortal.reviews = await request(`/suppliers/${supplierId}/reviews`).catch(() => []);
+}
+
+async function toggleSupplierMode() {
+  state.ui.supplierMode = !state.ui.supplierMode;
+  if (state.ui.supplierMode) {
+    state.ui.supplierView = "auctions";
+    render();
+    await loadSupplierPortalData();
+  }
+  render();
 }
 
 function renderAuthBlocked() {
@@ -6548,6 +6664,7 @@ function bindActions() {
             document.getElementById("user-form-password").value = "";
             document.getElementById("user-form-roles").value = "warehouse_manager";
             document.getElementById("user-form-department").value = "";
+            document.getElementById("user-form-supplier-id").value = "";
             if (title) title.textContent = "Создать пользователя";
             panel.style.display = "block";
             setPending(button, false);
@@ -6565,13 +6682,15 @@ function bindActions() {
           const password = document.getElementById("user-form-password")?.value;
           const roles = [document.getElementById("user-form-roles")?.value || "warehouse_manager"];
           const department = document.getElementById("user-form-department")?.value?.trim() || null;
+          const supplierIdRaw = document.getElementById("user-form-supplier-id")?.value?.trim();
+          const supplierId = supplierIdRaw ? Number(supplierIdRaw) : null;
           const errEl = document.getElementById("user-form-error");
           if (!fullName) {
             if (errEl) { errEl.textContent = "Введите имя"; errEl.style.display = "block"; }
             setPending(button, false);
             return;
           }
-          const body = { full_name: fullName, roles, department };
+          const body = { full_name: fullName, roles, department, supplier_id: supplierId };
           if (password) body.password = password;
           let result;
           if (userId) {
@@ -6613,6 +6732,7 @@ function bindActions() {
             document.getElementById("user-form-password").value = "";
             document.getElementById("user-form-roles").value = (user.roles || [])[0] || "warehouse_manager";
             document.getElementById("user-form-department").value = user.department || "";
+            document.getElementById("user-form-supplier-id").value = user.supplier_id || "";
             if (title) title.textContent = `Редактировать: ${user.username}`;
             panel.style.display = "block";
             setPending(button, false);
@@ -6999,12 +7119,11 @@ function bindActions() {
           method: "POST",
           body: JSON.stringify({ status: nextStatus, reason: result.reason }),
         });
-        if (response.generated_password) {
+        if (nextStatus === "approved" && response.supplier_id) {
           await loadAll();
-          await showGeneratedPasswordModal({
-            title: "Поставщик одобрен",
-            message: `Пароль для входа в портал «${response.email || application.email}» — сохраните и передайте поставщику, повторно он не отобразится:`,
-            password: response.generated_password,
+          await showSupplierApprovedNextStepsModal({
+            email: response.email || application.email,
+            supplierId: response.supplier_id,
           });
         } else {
           showAlert("Заявка обновлена", "ok");
@@ -7183,6 +7302,12 @@ el("hide-supplier-application")?.addEventListener("click", () => {
   hideSupplierApplicationScreen();
 });
 el("supplier-application-form")?.addEventListener("submit", submitSupplierApplication);
+
+el("supplier-mode-toggle")?.addEventListener("click", async () => {
+  await toggleSupplierMode();
+  const btn = el("supplier-mode-toggle");
+  if (btn) btn.textContent = state.ui.supplierMode ? "Режим: Сотрудник склада" : "Режим: Поставщик";
+});
 
 // === ПКУ PENDING WRITEOFFS UI ===
 

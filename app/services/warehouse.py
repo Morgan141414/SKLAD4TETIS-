@@ -7117,24 +7117,24 @@ class WarehouseService:
         connection = self.database.connect()
         try:
             rows = connection.execute(
-                "SELECT id, username, full_name, roles, warehouse_ids, department, is_active, created_at FROM sklad_users ORDER BY id"
+                "SELECT id, username, full_name, roles, warehouse_ids, department, supplier_id, is_active, created_at FROM sklad_users ORDER BY id"
             ).fetchall()
         finally:
             self._close_connection(connection)
         return [dict(r) for r in rows]
 
-    def create_user(self, username: str, full_name: str, password_hash: str, roles, warehouse_ids, department):
+    def create_user(self, username: str, full_name: str, password_hash: str, roles, warehouse_ids, department, supplier_id=None):
         import json as _json
         roles_str = ",".join(roles)
         wh_json = _json.dumps(warehouse_ids)
         with self.database.transaction() as connection:
             user_id = insert_and_get_id(
                 connection,
-                "INSERT INTO sklad_users (username, full_name, password_hash, roles, warehouse_ids, department) VALUES (?, ?, ?, ?, ?, ?)",
-                (username, full_name, password_hash, roles_str, wh_json, department)
+                "INSERT INTO sklad_users (username, full_name, password_hash, roles, warehouse_ids, department, supplier_id) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (username, full_name, password_hash, roles_str, wh_json, department, supplier_id)
             )
             row = connection.execute(
-                "SELECT id, username, full_name, roles, warehouse_ids, department, is_active, created_at FROM sklad_users WHERE id = ?",
+                "SELECT id, username, full_name, roles, warehouse_ids, department, supplier_id, is_active, created_at FROM sklad_users WHERE id = ?",
                 (user_id,)
             ).fetchone()
         return dict(row)
@@ -7158,6 +7158,9 @@ class WarehouseService:
         if "department" in updates:
             fields.append("department = ?")
             params.append(updates["department"])
+        if "supplier_id" in updates:
+            fields.append("supplier_id = ?")
+            params.append(updates["supplier_id"])
         if "is_active" in updates:
             fields.append("is_active = ?")
             params.append(updates["is_active"])
@@ -7170,7 +7173,7 @@ class WarehouseService:
                 tuple(params)
             )
             row = connection.execute(
-                "SELECT id, username, full_name, roles, warehouse_ids, department, is_active, created_at FROM sklad_users WHERE id = ?",
+                "SELECT id, username, full_name, roles, warehouse_ids, department, supplier_id, is_active, created_at FROM sklad_users WHERE id = ?",
                 (user_id,)
             ).fetchone()
         return dict(row) if row else None
@@ -7179,7 +7182,7 @@ class WarehouseService:
         connection = self.database.connect()
         try:
             row = connection.execute(
-                "SELECT id, username, full_name, roles, warehouse_ids, department, is_active, created_at FROM sklad_users WHERE id = ?",
+                "SELECT id, username, full_name, roles, warehouse_ids, department, supplier_id, is_active, created_at FROM sklad_users WHERE id = ?",
                 (user_id,)
             ).fetchone()
         finally:

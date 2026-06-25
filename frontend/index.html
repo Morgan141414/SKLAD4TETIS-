@@ -46,6 +46,7 @@
           </div>
           <div class="status-strip">
             <input id="global-search" class="search-input" aria-label="Глобальный поиск по складу" placeholder="Поиск по товару, партии, складу" />
+            <button id="supplier-mode-toggle" class="secondary" type="button" style="display:none" title="Переключиться между сотрудником склада и поставщиком">Режим: Поставщик</button>
             <button id="density-button" class="secondary" type="button" title="Сделать строки таблиц компактнее" aria-pressed="false">Компактно</button>
             <span id="api-status" class="status-dot muted">Проверяем связь</span>
             <span id="offline-badge" class="offline-badge" style="display:none" title="Нет соединения — операции сохраняются в очередь">
@@ -105,19 +106,11 @@
 
 
     <div id="login-screen" style="display:none; position:fixed; inset:0; background:#f5f5f5; align-items:center; justify-content:center; z-index:1000">
-      <div style="background:white; padding:2rem; border-radius:8px; box-shadow:0 2px 16px rgba(0,0,0,0.12); min-width:320px">
-        <h2 style="margin:0 0 1.5rem">Склад — Вход</h2>
-        <div style="margin-bottom:1rem">
-          <label style="display:block; margin-bottom:.25rem; font-size:.85rem">Логин</label>
-          <input id="login-username" type="text" style="width:100%; box-sizing:border-box; padding:.5rem; border:1px solid #ccc; border-radius:4px" placeholder="admin">
-        </div>
-        <div style="margin-bottom:1.5rem">
-          <label style="display:block; margin-bottom:.25rem; font-size:.85rem">Пароль</label>
-          <input id="login-password" type="password" style="width:100%; box-sizing:border-box; padding:.5rem; border:1px solid #ccc; border-radius:4px"
-                 onkeydown="if(event.key==='Enter') doLogin()">
-        </div>
-        <div id="login-error" style="color:red; margin-bottom:1rem; font-size:.85rem; display:none"></div>
-        <button onclick="doLogin()" style="width:100%; padding:.6rem; background:#2563eb; color:white; border:none; border-radius:4px; cursor:pointer; font-size:1rem">Войти</button>
+      <div style="background:white; padding:2rem; border-radius:8px; box-shadow:0 2px 16px rgba(0,0,0,0.12); min-width:320px; max-width:380px; text-align:center">
+        <h2 style="margin:0 0 .75rem">Склад</h2>
+        <p style="color:#64748b; font-size:.9rem; margin:0 0 1.5rem">Вход в склад выполняется через tetis1.kz. Откройте tetis1.kz, войдите в свой аккаунт и перейдите в раздел «Склад».</p>
+        <a href="https://tetis1.kz/" style="display:block; width:100%; box-sizing:border-box; padding:.6rem; background:#2563eb; color:white; border:none; border-radius:4px; font-size:1rem; text-decoration:none">Перейти на tetis1.kz</a>
+        <div id="login-error" style="color:red; margin-top:1rem; font-size:.85rem; display:none"></div>
         <button id="show-supplier-application" type="button" class="secondary" style="width:100%; margin-top:.75rem">Стать поставщиком</button>
       </div>
     </div>
@@ -167,7 +160,7 @@
       </div>
     </div>
     <script src="html5-qrcode.min.js"></script>
-    <script src="app.js?v=71"></script>
+    <script src="app.js?v=72"></script>
     <script>
       if ("serviceWorker" in navigator) {
         let refreshedByWorker = false;

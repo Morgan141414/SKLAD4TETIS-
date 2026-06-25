@@ -1191,6 +1191,7 @@ class UserCreate(BaseModel):
     roles: list[str] = ["warehouse_manager"]
     warehouse_ids: list[int] = []
     department: str | None = None
+    supplier_id: int | None = None
 
 
 class UserUpdate(BaseModel):
@@ -1199,6 +1200,7 @@ class UserUpdate(BaseModel):
     roles: list[str] | None = None
     warehouse_ids: list[int] | None = None
     department: str | None = None
+    supplier_id: int | None = None
     is_active: bool | None = None
 
 
@@ -1209,6 +1211,7 @@ class UserOut(BaseModel):
     roles: list[str]
     warehouse_ids: list[int]
     department: str | None
+    supplier_id: int | None = None
     is_active: bool
     created_at: str
 

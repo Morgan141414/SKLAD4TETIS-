@@ -248,6 +248,7 @@ def current_actor(actor_ctx: ActorContext = Depends(get_actor_context)):
         "roles": sorted(role.value for role in actor_ctx.roles),
         "warehouse_ids": sorted(actor_ctx.warehouse_ids),
         "department": actor_ctx.department,
+        "supplier_id": actor_ctx.supplier_id,
         "permissions": sorted(permission.value for permission in actor_ctx.permissions),
     }
 
@@ -420,23 +421,17 @@ def review_supplier_application(
 ):
     try:
         require_permission(actor_ctx, Permission.ADMIN_USERS)
-        generated_password = None
-        password_hash = None
-        if payload.status == "approved":
-            import secrets
-            generated_password = secrets.token_urlsafe(9)
-            password_hash = hash_password(generated_password)
         application = service.review_supplier_application(
             application_id,
             payload,
             reviewer_id=actor_ctx.actor_id,
-            password_hash=password_hash,
+            password_hash=None,
         )
         return {
             "application": application,
             "supplier_id": application.get("supplier_id"),
             "email": application.get("email"),
-            "generated_password": generated_password if application.get("supplier_id") else None,
+            "generated_password": None,
         }
     except Exception as error:
         raise map_error(error) from error
@@ -470,6 +465,7 @@ def exchange_tetis_token(
         wh_ids = []
         full_name = tetis_user_id
         actor_id = tetis_user_id
+        supplier_id = None
     else:
         import json as _json
         roles = [r.strip() for r in user["roles"].split(",") if r.strip()]
@@ -479,6 +475,7 @@ def exchange_tetis_token(
         wh_ids = wh_ids or []
         full_name = user["full_name"]
         actor_id = str(user["id"])
+        supplier_id = user.get("supplier_id")
     import time
     now = int(time.time())
     sklad_payload = {
@@ -491,6 +488,10 @@ def exchange_tetis_token(
         "warehouse_ids": wh_ids,
         "full_name": full_name,
     }
+    if supplier_id is not None:
+        sklad_payload["supplier_id"] = supplier_id
+        if "supplier" not in roles:
+            sklad_payload["roles"] = roles + ["supplier"]
     from app.security.tokens import encode_jwt_hs256
     sklad_token = encode_jwt_hs256(sklad_payload, settings.jwt_hmac_secret)
     return TokenResponse(access_token=sklad_token)
@@ -516,7 +517,7 @@ def create_user(body: UserCreate, actor_ctx: ActorContext = Depends(get_actor_co
         if existing:
             raise HTTPException(status_code=409, detail={"code": "conflict", "message": "Username already exists", "details": {}})
         pw_hash = hash_password(body.password)
-        user = svc.create_user(body.username, body.full_name, pw_hash, body.roles, body.warehouse_ids, body.department)
+        user = svc.create_user(body.username, body.full_name, pw_hash, body.roles, body.warehouse_ids, body.department, body.supplier_id)
         return _user_row_to_out(user)
     except HTTPException:
         raise
@@ -580,6 +581,7 @@ def _user_row_to_out(row: dict) -> UserOut:
         roles=roles,
         warehouse_ids=wh_ids or [],
         department=row.get("department"),
+        supplier_id=row.get("supplier_id"),
         is_active=row["is_active"],
         created_at=str(row["created_at"]),
     )
