@@ -498,6 +498,9 @@ class WarehouseService:
                         "UPDATE suppliers SET password_hash = ?, portal_access_enabled = TRUE WHERE id = ?",
                         (password_hash, supplier_id),
                     )
+                requester = application.get("actor_id") or ""
+                if requester.startswith("tetis-actor:"):
+                    self._link_requester_to_supplier(connection, requester.removeprefix("tetis-actor:"), supplier_id)
             now = now_iso()
             connection.execute(
                 """
@@ -528,6 +531,37 @@ class WarehouseService:
                 {"before": application, "after": updated},
             )
             return updated
+
+    def _link_requester_to_supplier(self, connection, requester_actor_id: str, supplier_id: int) -> None:
+        """Auto-link the tetis user who submitted an approved supplier application
+        to that supplier, so they can switch into supplier mode without an admin
+        having to manually type a supplier ID into the Users screen."""
+        import secrets
+        if requester_actor_id.isdigit():
+            row = connection.execute(
+                "SELECT id FROM sklad_users WHERE id = ?", (int(requester_actor_id),)
+            ).fetchone()
+            if row:
+                connection.execute(
+                    "UPDATE sklad_users SET supplier_id = ? WHERE id = ?",
+                    (supplier_id, row["id"]),
+                )
+                return
+        username = f"tetis:{requester_actor_id}"
+        existing = connection.execute(
+            "SELECT id FROM sklad_users WHERE username = ?", (username,)
+        ).fetchone()
+        if existing:
+            connection.execute(
+                "UPDATE sklad_users SET supplier_id = ? WHERE id = ?",
+                (supplier_id, existing["id"]),
+            )
+            return
+        connection.execute(
+            "INSERT INTO sklad_users (username, full_name, password_hash, roles, warehouse_ids, supplier_id) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (username, "Поставщик", secrets.token_hex(32), "other", "[]", supplier_id),
+        )
 
     def create_warehouse(self, data: WarehouseCreate, actor_id: str = "system") -> dict[str, Any]:
         with self.database.transaction() as connection:

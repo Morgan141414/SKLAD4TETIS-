@@ -684,9 +684,12 @@ async function submitSupplierApplication(event) {
   const submitButton = form.querySelector("button[type=submit]");
   submitButton.disabled = true;
   try {
+    const authToken = el("auth-token")?.value?.trim();
+    const reqHeaders = { "Content-Type": "application/json" };
+    if (state.auth.source === "tetis" && authToken) reqHeaders.Authorization = `Bearer ${authToken}`;
     const resp = await fetch(`${API}/supplier-applications`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: reqHeaders,
       body: JSON.stringify(payload),
     });
     const body = await resp.json().catch(() => ({}));
@@ -694,7 +697,9 @@ async function submitSupplierApplication(event) {
       throw new Error(body?.detail?.message || body?.detail || "Не удалось отправить заявку");
     }
     resultBox.style.color = "var(--success, #1a7f37)";
-    resultBox.textContent = "Заявка отправлена. После проверки Tetis вы получите доступ в портал поставщика на указанный email.";
+    resultBox.textContent = state.auth.source === "tetis"
+      ? "Заявка отправлена. После одобрения вы автоматически получите доступ — переключатель «Режим: Поставщик» появится в верхней панели."
+      : "Заявка отправлена. После проверки Tetis вы получите доступ на указанный email.";
     resultBox.style.display = "block";
     form.style.display = "none";
   } catch (err) {
@@ -726,11 +731,15 @@ function applyActorProfile(profile) {
       : "Демо-режим: роль и доступ задаются вручную.";
   }
   state.auth.supplierId = profile.supplier_id ?? null;
+  const canBeSupplier = (profile.roles || []).includes("supplier") && profile.supplier_id != null;
   const supplierToggle = el("supplier-mode-toggle");
   if (supplierToggle) {
-    const canBeSupplier = (profile.roles || []).includes("supplier") && profile.supplier_id != null;
     supplierToggle.style.display = canBeSupplier ? "" : "none";
     if (!canBeSupplier) state.ui.supplierMode = false;
+  }
+  const becomeSupplierButton = el("become-supplier-button");
+  if (becomeSupplierButton) {
+    becomeSupplierButton.style.display = (!canBeSupplier && state.auth.source === "tetis") ? "" : "none";
   }
 }
 
@@ -7296,6 +7305,9 @@ el("nav-toggle")?.addEventListener("click", () => {
 });
 
 el("show-supplier-application")?.addEventListener("click", () => {
+  showSupplierApplicationScreen();
+});
+el("become-supplier-button")?.addEventListener("click", () => {
   showSupplierApplicationScreen();
 });
 el("hide-supplier-application")?.addEventListener("click", () => {

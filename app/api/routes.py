@@ -367,9 +367,31 @@ def revoke_supplier_portal_access(
 def submit_supplier_application(
     payload: SupplierApplicationCreate,
     service: WarehouseService = Depends(get_warehouse_service),
+    authorization: str | None = Header(default=None),
 ) -> SupplierApplication:
     try:
-        return service.submit_supplier_application(payload, actor_id=payload.email)
+        # Anonymous (cold) submissions are keyed by email. If the request carries a
+        # valid sklad/tetis bearer token, key the application to that real tetis
+        # actor instead — this lets approval auto-link the requester's account
+        # (sklad_users.supplier_id) without an admin manually typing an ID.
+        actor_id = payload.email
+        if authorization:
+            scheme, _, token = authorization.partition(" ")
+            if scheme.lower() == "bearer" and token.strip():
+                settings = get_settings()
+                if settings.jwt_hmac_secret:
+                    try:
+                        actor_ctx = actor_from_bearer_token(
+                            token.strip(),
+                            secret=settings.jwt_hmac_secret,
+                            issuer=settings.jwt_issuer,
+                            audience=settings.jwt_audience,
+                            leeway_seconds=settings.jwt_clock_skew_seconds,
+                        )
+                        actor_id = f"tetis-actor:{actor_ctx.actor_id}"
+                    except Exception:
+                        pass
+        return service.submit_supplier_application(payload, actor_id=actor_id)
     except Exception as error:
         raise map_error(error) from error
 
