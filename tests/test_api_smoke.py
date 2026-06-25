@@ -484,16 +484,10 @@ class APISmokeTest(TestCase):
         )
         self.assertEqual(review_resp.status_code, 200, review_resp.text)
         review_body = review_resp.json()
-        self.assertIsNotNone(review_body["generated_password"])
+        # No password is generated anymore — access is granted by linking a tetis1 user
+        # (sklad_users.supplier_id) to this supplier, not via standalone login.
+        self.assertIsNone(review_body["generated_password"])
         self.assertIsNotNone(review_body["supplier_id"])
-
-        # The newly approved supplier can log into the supplier portal with the generated password.
-        login_resp = self.client.post(
-            "/api/v1/auth/supplier-login",
-            json={"email": "test-supplier@example.kz", "password": review_body["generated_password"]},
-        )
-        self.assertEqual(login_resp.status_code, 200, login_resp.text)
-        self.assertIn("access_token", login_resp.json())
 
     def test_mis_procedure_event_requires_valid_token(self) -> None:
         from app.core.config import get_settings
