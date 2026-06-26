@@ -1,6 +1,7 @@
 import logging
 from datetime import date
 from decimal import Decimal
+from typing import Any
 
 from fastapi import APIRouter, Body, Depends, File, Header, HTTPException, Response, UploadFile, WebSocket, WebSocketDisconnect, status
 from pydantic import BaseModel, Field
@@ -4656,6 +4657,28 @@ class MisProcedureEventIn(BaseModel):
     medical_record_no: str | None = None
 
 
+class SupplierSelfUpdate(BaseModel):
+    email: str | None = None
+    phone: str | None = None
+    contact_person: str | None = None
+    city: str | None = None
+    address: str | None = None
+    delivery_days: int | None = None
+    notes: str | None = None
+
+
+class ApplicationResubmitBody(BaseModel):
+    name: str | None = None
+    bin: str | None = None
+    email: str | None = None
+    phone: str | None = None
+    contact_person: str | None = None
+    city: str | None = None
+    address: str | None = None
+    delivery_days: int | None = None
+    notes: str | None = None
+
+
 @router.post("/mis/procedure-event", tags=["mis"])
 def mis_procedure_event(
     body: MisProcedureEventIn,
@@ -4798,5 +4821,60 @@ def esf_list_invoices(
         client = ESFClient(settings.esf_base_url)
         client.authenticate(settings.esf_username, settings.esf_password)
         return client.get_invoices(date_from, date_to)
+    except Exception as error:
+        raise map_error(error) from error
+
+
+# ── Supplier self-service ────────────────────────────────────────────────────
+
+@router.get("/supplier/me", tags=["supplier-self"])
+def get_my_supplier_profile(actor_ctx: ActorContext = Depends(get_actor_context)) -> Any:
+    if actor_ctx.supplier_id is None:
+        raise HTTPException(status_code=404, detail={"code": "not_found", "message": "No supplier linked to your account", "details": {}})
+    try:
+        svc = get_warehouse_service()
+        return svc.get_supplier_by_id(actor_ctx.supplier_id)
+    except Exception as error:
+        raise map_error(error) from error
+
+@router.patch("/supplier/me", tags=["supplier-self"])
+def update_my_supplier_profile(
+    body: SupplierSelfUpdate,
+    actor_ctx: ActorContext = Depends(get_actor_context),
+) -> Any:
+    if actor_ctx.supplier_id is None:
+        raise HTTPException(status_code=403, detail={"code": "forbidden", "message": "No supplier linked to your account", "details": {}})
+    try:
+        svc = get_warehouse_service()
+        return svc.update_supplier_self(actor_ctx.supplier_id, body.model_dump(exclude_none=True), actor_ctx.actor_id)
+    except Exception as error:
+        raise map_error(error) from error
+
+@router.get("/supplier/my-applications", tags=["supplier-self"])
+def get_my_supplier_applications(actor_ctx: ActorContext = Depends(get_actor_context)) -> Any:
+    """Return supplier applications submitted by the current actor. Works for all authenticated users."""
+    try:
+        svc = get_warehouse_service()
+        return svc.get_my_supplier_applications(actor_ctx.actor_id)
+    except Exception as error:
+        raise map_error(error) from error
+
+@router.post("/supplier/my-applications/{application_id}/resubmit", tags=["supplier-self"])
+def resubmit_supplier_application_endpoint(
+    application_id: int,
+    body: ApplicationResubmitBody,
+    actor_ctx: ActorContext = Depends(get_actor_context),
+) -> Any:
+    try:
+        svc = get_warehouse_service()
+        return svc.resubmit_supplier_application(
+            application_id,
+            body.model_dump(exclude_none=True),
+            actor_ctx.actor_id,
+        )
+    except PermissionError as error:
+        raise HTTPException(status_code=403, detail={"code": "forbidden", "message": str(error), "details": {}}) from error
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail={"code": "bad_request", "message": str(error), "details": {}}) from error
     except Exception as error:
         raise map_error(error) from error

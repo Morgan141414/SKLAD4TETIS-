@@ -491,7 +491,7 @@ const state = {
     repackTemplates: [],
     procedureConsumptionTemplates: [],
     supplierApplications: { items: [], total: 0 },
-    supplierPortal: { auctions: [], myBids: {}, priceHistory: [], shipments: [], reviews: [] },
+    supplierPortal: { auctions: [], myBids: {}, priceHistory: [], shipments: [], reviews: [], profile: null, myApplications: [] },
     analytics: { items: [], analysis_days: 90, warehouse_id: null, generated_at: null },
     abcXyzRuns: { items: [], total: 0 },
     sensorDevices: [],
@@ -5387,11 +5387,13 @@ function render() {
 // === SUPPLIER MODE (toggle: сотрудник склада ⇄ поставщик) ===
 
 const supplierPortalNav = [
+  ["my-applications", "Мои заявки"],
   ["auctions", "Аукционы"],
   ["my-bids", "Мои ставки"],
   ["price-history", "История цен"],
   ["shipments", "Мои поставки"],
   ["reviews", "Отзывы о нас"],
+  ["profile", "Профиль компании"],
 ];
 const supplierPortalTitles = Object.fromEntries(supplierPortalNav);
 
@@ -5488,12 +5490,96 @@ function renderSupplierReviews() {
 }
 
 const supplierPortalRenderers = {
+  "my-applications": renderSupplierMyApplications,
   auctions: renderSupplierAuctions,
   "my-bids": renderSupplierMyBids,
   "price-history": renderSupplierPriceHistory,
   shipments: renderSupplierShipments,
   reviews: renderSupplierReviews,
+  profile: renderSupplierProfile,
 };
+
+function renderSupplierMyApplications() {
+  const apps = state.data.supplierPortal.myApplications;
+  const STATUS_LABELS = {
+    pending: { label: "На проверке", cls: "warning" },
+    approved: { label: "Одобрена", cls: "ok" },
+    rejected: { label: "Отклонена", cls: "danger" },
+    needs_changes: { label: "Требуются изменения", cls: "warning" },
+  };
+  if (!apps.length) return `
+    <div class="panel">
+      <p style="color:var(--muted)">Вы ещё не подавали заявку на статус поставщика.</p>
+      <button class="primary" id="goto-become-supplier">Подать заявку</button>
+    </div>`;
+  return apps.map((app) => {
+    const s = STATUS_LABELS[app.status] || { label: app.status, cls: "" };
+    const isNeedsChanges = app.status === "needs_changes";
+    return `
+    <div class="panel" style="margin-bottom:12px" id="supplier-app-card-${app.id}">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+        <strong>Заявка №${app.id}</strong>
+        <span class="badge ${s.cls}">${s.label}</span>
+      </div>
+      <div style="font-size:.85rem;color:var(--muted);margin-bottom:4px">Подана: ${escapeHtml(String(app.created_at||"").slice(0,10))}</div>
+      ${app.review_reason ? `<div style="background:var(--surface-2,#f5f5f5);border-left:3px solid var(--warning,#f59e0b);padding:8px 12px;border-radius:0 4px 4px 0;margin:8px 0;font-size:.9rem">
+        <strong>Комментарий модератора:</strong><br>${escapeHtml(app.review_reason)}
+      </div>` : ""}
+      ${isNeedsChanges ? `
+        <details style="margin-top:12px">
+          <summary style="cursor:pointer;font-weight:600;color:var(--accent)">Исправить и повторно отправить</summary>
+          <form id="resubmit-form-${app.id}" style="margin-top:10px;display:grid;gap:8px">
+            <label>Название компании<input type="text" name="name" value="${escapeAttr(app.name||"")}" required /></label>
+            <label>БИН<input type="text" name="bin" value="${escapeAttr(app.bin||"")}" /></label>
+            <label>Email<input type="email" name="email" value="${escapeAttr(app.email||"")}" /></label>
+            <label>Телефон<input type="text" name="phone" value="${escapeAttr(app.phone||"")}" /></label>
+            <label>Контактное лицо<input type="text" name="contact_person" value="${escapeAttr(app.contact_person||"")}" /></label>
+            <label>Город<input type="text" name="city" value="${escapeAttr(app.city||"")}" /></label>
+            <label>Адрес<input type="text" name="address" value="${escapeAttr(app.address||"")}" /></label>
+            <label>Срок доставки (дней)<input type="number" name="delivery_days" value="${escapeAttr(String(app.delivery_days||""))}" min="0" /></label>
+            <label>Примечания<textarea name="notes" rows="2">${escapeHtml(app.notes||"")}</textarea></label>
+            <button type="submit" class="primary" data-resubmit-id="${app.id}">Отправить повторно</button>
+          </form>
+        </details>
+      ` : ""}
+    </div>`;
+  }).join("");
+}
+
+function renderSupplierProfile() {
+  const p = state.data.supplierPortal.profile;
+  if (!p) return `<div class="panel"><p style="color:var(--muted)">Загрузка...</p></div>`;
+  const field = (label, val) => val ? `<div style="margin-bottom:6px"><span style="color:var(--muted);font-size:.82rem">${label}</span><div style="font-weight:500">${escapeHtml(String(val))}</div></div>` : "";
+  return `
+    <div class="panel" style="margin-bottom:12px">
+      <h3 style="margin:0 0 12px">${escapeHtml(p.name||"")}</h3>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:16px">
+        ${field("БИН", p.bin)}
+        ${field("Рейтинг", p.rating != null ? `${p.rating} ★` : null)}
+        ${field("Email", p.email)}
+        ${field("Телефон", p.phone)}
+        ${field("Контактное лицо", p.contact_person)}
+        ${field("Город", p.city)}
+        ${field("Адрес", p.address)}
+        ${field("Срок доставки", p.delivery_days != null ? `${p.delivery_days} дней` : null)}
+      </div>
+      ${p.notes ? `<div style="font-size:.9rem;color:var(--muted)">${escapeHtml(p.notes)}</div>` : ""}
+      <hr style="margin:16px 0">
+      <details>
+        <summary style="cursor:pointer;font-weight:600;color:var(--accent)">Редактировать контактную информацию</summary>
+        <form id="supplier-profile-edit-form" style="margin-top:10px;display:grid;gap:8px">
+          <label>Email<input type="email" name="email" value="${escapeAttr(p.email||"")}" /></label>
+          <label>Телефон<input type="text" name="phone" value="${escapeAttr(p.phone||"")}" /></label>
+          <label>Контактное лицо<input type="text" name="contact_person" value="${escapeAttr(p.contact_person||"")}" /></label>
+          <label>Город<input type="text" name="city" value="${escapeAttr(p.city||"")}" /></label>
+          <label>Адрес<input type="text" name="address" value="${escapeAttr(p.address||"")}" /></label>
+          <label>Срок доставки (дней)<input type="number" name="delivery_days" value="${escapeAttr(String(p.delivery_days||""))}" min="0" /></label>
+          <label>Примечания<textarea name="notes" rows="2">${escapeHtml(p.notes||"")}</textarea></label>
+          <button type="submit" class="primary" id="save-supplier-profile-btn">Сохранить</button>
+        </form>
+      </details>
+    </div>`;
+}
 
 function renderSupplierContent() {
   return supplierPortalRenderers[state.ui.supplierView]?.() || renderSupplierAuctions();
@@ -5502,6 +5588,56 @@ function renderSupplierContent() {
 function bindSupplierActions() {
   document.querySelectorAll("[data-place-supplier-bid]").forEach((button) => {
     button.addEventListener("click", () => placeSupplierBid(button.dataset.placeSupplierBid));
+  });
+
+  // Resubmit application
+  document.querySelectorAll("[data-resubmit-id]").forEach((btn) => {
+    btn.addEventListener("click", async (e) => {
+      e.preventDefault();
+      const id = btn.dataset.resubmitId;
+      const form = document.getElementById(`resubmit-form-${id}`);
+      if (!form) return;
+      const fd = new FormData(form);
+      const body = {};
+      for (const [k, v] of fd.entries()) { if (v.trim()) body[k] = v.trim(); }
+      try {
+        btn.disabled = true;
+        btn.textContent = "Отправка...";
+        await request(`/supplier/my-applications/${id}/resubmit`, { method: "POST", body: JSON.stringify(body) });
+        state.data.supplierPortal.myApplications = await request(`/supplier/my-applications`).catch(() => []);
+        render();
+      } catch (err) {
+        alert(err.message || "Ошибка при отправке");
+        btn.disabled = false;
+        btn.textContent = "Отправить повторно";
+      }
+    });
+  });
+
+  // Save profile
+  document.getElementById("supplier-profile-edit-form")?.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const form = e.target;
+    const fd = new FormData(form);
+    const body = {};
+    for (const [k, v] of fd.entries()) { if (v.trim()) body[k] = v; }
+    const btn = document.getElementById("save-supplier-profile-btn");
+    try {
+      if (btn) { btn.disabled = true; btn.textContent = "Сохраняю..."; }
+      const updated = await request(`/supplier/me`, { method: "PATCH", body: JSON.stringify(body) });
+      state.data.supplierPortal.profile = updated;
+      render();
+    } catch (err) {
+      alert(err.message || "Ошибка при сохранении");
+      if (btn) { btn.disabled = false; btn.textContent = "Сохранить"; }
+    }
+  });
+
+  // Go to become-supplier from my-applications
+  document.getElementById("goto-become-supplier")?.addEventListener("click", () => {
+    state.ui.supplierMode = false;
+    render();
+    setTimeout(() => el("become-supplier-button")?.click(), 100);
   });
 }
 
@@ -5534,14 +5670,20 @@ async function loadSupplierBids(auctionId) {
 
 async function loadSupplierPortalData() {
   const supplierId = state.auth.supplierId;
-  if (!supplierId) return;
-  await loadSupplierAuctions();
-  for (const a of state.data.supplierPortal.auctions) {
-    await loadSupplierBids(a.id);
+  const auctions = await request(`/auctions?status=active&limit=50`).catch(() => ({ items: [] }));
+  state.data.supplierPortal.auctions = auctions.items || [];
+  if (supplierId && state.data.supplierPortal.auctions.length) {
+    for (const a of state.data.supplierPortal.auctions) {
+      await loadSupplierBids(a.id);
+    }
   }
-  state.data.supplierPortal.priceHistory = (await request(`/suppliers/${supplierId}/price-history?limit=50`).catch(() => ({ items: [] }))).items || [];
-  state.data.supplierPortal.shipments = (await request(`/shipments?supplier_id=${supplierId}`).catch(() => ({ items: [] }))).items || [];
-  state.data.supplierPortal.reviews = await request(`/suppliers/${supplierId}/reviews`).catch(() => []);
+  if (supplierId) {
+    state.data.supplierPortal.priceHistory = (await request(`/suppliers/${supplierId}/price-history?limit=50`).catch(() => ({ items: [] }))).items || [];
+    state.data.supplierPortal.shipments = (await request(`/shipments?supplier_id=${supplierId}`).catch(() => ({ items: [] }))).items || [];
+    state.data.supplierPortal.reviews = await request(`/suppliers/${supplierId}/reviews`).catch(() => []);
+    state.data.supplierPortal.profile = await request(`/supplier/me`).catch(() => null);
+  }
+  state.data.supplierPortal.myApplications = await request(`/supplier/my-applications`).catch(() => []);
 }
 
 async function toggleSupplierMode() {

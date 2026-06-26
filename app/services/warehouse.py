@@ -417,6 +417,84 @@ class WarehouseService:
         finally:
             self._close_connection(connection)
 
+    def get_my_supplier_applications(self, actor_id: str) -> list[dict[str, Any]]:
+        """Return applications submitted by this actor (tetis-actor:{actor_id} or actor_id directly)."""
+        connection = self.database.connect()
+        patterns = [f"tetis-actor:{actor_id}", actor_id]
+        rows = connection.execute(
+            """
+            SELECT id, name, bin, email, phone, contact_person, city, address,
+                   delivery_days, notes, status, actor_id, review_reason,
+                   reviewed_by, reviewed_at, supplier_id, created_at
+            FROM supplier_applications
+            WHERE actor_id IN (?, ?)
+            ORDER BY id DESC
+            """,
+            tuple(patterns),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    def resubmit_supplier_application(
+        self, application_id: int, data: dict[str, Any], actor_id: str
+    ) -> dict[str, Any]:
+        """Update application fields and reset status to pending (only allowed if needs_changes)."""
+        with self.database.transaction() as connection:
+            app = self._get_supplier_application(connection, application_id)
+            # Verify actor owns this application
+            expected = [f"tetis-actor:{actor_id}", actor_id]
+            if app.get("actor_id") not in expected:
+                raise PermissionError("Cannot edit another actor's application")
+            if app["status"] != "needs_changes":
+                raise ValueError(f"Cannot resubmit application with status '{app['status']}'")
+            update_fields = {k: v for k, v in data.items() if k in (
+                "name", "bin", "email", "phone", "contact_person",
+                "city", "address", "delivery_days", "notes"
+            ) if v is not None}
+            if update_fields:
+                set_clause = ", ".join(f"{k} = ?" for k in update_fields)
+                connection.execute(
+                    f"UPDATE supplier_applications SET {set_clause}, status = 'pending', review_reason = NULL, reviewed_by = NULL, reviewed_at = NULL WHERE id = ?",
+                    (*update_fields.values(), application_id),
+                )
+            else:
+                connection.execute(
+                    "UPDATE supplier_applications SET status = 'pending', review_reason = NULL, reviewed_by = NULL, reviewed_at = NULL WHERE id = ?",
+                    (application_id,),
+                )
+            return self._get_supplier_application(connection, application_id)
+
+    def get_supplier_by_id(self, supplier_id: int) -> dict[str, Any]:
+        """Get a single supplier record by ID."""
+        connection = self.database.connect()
+        row = connection.execute(
+            """
+            SELECT id, name, bin, email, phone, contact_person, city, address,
+                   delivery_days, rating, notes, is_preferred, contract_number,
+                   contract_expires_on, payment_terms, city, lat, lng
+            FROM suppliers WHERE id = ?
+            """,
+            (supplier_id,),
+        ).fetchone()
+        if row is None:
+            raise ValueError(f"Supplier {supplier_id} not found")
+        return dict(row)
+
+    def update_supplier_self(
+        self, supplier_id: int, data: dict[str, Any], actor_id: str
+    ) -> dict[str, Any]:
+        """Update supplier's own profile — only contact fields, not name/rating/contract."""
+        allowed = {"email", "phone", "contact_person", "city", "address", "delivery_days", "notes"}
+        updates = {k: v for k, v in data.items() if k in allowed and v is not None}
+        if not updates:
+            return self.get_supplier_by_id(supplier_id)
+        with self.database.transaction() as connection:
+            set_clause = ", ".join(f"{k} = ?" for k in updates)
+            connection.execute(
+                f"UPDATE suppliers SET {set_clause} WHERE id = ?",
+                (*updates.values(), supplier_id),
+            )
+            return self.get_supplier_by_id(supplier_id)
+
     def review_supplier_application(
         self,
         application_id: int,
