@@ -5587,7 +5587,13 @@ async function loadAll() {
         return;
       }
     }
-    const profile = await request("/me");
+    let profile = await request("/me");
+    // If supplier access was approved since last login, silently re-exchange the tetis token
+    // so the new JWT reflects the updated supplier_id without requiring manual re-login
+    if (profile.access_needs_refresh && state.auth.source === "tetis") {
+      const ok = await requestSkladTokenFromTetis();
+      if (ok) profile = await request("/me");
+    }
     applyActorProfile(profile);
     const [health, readiness, categories, suppliers, warehouses, productUnits, products] = await Promise.all([
       request("/health"),
