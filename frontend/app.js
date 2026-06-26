@@ -876,9 +876,13 @@ function roleAccessNotice() {
 }
 
 async function request(path, options = {}) {
+  const { isFormData, ...fetchOptions } = options;
+  const reqHeaders = isFormData
+    ? (() => { const h = headers({}); delete h["Content-Type"]; return h; })()
+    : headers(options.headers || {});
   const response = await fetch(`${API}${path}`, {
-    ...options,
-    headers: headers(options.headers || {}),
+    ...fetchOptions,
+    headers: reqHeaders,
   });
   const text = await response.text();
   const body = parseJson(text);
@@ -5060,14 +5064,23 @@ function renderMarketplace() {
       </select>
       <button class="primary" id="mp-search-btn">Найти</button>
     </div>
-    <div style="color:var(--muted);font-size:.85rem;margin-bottom:10px">Найдено позиций: ${mp.total}</div>
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+      <div style="color:var(--muted);font-size:.85rem">Найдено позиций: ${mp.total}</div>
+      ${filter.search ? `<button class="secondary" style="font-size:.82rem" id="mp-bulk-inquire-btn" title="Отправить запрос всем поставщикам у которых есть этот товар">📤 Запросить у всех поставщиков</button>` : ""}
+    </div>
     <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:12px">
       ${mp.items.length ? mp.items.map(itemCard).join("") : `
         <div style="grid-column:1/-1;text-align:center;padding:40px 16px;color:var(--muted)">
           <div style="font-size:2.5rem;margin-bottom:8px">🛒</div>
           <div>Ничего не найдено.<br>Попробуйте изменить запрос.</div>
         </div>`}
-    </div>`;
+    </div>
+    ${mp.total > mp.items.length ? `
+      <div style="text-align:center;margin-top:16px">
+        <button class="secondary" id="mp-load-more" data-offset="${mp.items.length}">
+          Загрузить ещё (показано ${mp.items.length} из ${mp.total})
+        </button>
+      </div>` : ""}`;
 }
 
 function renderMarketplaceSuppliers(suppliers, filter) {
@@ -5221,6 +5234,148 @@ function renderMyInquiries(items) {
   }).join("");
 }
 
+function showBulkInquiryModal(productName) {
+  const existing = document.getElementById("bulk-inquiry-overlay");
+  if (existing) existing.remove();
+  const overlay = document.createElement("div");
+  overlay.id = "bulk-inquiry-overlay";
+  overlay.style.cssText = "position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:9999;display:flex;align-items:center;justify-content:center;padding:16px";
+  overlay.innerHTML = `
+    <div style="background:var(--surface,#fff);border-radius:12px;padding:24px;max-width:440px;width:100%;box-shadow:0 8px 32px rgba(0,0,0,.2)">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
+        <h3 style="margin:0">📤 Массовый запрос</h3>
+        <button id="bulk-inquiry-close" style="background:none;border:none;font-size:1.4rem;cursor:pointer;color:var(--muted);padding:0 4px">&times;</button>
+      </div>
+      <p style="color:var(--muted);font-size:.9rem;margin-bottom:16px">
+        Запрос будет отправлен всем поставщикам у которых есть <strong>«${escapeHtml(productName)}»</strong> в каталоге.
+        Вы получите ответы от каждого.
+      </p>
+      <form id="bulk-inquiry-form" style="display:grid;gap:10px">
+        <label style="font-size:.88rem">Количество
+          <input type="number" name="quantity" value="1" min="1" step="1" required />
+        </label>
+        <label style="font-size:.88rem">Комментарий
+          <textarea name="notes" rows="2" placeholder="Срочно нужно, уточните сроки поставки..."></textarea>
+        </label>
+        <div id="bulk-inquiry-result" style="display:none;font-size:.88rem;padding:8px 12px;border-radius:6px"></div>
+        <div style="display:flex;gap:8px">
+          <button type="submit" class="primary" style="flex:1" id="bulk-inquiry-submit">Отправить всем</button>
+          <button type="button" class="secondary" id="bulk-inquiry-cancel">Отмена</button>
+        </div>
+      </form>
+    </div>`;
+  document.body.appendChild(overlay);
+  document.getElementById("bulk-inquiry-close")?.addEventListener("click", () => overlay.remove());
+  document.getElementById("bulk-inquiry-cancel")?.addEventListener("click", () => overlay.remove());
+  overlay.addEventListener("click", (e) => { if (e.target === overlay) overlay.remove(); });
+  document.getElementById("bulk-inquiry-form")?.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const fd = new FormData(e.target);
+    const body = { product_name: productName, quantity: Number(fd.get("quantity")) };
+    const notes = (fd.get("notes") || "").trim();
+    if (notes) body.notes = notes;
+    const btn = document.getElementById("bulk-inquiry-submit");
+    const result = document.getElementById("bulk-inquiry-result");
+    try {
+      if (btn) { btn.disabled = true; btn.textContent = "Отправляю..."; }
+      const res = await request("/marketplace/bulk-inquire", { method: "POST", body: JSON.stringify(body) });
+      const count = res.total || 0;
+      result.style.display = "block";
+      result.style.background = count > 0 ? "var(--success-bg,#f0fff4)" : "var(--warning-bg,#fffbeb)";
+      result.style.color = count > 0 ? "var(--success,#16a34a)" : "var(--warning,#d97706)";
+      result.textContent = count > 0
+        ? `✓ Запрос отправлен ${count} поставщик${count === 1 ? "у" : count < 5 ? "ам" : "ам"}! Ответы появятся в «Мои запросы».`
+        : "Поставщики с таким товаром не найдены в каталоге.";
+      if (count > 0) {
+        request("/marketplace/my-inquiries?limit=50").then((d) => { state.data.myInquiries = d; }).catch(() => {});
+        if (btn) { btn.disabled = true; btn.textContent = "Отправлено"; }
+        setTimeout(() => overlay.remove(), 3000);
+      } else {
+        if (btn) { btn.disabled = false; btn.textContent = "Отправить всем"; }
+      }
+    } catch (err) {
+      result.style.display = "block";
+      result.style.background = "var(--danger-bg,#fff0f0)";
+      result.style.color = "var(--danger,#dc2626)";
+      result.textContent = err.message || "Ошибка";
+      if (btn) { btn.disabled = false; btn.textContent = "Отправить всем"; }
+    }
+  });
+}
+
+function showShipmentFromInquiryModal(inquiry) {
+  const existing = document.getElementById("ship-from-inq-overlay");
+  if (existing) existing.remove();
+  const overlay = document.createElement("div");
+  overlay.id = "ship-from-inq-overlay";
+  overlay.style.cssText = "position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:9999;display:flex;align-items:center;justify-content:center;padding:16px";
+  const today = new Date(); today.setDate(today.getDate() + (inquiry.delivery_days || 3));
+  const defaultDate = today.toISOString().slice(0, 10);
+  overlay.innerHTML = `
+    <div style="background:var(--surface,#fff);border-radius:12px;padding:24px;max-width:440px;width:100%;box-shadow:0 8px 32px rgba(0,0,0,.2)">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+        <h3 style="margin:0">🚚 Создать поставку</h3>
+        <button id="ship-inq-close" style="background:none;border:none;font-size:1.4rem;cursor:pointer;color:var(--muted)">&times;</button>
+      </div>
+      <div style="background:var(--surface-2,#f5f5f5);padding:10px 12px;border-radius:8px;margin-bottom:14px;font-size:.88rem">
+        <strong>${escapeHtml(inquiry.product_name || "")}</strong> · ${inquiry.quantity} ${escapeHtml(inquiry.unit || "")}
+        <div style="color:var(--muted);margin-top:2px">Покупатель: ${escapeHtml(inquiry.warehouse_name || inquiry.actor_id || "—")}</div>
+      </div>
+      <form id="ship-inq-form" style="display:grid;gap:10px">
+        <label style="font-size:.88rem">Номер накладной / Референс
+          <input type="text" name="reference" placeholder="INQ-${inquiry.id}" />
+        </label>
+        <label style="font-size:.88rem">Город отправки
+          <input type="text" name="origin_city" placeholder="Алматы" />
+        </label>
+        <label style="font-size:.88rem">Ожидаемая дата доставки
+          <input type="date" name="estimated_arrival" value="${defaultDate}" required />
+        </label>
+        <label style="font-size:.88rem">Примечания
+          <textarea name="notes" rows="2" placeholder="Номер трека, особые условия..."></textarea>
+        </label>
+        <div id="ship-inq-result" style="display:none;font-size:.88rem;padding:8px 12px;border-radius:6px"></div>
+        <div style="display:flex;gap:8px">
+          <button type="submit" class="primary" style="flex:1" id="ship-inq-submit">Создать поставку</button>
+          <button type="button" class="secondary" id="ship-inq-cancel">Отмена</button>
+        </div>
+      </form>
+    </div>`;
+  document.body.appendChild(overlay);
+  document.getElementById("ship-inq-close")?.addEventListener("click", () => overlay.remove());
+  document.getElementById("ship-inq-cancel")?.addEventListener("click", () => overlay.remove());
+  overlay.addEventListener("click", (e) => { if (e.target === overlay) overlay.remove(); });
+  document.getElementById("ship-inq-form")?.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const fd = new FormData(e.target);
+    const body = {};
+    for (const [k, v] of fd.entries()) { if (v) body[k] = String(v).trim(); }
+    const btn = document.getElementById("ship-inq-submit");
+    const result = document.getElementById("ship-inq-result");
+    try {
+      if (btn) { btn.disabled = true; btn.textContent = "Создаю..."; }
+      const shipment = await request(`/supplier/inquiries/${inquiry.id}/create-shipment`, {
+        method: "POST", body: JSON.stringify(body),
+      });
+      result.style.display = "block";
+      result.style.background = "var(--success-bg,#f0fff4)";
+      result.style.color = "var(--success,#16a34a)";
+      result.textContent = `✓ Поставка #${shipment.id} создана!`;
+      const items = state.data.supplierPortal.inquiries || [];
+      const idx = items.findIndex((i) => i.id === inquiry.id);
+      if (idx >= 0) items[idx] = { ...items[idx], status: "ordered" };
+      if (btn) { btn.disabled = true; btn.textContent = "Создано"; }
+      setTimeout(() => { overlay.remove(); render(); }, 2000);
+    } catch (err) {
+      result.style.display = "block";
+      result.style.background = "var(--danger-bg,#fff0f0)";
+      result.style.color = "var(--danger,#dc2626)";
+      result.textContent = err.message || "Ошибка";
+      if (btn) { btn.disabled = false; btn.textContent = "Создать поставку"; }
+    }
+  });
+}
+
 function showInquiryModal(item) {
   const existing = document.getElementById("inquiry-modal-overlay");
   if (existing) existing.remove();
@@ -5329,6 +5484,37 @@ async function initMarketplace() {
       if (!item) return;
       showInquiryModal(item);
     });
+  });
+
+  // "Load more" pagination
+  el("mp-load-more")?.addEventListener("click", async () => {
+    const btn = el("mp-load-more");
+    const offset = Number(btn?.dataset.offset || 0);
+    const f = state.ui.marketplaceFilter || {};
+    const params = new URLSearchParams({ limit: "30", offset: String(offset) });
+    if (f.search) params.set("search", f.search);
+    if (f.category) params.set("category", f.category);
+    if (f.sort) params.set("sort", f.sort);
+    try {
+      if (btn) { btn.disabled = true; btn.textContent = "Загружаю..."; }
+      const more = await request(`/marketplace/catalog?${params}`);
+      state.data.marketplace = {
+        items: [...(state.data.marketplace?.items || []), ...(more.items || [])],
+        total: more.total,
+      };
+      render();
+      if (state.view === "marketplace") initMarketplace();
+    } catch (err) {
+      showAlert(err.message || "Ошибка загрузки", "error");
+      if (btn) { btn.disabled = false; btn.textContent = "Загрузить ещё"; }
+    }
+  });
+
+  // Bulk inquiry to all suppliers
+  el("mp-bulk-inquire-btn")?.addEventListener("click", () => {
+    const searchTerm = (state.ui.marketplaceFilter?.search || "").trim();
+    if (!searchTerm) return;
+    showBulkInquiryModal(searchTerm);
   });
 
   // Tab switching
@@ -6141,6 +6327,12 @@ function renderSupplierInquiries() {
             <button type="submit" class="primary" style="max-width:160px;font-size:.85rem">Отправить ответ</button>
           </form>
         </details>` : ""}
+      ${inq.status === "responded" ? `
+        <div style="margin-top:8px">
+          <button class="primary" style="font-size:.82rem" data-create-shipment-inq='${JSON.stringify({id:inq.id, product_name:inq.product_name, quantity:inq.quantity, unit:inq.unit, warehouse_name:inq.warehouse_name, actor_id:inq.actor_id})}'>
+            🚚 Создать поставку
+          </button>
+        </div>` : ""}
     </div>`;
   }).join("");
 }
@@ -6212,9 +6404,27 @@ function renderSupplierMyCatalog() {
     <datalist id="mp-product-suggestions">
       ${uniqueProductSuggestions.map((n) => `<option value="${escapeAttr(n)}">`).join("")}
     </datalist>
-    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;flex-wrap:wrap;gap:8px">
       <div style="color:var(--muted);font-size:.9rem">${items.length} ${items.length === 1 ? "позиция" : items.length < 5 ? "позиции" : "позиций"}</div>
-      <button class="primary" id="catalog-add-btn">+ Добавить товар</button>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <button class="secondary" style="font-size:.82rem" id="catalog-import-btn">📥 Импорт CSV</button>
+        <button class="primary" id="catalog-add-btn">+ Добавить товар</button>
+      </div>
+    </div>
+    <div id="catalog-import-panel" style="display:none;margin-bottom:12px">
+      <div class="panel" style="background:var(--surface-2,#f5f5f5)">
+        <strong style="display:block;margin-bottom:8px">Импорт прайс-листа из CSV</strong>
+        <div style="font-size:.82rem;color:var(--muted);margin-bottom:10px">
+          Колонки: <code>product_name</code> (обязательно), <code>unit_price</code> (обязательно), <code>unit</code>, <code>sku</code>, <code>stock_qty</code>, <code>delivery_days</code>, <code>category</code>, <code>description</code>, <code>min_order_qty</code>
+          <br>Первая строка — заголовки. Кодировка UTF-8.
+        </div>
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+          <input type="file" id="catalog-csv-file" accept=".csv" style="font-size:.85rem" />
+          <button class="primary" style="font-size:.85rem" id="catalog-csv-upload">Загрузить</button>
+          <button class="secondary" style="font-size:.85rem" id="catalog-import-cancel">Отмена</button>
+        </div>
+        <div id="catalog-import-result" style="display:none;margin-top:10px;font-size:.85rem;padding:8px 12px;border-radius:6px"></div>
+      </div>
     </div>
     <div id="catalog-add-form" style="display:none;margin-bottom:16px">
       <div class="panel">
@@ -6396,6 +6606,49 @@ function bindSupplierActions() {
     el("catalog-add-form").style.display = "none";
   });
 
+  // CSV import panel toggle
+  el("catalog-import-btn")?.addEventListener("click", () => {
+    const p = el("catalog-import-panel");
+    if (p) p.style.display = p.style.display === "none" ? "" : "none";
+  });
+  el("catalog-import-cancel")?.addEventListener("click", () => {
+    if (el("catalog-import-panel")) el("catalog-import-panel").style.display = "none";
+  });
+
+  // CSV upload handler
+  el("catalog-csv-upload")?.addEventListener("click", async () => {
+    const fileInput = el("catalog-csv-file");
+    const resultDiv = el("catalog-import-result");
+    if (!fileInput?.files?.length) {
+      alert("Выберите CSV-файл");
+      return;
+    }
+    const btn = el("catalog-csv-upload");
+    try {
+      btn.disabled = true; btn.textContent = "Загружаю...";
+      const fd = new FormData();
+      fd.append("file", fileInput.files[0]);
+      const res = await request("/supplier/catalog/import-csv", { method: "POST", body: fd, isFormData: true });
+      resultDiv.style.display = "block";
+      resultDiv.style.background = res.inserted > 0 ? "var(--success-bg,#f0fff4)" : "var(--warning-bg,#fffbeb)";
+      resultDiv.style.color = res.inserted > 0 ? "var(--success,#16a34a)" : "var(--warning,#d97706)";
+      resultDiv.innerHTML = `Добавлено: <strong>${res.inserted}</strong> · Пропущено: <strong>${res.skipped}</strong>`
+        + (res.errors?.length ? `<div style="margin-top:4px;font-size:.78rem">${res.errors.slice(0, 5).map(escapeHtml).join("<br>")}</div>` : "");
+      if (res.inserted > 0) {
+        // Refresh catalog
+        state.data.supplierPortal.myCatalog = (await request("/supplier/catalog").catch(() => ({ items: [] }))).items || [];
+        setTimeout(() => render(), 1500);
+      }
+    } catch (err) {
+      resultDiv.style.display = "block";
+      resultDiv.style.background = "var(--danger-bg,#fff0f0)";
+      resultDiv.style.color = "var(--danger,#dc2626)";
+      resultDiv.textContent = err.message || "Ошибка загрузки";
+    } finally {
+      btn.disabled = false; btn.textContent = "Загрузить";
+    }
+  });
+
   el("catalog-new-form")?.addEventListener("submit", async (e) => {
     e.preventDefault();
     const fd = new FormData(e.target);
@@ -6514,6 +6767,16 @@ function bindSupplierActions() {
         alert(err.message || "Ошибка при отправке ответа");
         if (btn) { btn.disabled = false; btn.textContent = "Отправить ответ"; }
       }
+    });
+  });
+
+  // Create shipment from inquiry button
+  document.querySelectorAll("[data-create-shipment-inq]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      try {
+        const inq = JSON.parse(btn.dataset.createShipmentInq);
+        showShipmentFromInquiryModal(inq);
+      } catch (_) {}
     });
   });
 }

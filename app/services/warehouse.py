@@ -861,6 +861,158 @@ class WarehouseService:
             ).fetchone()
             return dict(updated) if updated else {}
 
+    def create_shipment_from_inquiry(
+        self, inquiry_id: int, supplier_id: int, data: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Supplier creates a shipment record from an accepted inquiry."""
+        with self.database.transaction() as conn:
+            inq = conn.execute(
+                "SELECT * FROM marketplace_inquiries WHERE id = ? AND supplier_id = ?",
+                (inquiry_id, supplier_id),
+            ).fetchone()
+            if inq is None:
+                raise PermissionError("Inquiry not found or not yours")
+            # Build shipment fields
+            warehouse_id = inq["warehouse_id"] or data.get("destination_warehouse_id")
+            reference = data.get("reference") or f"INQ-{inquiry_id}"
+            notes = data.get("notes") or inq["notes"]
+            sid = insert_and_get_id(
+                conn,
+                """INSERT INTO shipments (supplier_id, reference, status, origin_city,
+                   destination_warehouse_id, estimated_arrival, notes)
+                   VALUES (?, ?, 'planned', ?, ?, ?, ?)""",
+                (
+                    supplier_id,
+                    reference,
+                    data.get("origin_city"),
+                    warehouse_id,
+                    data.get("estimated_arrival"),
+                    notes,
+                ),
+            )
+            conn.execute(
+                "UPDATE marketplace_inquiries SET status = 'ordered' WHERE id = ?",
+                (inquiry_id,),
+            )
+            shipment = conn.execute("SELECT * FROM shipments WHERE id = ?", (sid,)).fetchone()
+            return dict(shipment) if shipment else {}
+
+    def create_bulk_inquiry(
+        self,
+        product_name: str,
+        actor_id: str,
+        quantity: float,
+        notes: str | None,
+        warehouse_id: int | None,
+    ) -> dict[str, Any]:
+        """Send inquiry to all suppliers that have matching catalog items."""
+        connection = self.database.connect()
+        try:
+            items = connection.execute(
+                """SELECT ci.*, s.name AS supplier_name FROM supplier_catalog_items ci
+                   JOIN suppliers s ON s.id = ci.supplier_id
+                   WHERE ci.is_active = TRUE AND ci.product_name ILIKE ?
+                   ORDER BY ci.unit_price ASC""",
+                (f"%{product_name}%",),
+            ).fetchall()
+        finally:
+            self._close_connection(connection)
+
+        if not items:
+            return {"items": [], "total": 0}
+
+        # One inquiry per supplier (pick cheapest item per supplier)
+        seen_suppliers: set[int] = set()
+        created = []
+        with self.database.transaction() as conn:
+            for item in items:
+                sid = item["supplier_id"]
+                if sid in seen_suppliers:
+                    continue
+                seen_suppliers.add(sid)
+                row_id = insert_and_get_id(
+                    conn,
+                    """INSERT INTO marketplace_inquiries
+                       (catalog_item_id, supplier_id, warehouse_id, actor_id, quantity, unit_price, notes)
+                       VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                    (item["id"], sid, warehouse_id, actor_id, quantity, item["unit_price"], notes),
+                )
+                row = conn.execute("SELECT * FROM marketplace_inquiries WHERE id = ?", (row_id,)).fetchone()
+                if row:
+                    created.append({**dict(row), "supplier_name": item["supplier_name"]})
+
+        return {"items": created, "total": len(created)}
+
+    def import_catalog_csv(
+        self, supplier_id: int, rows: list[dict[str, Any]]
+    ) -> dict[str, Any]:
+        """Bulk-insert catalog items from parsed CSV rows."""
+        allowed_fields = {"product_name", "sku", "unit", "unit_price", "min_order_qty",
+                          "stock_qty", "delivery_days", "category", "description"}
+        inserted = 0
+        skipped = 0
+        errors: list[str] = []
+        with self.database.transaction() as conn:
+            for i, row in enumerate(rows, 1):
+                try:
+                    product_name = str(row.get("product_name") or "").strip()
+                    unit_price_raw = row.get("unit_price")
+                    if not product_name or unit_price_raw is None:
+                        skipped += 1
+                        errors.append(f"Строка {i}: пропущена (нет названия или цены)")
+                        continue
+                    unit_price = float(str(unit_price_raw).replace(",", "."))
+                    unit = str(row.get("unit") or "шт").strip() or "шт"
+                    min_order_qty = float(str(row.get("min_order_qty") or 1).replace(",", ".") or 1)
+                    stock_qty_raw = row.get("stock_qty")
+                    stock_qty = float(str(stock_qty_raw).replace(",", ".")) if stock_qty_raw not in (None, "") else None
+                    delivery_days_raw = row.get("delivery_days")
+                    delivery_days = int(float(str(delivery_days_raw).replace(",", "."))) if delivery_days_raw not in (None, "") else None
+                    insert_and_get_id(
+                        conn,
+                        """INSERT INTO supplier_catalog_items
+                           (supplier_id, product_name, sku, unit, unit_price, min_order_qty,
+                            stock_qty, delivery_days, category, description, is_active)
+                           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, TRUE)""",
+                        (
+                            supplier_id,
+                            product_name,
+                            str(row.get("sku") or "").strip() or None,
+                            unit,
+                            unit_price,
+                            min_order_qty,
+                            stock_qty,
+                            delivery_days,
+                            str(row.get("category") or "").strip() or None,
+                            str(row.get("description") or "").strip() or None,
+                        ),
+                    )
+                    inserted += 1
+                except Exception as exc:
+                    skipped += 1
+                    errors.append(f"Строка {i}: {exc}")
+        return {"inserted": inserted, "skipped": skipped, "errors": errors}
+
+    def get_catalog_item_inquiry_stats(self, supplier_id: int) -> list[dict[str, Any]]:
+        """Return inquiry counts per catalog item for a supplier."""
+        connection = self.database.connect()
+        try:
+            rows = connection.execute(
+                """SELECT ci.id, ci.product_name, ci.unit_price, ci.unit, ci.is_active,
+                          COUNT(mi.id) AS inquiries_total,
+                          COUNT(mi.id) FILTER (WHERE mi.status = 'pending') AS inquiries_pending,
+                          COUNT(mi.id) FILTER (WHERE mi.status IN ('ordered')) AS inquiries_ordered
+                   FROM supplier_catalog_items ci
+                   LEFT JOIN marketplace_inquiries mi ON mi.catalog_item_id = ci.id
+                   WHERE ci.supplier_id = ?
+                   GROUP BY ci.id
+                   ORDER BY inquiries_total DESC, ci.id""",
+                (supplier_id,),
+            ).fetchall()
+            return [dict(r) for r in rows]
+        finally:
+            self._close_connection(connection)
+
     # ────────────────────────────────────────────────────────────────────────
 
     def review_supplier_application(

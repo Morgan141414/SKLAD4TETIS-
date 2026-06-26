@@ -5163,3 +5163,99 @@ def update_my_inquiry_status(
         raise HTTPException(status_code=422, detail={"code": "validation_error", "message": str(error), "details": {}}) from error
     except Exception as error:
         raise map_error(error) from error
+
+
+# ── Supplier: create shipment from inquiry ───────────────────────────────────
+
+class InquiryShipmentCreate(BaseModel):
+    estimated_arrival: date | None = None
+    origin_city: str | None = None
+    destination_warehouse_id: int | None = None
+    reference: str | None = None
+    notes: str | None = None
+
+
+@router.post("/supplier/inquiries/{inquiry_id}/create-shipment", status_code=201, tags=["supplier-self"])
+def create_shipment_from_inquiry(
+    inquiry_id: int,
+    body: InquiryShipmentCreate,
+    actor_ctx: ActorContext = Depends(get_actor_context),
+) -> Any:
+    if actor_ctx.supplier_id is None:
+        raise HTTPException(status_code=403, detail={"code": "forbidden", "message": "No supplier linked", "details": {}})
+    try:
+        return get_warehouse_service().create_shipment_from_inquiry(
+            inquiry_id, actor_ctx.supplier_id, body.model_dump(exclude_none=True)
+        )
+    except PermissionError as error:
+        raise HTTPException(status_code=403, detail={"code": "forbidden", "message": str(error), "details": {}}) from error
+    except Exception as error:
+        raise map_error(error) from error
+
+
+# ── Bulk inquiry ─────────────────────────────────────────────────────────────
+
+class BulkInquiryCreate(BaseModel):
+    product_name: str = Field(min_length=1)
+    quantity: float = Field(gt=0, default=1)
+    notes: str | None = None
+    warehouse_id: int | None = None
+
+
+@router.post("/marketplace/bulk-inquire", status_code=201, tags=["marketplace"])
+def create_bulk_inquiry(
+    body: BulkInquiryCreate,
+    actor_ctx: ActorContext = Depends(get_actor_context),
+) -> Any:
+    try:
+        svc = get_warehouse_service()
+        warehouse_id = body.warehouse_id
+        if warehouse_id is None and actor_ctx.warehouse_ids:
+            warehouse_id = list(actor_ctx.warehouse_ids)[0]
+        return svc.create_bulk_inquiry(
+            product_name=body.product_name,
+            actor_id=actor_ctx.actor_id,
+            quantity=body.quantity,
+            notes=body.notes,
+            warehouse_id=warehouse_id,
+        )
+    except Exception as error:
+        raise map_error(error) from error
+
+
+# ── Supplier catalog CSV import ───────────────────────────────────────────────
+
+@router.post("/supplier/catalog/import-csv", status_code=201, tags=["supplier-self"])
+async def import_catalog_csv(
+    file: UploadFile,
+    actor_ctx: ActorContext = Depends(get_actor_context),
+) -> Any:
+    if actor_ctx.supplier_id is None:
+        raise HTTPException(status_code=403, detail={"code": "forbidden", "message": "No supplier linked", "details": {}})
+    try:
+        import csv, io
+        content = await file.read()
+        text = content.decode("utf-8-sig")  # handle BOM
+        reader = csv.DictReader(io.StringIO(text))
+        rows = list(reader)
+        if not rows:
+            raise HTTPException(status_code=422, detail={"code": "validation_error", "message": "CSV файл пуст или неверный формат", "details": {}})
+        return get_warehouse_service().import_catalog_csv(actor_ctx.supplier_id, rows)
+    except HTTPException:
+        raise
+    except UnicodeDecodeError as error:
+        raise HTTPException(status_code=422, detail={"code": "validation_error", "message": "Файл должен быть в кодировке UTF-8", "details": {}}) from error
+    except Exception as error:
+        raise map_error(error) from error
+
+
+# ── Supplier catalog analytics ────────────────────────────────────────────────
+
+@router.get("/supplier/catalog/analytics", tags=["supplier-self"])
+def get_catalog_analytics(actor_ctx: ActorContext = Depends(get_actor_context)) -> Any:
+    if actor_ctx.supplier_id is None:
+        raise HTTPException(status_code=403, detail={"code": "forbidden", "message": "No supplier linked", "details": {}})
+    try:
+        return get_warehouse_service().get_catalog_item_inquiry_stats(actor_ctx.supplier_id)
+    except Exception as error:
+        raise map_error(error) from error
