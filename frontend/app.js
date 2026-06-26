@@ -741,6 +741,19 @@ function applyActorProfile(profile) {
   if (becomeSupplierButton) {
     becomeSupplierButton.style.display = (!canBeSupplier && state.auth.source === "tetis") ? "" : "none";
   }
+  // Show refresh banner if supplier access was approved since last login (token is stale)
+  const existingBanner = document.getElementById("supplier-access-banner");
+  if (profile.access_needs_refresh && !canBeSupplier && state.auth.source === "tetis") {
+    if (!existingBanner) {
+      const banner = document.createElement("div");
+      banner.id = "supplier-access-banner";
+      banner.style.cssText = "background:#16a34a;color:#fff;text-align:center;padding:10px 16px;font-size:14px;font-weight:500;";
+      banner.textContent = "🎉 Ваша заявка поставщика одобрена! Перейдите на tetis1.kz и снова откройте Склад — переключатель «Режим: Поставщик» появится автоматически.";
+      document.body.insertAdjacentElement("afterbegin", banner);
+    }
+  } else if (existingBanner) {
+    existingBanner.remove();
+  }
 }
 
 function headers(extra = {}) {

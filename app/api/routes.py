@@ -243,7 +243,7 @@ def test_telegram_notification(
 
 @router.get("/me")
 def current_actor(actor_ctx: ActorContext = Depends(get_actor_context)):
-    return {
+    response = {
         "actor_id": actor_ctx.actor_id,
         "roles": sorted(role.value for role in actor_ctx.roles),
         "warehouse_ids": sorted(actor_ctx.warehouse_ids),
@@ -251,6 +251,21 @@ def current_actor(actor_ctx: ActorContext = Depends(get_actor_context)):
         "supplier_id": actor_ctx.supplier_id,
         "permissions": sorted(permission.value for permission in actor_ctx.permissions),
     }
+    # If JWT has no supplier_id, check DB — approval may have happened since last auth
+    if actor_ctx.supplier_id is None:
+        try:
+            svc = get_warehouse_service()
+            actor_id_str = actor_ctx.actor_id or ""
+            db_user = None
+            if actor_id_str and not actor_id_str.isdigit():
+                db_user = svc.get_user_by_username(f"tetis:{actor_id_str}")
+            elif actor_id_str and actor_id_str.isdigit():
+                db_user = svc.get_user_by_id(int(actor_id_str))
+            if db_user is not None and db_user.get("supplier_id"):
+                response["access_needs_refresh"] = True
+        except Exception:
+            pass
+    return response
 
 
 
