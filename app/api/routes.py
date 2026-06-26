@@ -4926,6 +4926,7 @@ def browse_catalog(
     search: str | None = None,
     min_price: float | None = None,
     max_price: float | None = None,
+    sort: str | None = None,
     limit: int = 100,
     offset: int = 0,
     actor_ctx: ActorContext = Depends(get_actor_context),
@@ -4936,7 +4937,7 @@ def browse_catalog(
         return svc.list_supplier_catalog(
             supplier_id=supplier_id, category=category, search=search,
             min_price=min_price, max_price=max_price,
-            active_only=True, limit=limit, offset=offset,
+            active_only=True, sort=sort, limit=limit, offset=offset,
         )
     except Exception as error:
         raise map_error(error) from error
@@ -5138,5 +5139,27 @@ def respond_to_inquiry_endpoint(
         return get_warehouse_service().respond_to_inquiry(inquiry_id, actor_ctx.supplier_id, body.response_text)
     except PermissionError as error:
         raise HTTPException(status_code=403, detail={"code": "forbidden", "message": str(error), "details": {}}) from error
+    except Exception as error:
+        raise map_error(error) from error
+
+
+class InquiryStatusUpdate(BaseModel):
+    status: str = Field(pattern="^(ordered|closed)$")
+
+
+@router.patch("/marketplace/my-inquiries/{inquiry_id}", tags=["marketplace"])
+def update_my_inquiry_status(
+    inquiry_id: int,
+    body: InquiryStatusUpdate,
+    actor_ctx: ActorContext = Depends(get_actor_context),
+) -> Any:
+    try:
+        return get_warehouse_service().update_inquiry_status(
+            inquiry_id, actor_ctx.actor_id, body.status
+        )
+    except PermissionError as error:
+        raise HTTPException(status_code=403, detail={"code": "forbidden", "message": str(error), "details": {}}) from error
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail={"code": "validation_error", "message": str(error), "details": {}}) from error
     except Exception as error:
         raise map_error(error) from error

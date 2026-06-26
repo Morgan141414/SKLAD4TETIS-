@@ -514,6 +514,7 @@ class WarehouseService:
         min_price: float | None = None,
         max_price: float | None = None,
         active_only: bool = True,
+        sort: str | None = None,
         limit: int = 100,
         offset: int = 0,
     ) -> dict[str, Any]:
@@ -537,10 +538,17 @@ class WarehouseService:
             where.append("ci.unit_price <= ?")
             params.append(max_price)
         where_clause = f"WHERE {' AND '.join(where)}" if where else ""
+        _sort_map = {
+            "price_asc": "ci.unit_price ASC",
+            "price_desc": "ci.unit_price DESC",
+            "delivery_asc": "COALESCE(ci.delivery_days, s.delivery_days, 999) ASC",
+            "name_asc": "ci.product_name ASC",
+        }
+        order_clause = _sort_map.get(sort or "", "ci.updated_at DESC")
         connection = self.database.connect()
         try:
             total_row = connection.execute(
-                f"SELECT COUNT(*) AS n FROM supplier_catalog_items ci {where_clause}", tuple(params)
+                f"SELECT COUNT(*) AS n FROM supplier_catalog_items ci JOIN suppliers s ON s.id = ci.supplier_id {where_clause}", tuple(params)
             ).fetchone()
             total = total_row["n"] if total_row else 0
             rows = connection.execute(
@@ -553,7 +561,7 @@ class WarehouseService:
                 JOIN suppliers s ON s.id = ci.supplier_id
                 LEFT JOIN products p ON p.id = ci.product_id
                 {where_clause}
-                ORDER BY ci.updated_at DESC
+                ORDER BY {order_clause}
                 LIMIT ? OFFSET ?
                 """,
                 tuple(params) + (limit, offset),
@@ -818,6 +826,33 @@ class WarehouseService:
             )
             updated = conn.execute(
                 """SELECT mi.*, ci.product_name, ci.unit, s.name AS supplier_name
+                   FROM marketplace_inquiries mi
+                   JOIN supplier_catalog_items ci ON ci.id = mi.catalog_item_id
+                   JOIN suppliers s ON s.id = mi.supplier_id
+                   WHERE mi.id = ?""",
+                (inquiry_id,)
+            ).fetchone()
+            return dict(updated) if updated else {}
+
+    def update_inquiry_status(
+        self, inquiry_id: int, actor_id: str, new_status: str
+    ) -> dict[str, Any]:
+        """Buyer-side status update — mark inquiry as ordered or closed."""
+        if new_status not in ("ordered", "closed"):
+            raise ValueError(f"Invalid status: {new_status}")
+        with self.database.transaction() as conn:
+            row = conn.execute(
+                "SELECT id, actor_id FROM marketplace_inquiries WHERE id = ?", (inquiry_id,)
+            ).fetchone()
+            if row is None or row["actor_id"] != actor_id:
+                raise PermissionError("Inquiry not found or not yours")
+            conn.execute(
+                "UPDATE marketplace_inquiries SET status = ? WHERE id = ?",
+                (new_status, inquiry_id),
+            )
+            updated = conn.execute(
+                """SELECT mi.*, ci.product_name, ci.unit, s.name AS supplier_name,
+                          s.phone AS supplier_phone, s.email AS supplier_email
                    FROM marketplace_inquiries mi
                    JOIN supplier_catalog_items ci ON ci.id = mi.catalog_item_id
                    JOIN suppliers s ON s.id = mi.supplier_id

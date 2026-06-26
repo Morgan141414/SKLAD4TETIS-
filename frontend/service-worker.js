@@ -2,7 +2,7 @@
 // App shell caching + offline mutation queue via IndexedDB
 
 // Bump CACHE_NAME whenever app.js version changes — forces fresh SW install for all users
-const CACHE_NAME = "sklad-pwa-shell-v78";
+const CACHE_NAME = "sklad-pwa-shell-v79";
 const DB_NAME = "sklad-offline-queue";
 const DB_VERSION = 1;
 const QUEUE_STORE = "mutations";
@@ -11,7 +11,7 @@ const APP_SCOPE = new URL(self.registration.scope).pathname;
 // Versioned app.js so the SW cache is always in sync with what the HTML requests
 const APP_SHELL = [
   APP_SCOPE,
-  `${APP_SCOPE}app.js?v=78`,
+  `${APP_SCOPE}app.js?v=79`,
   `${APP_SCOPE}styles.css`,
   `${APP_SCOPE}manifest.webmanifest`,
   `${APP_SCOPE}html5-qrcode.min.js`,
