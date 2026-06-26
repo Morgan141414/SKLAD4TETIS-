@@ -2693,6 +2693,7 @@ function resetDocumentLines(kind) {
 function renderNav() {
   ensureAccessibleView();
   const unreadCount = (state.data.notifications?.items || []).filter((n) => !n.is_read).length;
+  const respondedInquiries = (state.data.myInquiries?.items || []).filter((i) => i.status === "responded").length;
   const allowedIds = new Set(visibleViews().map(([id]) => id));
   const viewById = new Map(views.map((view) => [view[0], view]));
   el("nav").innerHTML = navGroups.map((group) => {
@@ -2700,9 +2701,12 @@ function renderNav() {
     if (!ids.length) return "";
     const buttons = ids.map((id) => {
       const [, icon, label] = viewById.get(id);
-      const badge = id === "notifications" && unreadCount > 0
-        ? `<span style="position:absolute;top:4px;right:4px;background:#dc2626;color:#fff;border-radius:9999px;font-size:.6rem;font-weight:700;min-width:1.1rem;height:1.1rem;display:inline-flex;align-items:center;justify-content:center;padding:0 .2rem">${unreadCount > 99 ? "99+" : unreadCount}</span>`
-        : "";
+      let badge = "";
+      if (id === "notifications" && unreadCount > 0) {
+        badge = `<span style="position:absolute;top:4px;right:4px;background:#dc2626;color:#fff;border-radius:9999px;font-size:.6rem;font-weight:700;min-width:1.1rem;height:1.1rem;display:inline-flex;align-items:center;justify-content:center;padding:0 .2rem">${unreadCount > 99 ? "99+" : unreadCount}</span>`;
+      } else if (id === "marketplace" && respondedInquiries > 0) {
+        badge = `<span style="position:absolute;top:4px;right:4px;background:#16a34a;color:#fff;border-radius:9999px;font-size:.6rem;font-weight:700;min-width:1.1rem;height:1.1rem;display:inline-flex;align-items:center;justify-content:center;padding:0 .2rem">${respondedInquiries}</span>`;
+      }
       return `
       <button class="${state.view === id ? "active" : ""}" data-view="${id}" style="position:relative">
         <span>${icon}</span><span>${t(label)}</span>${badge}
@@ -3031,7 +3035,14 @@ function balancesTable(rows, empty = "Данных пока нет") {
     { label: "Свободно", key: "free_quantity" },
     { label: "Статус", render: (row) => badge(row.batch_status) },
     { label: "Годен до", render: (row) => row.expires_on || "—" },
-  ], rows, searchEmptyText(empty))}`;
+    { label: "", render: (row) => {
+      const offers = findMarketplaceOffersForProduct(row.product_id);
+      if (!offers.length) return "";
+      const best = offers.reduce((a, b) => a.unit_price <= b.unit_price ? a : b);
+      return `<button class="secondary compact-action" style="white-space:nowrap" data-show-pr-offers="${row.product_id}" title="${offers.length} предложений от ${fmtMoneyKzt(best.unit_price)} тг">📦 ${offers.length}</button>`;
+    }},
+  ], rows, searchEmptyText(empty))}
+  <div id="pr-offers-panel-balances" style="display:none;margin-top:12px"></div>`;
 }
 
 function nameById(collection, id) {
@@ -4045,6 +4056,20 @@ function suggestedPurchaseRequests() {
     }));
 }
 
+function findMarketplaceOffersForProduct(productId) {
+  const product = state.data.products.find((p) => p.id === productId);
+  if (!product) return [];
+  const productName = (product.name || "").toLowerCase();
+  return (state.data.marketplace?.items || []).filter((item) => {
+    const itemName = (item.product_name || "").toLowerCase();
+    return (
+      (item.product_id && item.product_id === productId) ||
+      itemName.includes(productName) ||
+      (productName.length > 4 && productName.includes(itemName.slice(0, 4)))
+    );
+  });
+}
+
 function renderPurchaseRequests() {
   const productUnavailable = state.data.products.length === 0;
   const suggestions = suggestedPurchaseRequests();
@@ -4092,10 +4117,16 @@ function renderPurchaseRequests() {
           { label: "Склад", render: (row) => row.warehouse_id ? nameById("warehouses", row.warehouse_id) : "—" },
           { label: "Количество", render: (row) => escapeHtml(row.recommended_quantity || row.quantity || row.recommended_order_quantity || "—") },
           { label: "Статус", render: (row) => badge(row.status || "open") },
-          { label: "Причина", render: (row) => escapeHtml(row.reason || row.recommendation || "—") },
+          { label: "Предложения", render: (row) => {
+            const offers = findMarketplaceOffersForProduct(row.product_id);
+            if (!offers.length) return `<button class="secondary" style="font-size:.75rem;padding:.2rem .6rem" data-goto-marketplace="${rawNameById("products", row.product_id)}">🔍 Найти</button>`;
+            const best = offers.reduce((a, b) => a.unit_price <= b.unit_price ? a : b);
+            return `<button class="secondary" style="font-size:.75rem;padding:.2rem .6rem;white-space:nowrap" data-show-pr-offers="${row.product_id}">📦 ${offers.length} · от ${fmtMoneyKzt(best.unit_price)} тг</button>`;
+          }},
           { label: "Создано", render: (row) => dateText(row.created_at) },
           { label: "", render: (row) => row.status === "draft" ? `<div class="row-actions"><button class="primary" data-purchase-status="${row.id}" data-purchase-next-status="ordered">Заказано</button><button class="secondary" data-purchase-status="${row.id}" data-purchase-next-status="cancelled">Отменить</button></div>` : "" },
         ], requests, "Заявок пока нет. Нажмите «Сформировать автозаявки» или создайте заявку вручную слева.")}
+        <div id="pr-offers-panel" style="display:none;margin-top:12px"></div>
       </div>
       <div class="table-panel span-12">
         <h2>${t("Рекомендации к закупке")}</h2>
@@ -4104,6 +4135,16 @@ function renderPurchaseRequests() {
           { label: "Склад", render: (row) => row.warehouse_id ? nameById("warehouses", row.warehouse_id) : "—" },
           { label: "Количество", key: "quantity" },
           { label: "Основание", key: "reason" },
+          { label: "Предложения", render: (row) => {
+            const pid = row.product_id;
+            const name = row.product_name || rawNameById("products", pid);
+            const offers = findMarketplaceOffersForProduct(pid);
+            if (offers.length) {
+              const best = offers.reduce((a, b) => a.unit_price <= b.unit_price ? a : b);
+              return `<button class="secondary" style="font-size:.75rem;padding:.2rem .6rem;white-space:nowrap" data-show-pr-offers="${pid}">📦 ${offers.length} · от ${fmtMoneyKzt(best.unit_price)} тг</button>`;
+            }
+            return `<button class="secondary" style="font-size:.75rem;padding:.2rem .6rem" data-goto-marketplace="${escapeAttr(name)}">🔍 Найти</button>`;
+          }},
         ], filteredRows(suggestions, (row) => [row.product_name, row.sku, rawNameById("warehouses", row.warehouse_id), row.quantity, row.reason]), "Автоматических рекомендаций пока нет. Они появятся после ABC/XYZ анализа и настроенных точек заказа.")}
       </div>
     </div>
@@ -6161,9 +6202,15 @@ function renderSupplierMyCatalog() {
   }
 
   const categories = [...new Set(items.map((i) => i.category).filter(Boolean))];
+  // Build product name suggestions from marketplace catalog items (items others have published) + any linked product names
+  const mpNames = (state.data.marketplace?.items || []).map((i) => i.product_name).filter(Boolean);
+  const uniqueProductSuggestions = [...new Set([...mpNames])].slice(0, 200);
   return `
     <datalist id="catalog-categories-list">
       ${categories.map((c) => `<option value="${escapeAttr(c)}">`).join("")}
+    </datalist>
+    <datalist id="mp-product-suggestions">
+      ${uniqueProductSuggestions.map((n) => `<option value="${escapeAttr(n)}">`).join("")}
     </datalist>
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
       <div style="color:var(--muted);font-size:.9rem">${items.length} ${items.length === 1 ? "позиция" : items.length < 5 ? "позиции" : "позиций"}</div>
@@ -6174,7 +6221,7 @@ function renderSupplierMyCatalog() {
         <strong style="display:block;margin-bottom:10px">Новая позиция</strong>
         <form id="catalog-new-form" style="display:grid;gap:8px">
           <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
-            <label style="font-size:.85rem">Название<input type="text" name="product_name" placeholder="Шприц 5мл" required /></label>
+            <label style="font-size:.85rem">Название<input type="text" name="product_name" placeholder="Шприц 5мл" required list="mp-product-suggestions" autocomplete="off" /></label>
             <label style="font-size:.85rem">Артикул<input type="text" name="sku" placeholder="SHR-005" /></label>
             <label style="font-size:.85rem">Цена (тг)<input type="number" name="unit_price" placeholder="45" min="0" step="0.01" required /></label>
             <label style="font-size:.85rem">Единица<select name="unit">
@@ -7454,6 +7501,68 @@ function bindActions() {
         await loadAll();
       } catch (error) { showAlert(error.message, "error"); }
       finally { setPending(button, false); }
+    });
+  });
+
+  // Show marketplace offers for a product from the purchase requests table
+  document.querySelectorAll("[data-show-pr-offers]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const productId = Number(btn.dataset.showPrOffers);
+      // Find the nearest offers panel — in purchase-requests, balances, or recommendations
+      const panel = document.getElementById("pr-offers-panel") || document.getElementById("pr-offers-panel-balances");
+      if (!panel) return;
+      const offers = findMarketplaceOffersForProduct(productId);
+      const productName = rawNameById("products", productId);
+      if (!offers.length) {
+        panel.style.display = "none";
+        return;
+      }
+      panel.style.display = "block";
+      panel.innerHTML = `
+        <div class="panel">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+            <strong>📦 Предложения поставщиков: «${escapeHtml(productName)}»</strong>
+            <button class="secondary" style="font-size:.78rem" id="pr-offers-close">✕ Закрыть</button>
+          </div>
+          <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:10px">
+            ${offers.map((item) => `
+              <div style="border:1px solid var(--line,#eee);border-radius:8px;padding:12px">
+                <div style="font-weight:600;margin-bottom:4px">${escapeHtml(item.supplier_name)}</div>
+                <div style="font-size:.82rem;color:var(--muted)">${escapeHtml(item.supplier_city || "")} ${item.supplier_phone ? `· ${escapeHtml(item.supplier_phone)}` : ""}</div>
+                <div style="margin:8px 0;font-size:1.1rem;font-weight:700;color:var(--accent)">${fmtMoneyKzt(item.unit_price)} тг<span style="font-size:.8rem;font-weight:400;color:var(--muted)">/${escapeHtml(item.unit)}</span></div>
+                <div style="font-size:.8rem;color:var(--muted);margin-bottom:8px">
+                  ${item.stock_qty != null ? `В наличии: ${item.stock_qty} · ` : ""}
+                  ${item.delivery_days || item.supplier_delivery_days ? `Доставка: ${item.delivery_days || item.supplier_delivery_days} дн.` : ""}
+                </div>
+                <button class="primary" style="font-size:.82rem;width:100%" data-mp-order="${item.id}" data-supplier-id="${item.supplier_id}">Запросить</button>
+              </div>`).join("")}
+          </div>
+        </div>`;
+      document.getElementById("pr-offers-close")?.addEventListener("click", () => { panel.style.display = "none"; });
+      // Wire "Запросить" buttons inside the panel
+      panel.querySelectorAll("[data-mp-order]").forEach((ob) => {
+        ob.addEventListener("click", () => {
+          const itemId = ob.dataset.mpOrder;
+          const item = (state.data.marketplace?.items || []).find((i) => String(i.id) === String(itemId));
+          if (item) showInquiryModal(item);
+        });
+      });
+    });
+  });
+
+  // "Find in marketplace" for purchase requests with no offers yet
+  document.querySelectorAll("[data-goto-marketplace]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const name = btn.dataset.gotoMarketplace || "";
+      state.view = "marketplace";
+      state.ui.marketplaceTab = "catalog";
+      if (!state.ui.marketplaceFilter) state.ui.marketplaceFilter = {};
+      state.ui.marketplaceFilter.search = name;
+      state.ui.marketplaceFilter.category = "";
+      render();
+      if (state.view === "marketplace") initMarketplace();
+      // Trigger search
+      setTimeout(() => el("mp-search-btn")?.click(), 100);
     });
   });
   document.querySelectorAll("[data-quarantine-review]").forEach((button) => {
