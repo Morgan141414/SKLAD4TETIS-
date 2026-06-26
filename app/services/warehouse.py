@@ -657,8 +657,8 @@ class WarehouseService:
         limit: int = 50,
         offset: int = 0,
     ) -> dict[str, Any]:
-        """Return all portal-enabled suppliers with their catalog stats."""
-        where = ["s.portal_access_enabled = TRUE"]
+        """Return all suppliers that are active in the marketplace (portal-enabled or have catalog items)."""
+        where = ["(s.portal_access_enabled = TRUE OR EXISTS (SELECT 1 FROM supplier_catalog_items ci2 WHERE ci2.supplier_id = s.id AND ci2.is_active = TRUE))"]
         params: list[Any] = []
         if city:
             where.append("s.city ILIKE ?")
