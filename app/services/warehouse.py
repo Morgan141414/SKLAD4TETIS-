@@ -425,7 +425,7 @@ class WarehouseService:
             """
             SELECT id, name, bin, email, phone, contact_person, city, address,
                    delivery_days, notes, status, actor_id, review_reason,
-                   reviewed_by, reviewed_at, supplier_id, created_at
+                   reviewed_by, reviewed_at, supplier_id, submitted_at
             FROM supplier_applications
             WHERE actor_id IN (?, ?)
             ORDER BY id DESC
@@ -493,7 +493,16 @@ class WarehouseService:
                 f"UPDATE suppliers SET {set_clause} WHERE id = ?",
                 (*updates.values(), supplier_id),
             )
-            return self.get_supplier_by_id(supplier_id)
+            row = connection.execute(
+                """
+                SELECT id, name, bin, email, phone, contact_person, city, address,
+                       delivery_days, rating, notes, is_preferred, contract_number,
+                       contract_expires_on, payment_terms, lat, lng
+                FROM suppliers WHERE id = ?
+                """,
+                (supplier_id,),
+            ).fetchone()
+            return dict(row) if row else {}
 
     def review_supplier_application(
         self,
