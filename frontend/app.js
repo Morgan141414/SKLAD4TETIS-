@@ -740,6 +740,7 @@ function applyActorProfile(profile) {
   const becomeSupplierButton = el("become-supplier-button");
   if (becomeSupplierButton) {
     becomeSupplierButton.style.display = (!canBeSupplier && state.auth.source === "tetis") ? "" : "none";
+    if (canBeSupplier) becomeSupplierButton.style.display = "none";
   }
   // Show refresh banner if supplier access was approved since last login (token is stale)
   const existingBanner = document.getElementById("supplier-access-banner");
@@ -5366,10 +5367,14 @@ function render() {
   if (state.ui.supplierMode) {
     renderSupplierNav();
     applyStaticI18n();
-    el("view-title").textContent = t(supplierPortalTitles[state.ui.supplierView] || "Режим поставщика");
+    const viewTitle = supplierPortalTitles[state.ui.supplierView] || "Режим поставщика";
+    el("view-title").textContent = t(viewTitle);
     el("content").innerHTML = renderSupplierContent();
     bindSupplierActions();
     applyDensity();
+    // Ensure supplier mode toggle reflects current state
+    const tog = el("supplier-mode-toggle");
+    if (tog) tog.textContent = state.auth.supplierId ? "Режим: Поставщик ✓" : "← Назад к складу";
     return;
   }
   ensureAccessibleView();
@@ -5398,7 +5403,11 @@ const supplierPortalNav = [
 const supplierPortalTitles = Object.fromEntries(supplierPortalNav);
 
 function renderSupplierNav() {
-  el("nav").innerHTML = supplierPortalNav.map(([id, label]) => `
+  const isFullSupplier = !!state.auth.supplierId;
+  const visibleNav = isFullSupplier
+    ? supplierPortalNav
+    : supplierPortalNav.filter(([id]) => ["my-applications", "auctions"].includes(id));
+  el("nav").innerHTML = visibleNav.map(([id, label]) => `
     <button class="${state.ui.supplierView === id ? "active" : ""}" data-supplier-view="${id}">${escapeHtml(t(label))}</button>
   `).join("");
   el("nav").querySelectorAll("[data-supplier-view]").forEach((button) => {
@@ -5417,76 +5426,208 @@ function fmtMoneyKzt(value) {
 
 function renderSupplierAuctions() {
   const auctions = state.data.supplierPortal.auctions;
-  if (!auctions.length) return `<p style="color:var(--muted)">Открытых аукционов пока нет.</p>`;
-  return auctions.map((a) => `
-    <div class="panel" style="margin-bottom:12px">
-      <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:6px">
-        <strong>${escapeHtml(a.title)}</strong>
-        <span class="badge ${a.status === "active" ? "ok" : ""}">${escapeHtml(a.status)}</span>
+  const AUCTION_STATUS = { active: { label: "Идёт", cls: "ok" }, closed: { label: "Завершён", cls: "" }, pending: { label: "Ожидает", cls: "warning" }, cancelled: { label: "Отменён", cls: "danger" } };
+  function auctionDeadline(endsAt) {
+    if (!endsAt) return "";
+    const ms = new Date(endsAt) - Date.now();
+    if (ms <= 0) return "завершён";
+    const h = Math.floor(ms / 3600000), m = Math.floor((ms % 3600000) / 60000);
+    if (h > 24) return `ещё ${Math.floor(h / 24)} д.`;
+    if (h > 0) return `ещё ${h} ч ${m} мин`;
+    return `ещё ${m} мин`;
+  }
+  if (!auctions.length) return `
+    <div class="panel" style="text-align:center;padding:32px 16px">
+      <div style="font-size:2rem;margin-bottom:8px">📋</div>
+      <div style="color:var(--muted)">Активных аукционов пока нет.<br>Новые появятся, как только склад разместит закупку.</div>
+    </div>`;
+  return auctions.map((a) => {
+    const st = AUCTION_STATUS[a.status] || { label: a.status, cls: "" };
+    const myBids = state.data.supplierPortal.myBids[a.id] || [];
+    const myBest = myBids.length ? Math.min(...myBids.map((b) => Number(b.bid_amount))) : null;
+    const iWon = a.status === "closed" && a.winner_supplier_id === state.auth.supplierId;
+    const deadline = auctionDeadline(a.ends_at);
+    return `
+    <div class="panel" style="margin-bottom:12px;${iWon ? "border-left:3px solid var(--success,#16a34a)" : ""}">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;margin-bottom:6px">
+        <div>
+          <strong style="font-size:1.05rem">${escapeHtml(a.title)}</strong>
+          ${iWon ? `<span style="margin-left:8px;font-size:.8rem;color:var(--success,#16a34a);font-weight:600">🏆 Вы выиграли!</span>` : ""}
+        </div>
+        <span class="badge ${st.cls}" style="white-space:nowrap">${st.label}</span>
       </div>
-      <div style="color:var(--muted);font-size:.85rem;margin-bottom:8px">${escapeHtml(a.product_name || "")} · ${escapeHtml(a.quantity)} ${escapeHtml(a.unit)}</div>
-      <div style="font-size:1.2rem;font-weight:700;margin-bottom:8px">${fmtMoneyKzt(a.current_price)} тг</div>
+      <div style="color:var(--muted);font-size:.85rem;margin-bottom:8px">
+        ${escapeHtml(a.product_name || "")} · <strong>${escapeHtml(String(a.quantity))} ${escapeHtml(a.unit)}</strong>
+        ${a.warehouse_id ? `· Склад #${a.warehouse_id}` : ""}
+      </div>
+      ${a.description ? `<div style="font-size:.9rem;margin-bottom:8px;color:var(--text-secondary,#555)">${escapeHtml(a.description)}</div>` : ""}
+      <div style="display:flex;gap:16px;flex-wrap:wrap;margin-bottom:10px">
+        <div><div style="font-size:.75rem;color:var(--muted)">Начальная цена</div><div style="font-weight:700;font-size:1.1rem">${fmtMoneyKzt(a.start_price)} тг</div></div>
+        <div><div style="font-size:.75rem;color:var(--muted)">Текущая цена</div><div style="font-weight:700;font-size:1.1rem;color:var(--accent)">${fmtMoneyKzt(a.current_price)} тг</div></div>
+        ${a.min_price ? `<div><div style="font-size:.75rem;color:var(--muted)">Мин. цена</div><div style="font-weight:600">${fmtMoneyKzt(a.min_price)} тг</div></div>` : ""}
+        ${a.step_amount ? `<div><div style="font-size:.75rem;color:var(--muted)">Шаг</div><div style="font-weight:600">${fmtMoneyKzt(a.step_amount)} тг</div></div>` : ""}
+      </div>
+      ${a.ends_at ? `<div style="font-size:.8rem;color:var(--muted);margin-bottom:8px">⏱ Дедлайн: ${new Date(a.ends_at).toLocaleString("ru-KZ", {day:"2-digit",month:"2-digit",year:"numeric",hour:"2-digit",minute:"2-digit"})} (${deadline})</div>` : ""}
+      ${myBest !== null ? `<div style="font-size:.85rem;margin-bottom:8px;padding:6px 10px;background:var(--surface-2,#f0f7ff);border-radius:6px">Ваша лучшая ставка: <strong>${fmtMoneyKzt(myBest)} тг</strong></div>` : ""}
       ${a.status === "active" ? `
-        <div style="display:flex;gap:8px">
-          <input type="number" data-supplier-bid-input="${a.id}" placeholder="Ваша ставка &lt; ${fmtMoneyKzt(a.current_price)}" style="max-width:220px" />
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+          <input type="number" data-supplier-bid-input="${a.id}"
+            placeholder="Сумма ставки (тг)"
+            style="max-width:180px"
+            ${a.min_price ? `min="${a.min_price}"` : ""}
+            max="${Number(a.current_price) - (Number(a.step_amount) || 1)}" />
           <button class="primary" data-place-supplier-bid="${a.id}">Сделать ставку</button>
+          ${myBest !== null ? `<span style="font-size:.8rem;color:var(--muted)">${myBids.length} ${myBids.length === 1 ? "ставка" : "ставок"}</span>` : ""}
         </div>
       ` : ""}
-    </div>
-  `).join("");
+      ${a.status === "closed" && a.winner_bid ? `<div style="font-size:.85rem;color:var(--muted)">Победная ставка: ${fmtMoneyKzt(a.winner_bid)} тг</div>` : ""}
+    </div>`;
+  }).join("");
 }
 
 function renderSupplierMyBids() {
   const entries = Object.entries(state.data.supplierPortal.myBids);
-  if (!entries.length) return `<p style="color:var(--muted)">Откройте «Аукционы», чтобы увидеть свои ставки.</p>`;
-  return entries.map(([auctionId, bids]) => `
-    <div class="panel" style="margin-bottom:12px">
-      <strong>Аукцион #${escapeHtml(auctionId)}</strong>
-      <div class="table-wrap" style="margin-top:8px">
-        <table>
-          <tr><th>Дата</th><th>Ваша ставка</th></tr>
-          ${bids.map((b) => `<tr><td>${escapeHtml(String(b.created_at).slice(0, 16))}</td><td>${fmtMoneyKzt(b.bid_amount)} тг</td></tr>`).join("") || '<tr><td colspan="2" style="color:var(--muted)">Ставок пока нет</td></tr>'}
-        </table>
+  const activeBids = entries.filter(([, bids]) => bids.length > 0);
+  if (!activeBids.length) return `
+    <div class="panel" style="text-align:center;padding:32px 16px">
+      <div style="font-size:2rem;margin-bottom:8px">🏷️</div>
+      <div style="color:var(--muted)">Вы ещё не делали ставок.<br>Перейдите в «Аукционы» и сделайте первую ставку.</div>
+    </div>`;
+  const auctionMap = Object.fromEntries((state.data.supplierPortal.auctions || []).map((a) => [String(a.id), a]));
+  return activeBids.map(([auctionId, bids]) => {
+    const auction = auctionMap[auctionId];
+    const myBest = Math.min(...bids.map((b) => Number(b.bid_amount)));
+    const iWon = auction?.status === "closed" && auction?.winner_supplier_id === state.auth.supplierId;
+    const isActive = auction?.status === "active";
+    return `
+    <div class="panel" style="margin-bottom:12px;${iWon ? "border-left:3px solid var(--success,#16a34a)" : ""}">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:8px">
+        <div>
+          <strong>${auction ? escapeHtml(auction.title) : `Аукцион #${auctionId}`}</strong>
+          ${auction ? `<div style="font-size:.82rem;color:var(--muted)">${escapeHtml(auction.product_name || "")} · ${escapeHtml(String(auction.quantity))} ${escapeHtml(auction.unit)}</div>` : ""}
+        </div>
+        ${iWon ? `<span style="color:var(--success,#16a34a);font-weight:700;font-size:.9rem">🏆 Победа!</span>` : (isActive ? `<span class="badge ok">Активен</span>` : `<span class="badge">${auction?.status || "—"}</span>`)}
       </div>
-    </div>
-  `).join("");
+      <div style="display:flex;gap:16px;margin-bottom:8px">
+        <div><div style="font-size:.75rem;color:var(--muted)">Лучшая ставка</div><div style="font-weight:700;color:var(--accent)">${fmtMoneyKzt(myBest)} тг</div></div>
+        <div><div style="font-size:.75rem;color:var(--muted)">Всего ставок</div><div style="font-weight:600">${bids.length}</div></div>
+        ${auction?.current_price ? `<div><div style="font-size:.75rem;color:var(--muted)">Текущая цена</div><div style="font-weight:600">${fmtMoneyKzt(auction.current_price)} тг</div></div>` : ""}
+      </div>
+      <details>
+        <summary style="cursor:pointer;font-size:.85rem;color:var(--muted)">История ставок (${bids.length})</summary>
+        <table style="margin-top:6px;width:100%;font-size:.85rem">
+          <tr><th>Дата</th><th>Сумма</th></tr>
+          ${bids.map((b) => `<tr><td style="color:var(--muted)">${String(b.created_at).slice(0, 16).replace("T", " ")}</td><td><strong>${fmtMoneyKzt(b.bid_amount)} тг</strong></td></tr>`).join("")}
+        </table>
+      </details>
+    </div>`;
+  }).join("");
 }
 
 function renderSupplierPriceHistory() {
   const rows = state.data.supplierPortal.priceHistory;
+  if (!rows.length) return `
+    <div class="panel" style="text-align:center;padding:32px 16px">
+      <div style="font-size:2rem;margin-bottom:8px">💰</div>
+      <div style="color:var(--muted)">История цен пока пуста.<br>Она формируется автоматически из принятых поставок.</div>
+    </div>`;
   return `
     <div class="table-wrap">
       <table>
-        <tr><th>Дата</th><th>Товар</th><th>Партия</th><th>Цена</th></tr>
-        ${rows.map((r) => `<tr><td>${escapeHtml(String(r.recorded_at).slice(0, 10))}</td><td>${escapeHtml(r.product_name)}</td><td>${escapeHtml(r.lot || "—")}</td><td>${fmtMoneyKzt(r.unit_price)}</td></tr>`).join("") || '<tr><td colspan="4" style="color:var(--muted)">Истории цен пока нет</td></tr>'}
+        <tr><th>Дата</th><th>Товар</th><th>Партия/Лот</th><th style="text-align:right">Цена за ед.</th></tr>
+        ${rows.map((r) => `
+          <tr>
+            <td style="color:var(--muted);font-size:.85rem">${escapeHtml(String(r.recorded_at).slice(0, 10))}</td>
+            <td>${escapeHtml(r.product_name || "—")}</td>
+            <td style="color:var(--muted)">${escapeHtml(r.lot || "—")}</td>
+            <td style="text-align:right;font-weight:600">${fmtMoneyKzt(r.unit_price)} тг</td>
+          </tr>`).join("")}
       </table>
-    </div>
-  `;
+    </div>`;
 }
 
 function renderSupplierShipments() {
   const rows = state.data.supplierPortal.shipments;
-  const statusLabels = { in_transit: "В пути", delivered: "Доставлено", delayed: "Задержка", cancelled: "Отменено" };
-  return `
-    <div class="table-wrap">
-      <table>
-        <tr><th>Номер</th><th>Статус</th><th>Откуда</th><th>Сейчас</th><th>Ожидается</th></tr>
-        ${rows.map((s) => `<tr><td>${escapeHtml(s.reference || "#" + s.id)}</td><td>${escapeHtml(statusLabels[s.status] || s.status)}</td><td>${escapeHtml(s.origin_city || "—")}</td><td>${escapeHtml(s.current_city || "—")}</td><td>${escapeHtml(s.estimated_arrival || "—")}</td></tr>`).join("") || '<tr><td colspan="5" style="color:var(--muted)">Поставок пока нет</td></tr>'}
-      </table>
-    </div>
-  `;
+  const STATUS = {
+    in_transit: { label: "В пути", cls: "ok" },
+    delivered: { label: "Доставлено", cls: "" },
+    delayed: { label: "Задержка", cls: "danger" },
+    cancelled: { label: "Отменено", cls: "danger" },
+    pending: { label: "Ожидает отправки", cls: "warning" },
+  };
+  if (!rows.length) return `
+    <div class="panel" style="text-align:center;padding:32px 16px">
+      <div style="font-size:2rem;margin-bottom:8px">🚚</div>
+      <div style="color:var(--muted)">Активных поставок нет.<br>Они появятся, когда склад создаст заявку на вашу поставку.</div>
+    </div>`;
+  return rows.map((s) => {
+    const st = STATUS[s.status] || { label: s.status, cls: "" };
+    return `
+    <div class="panel" style="margin-bottom:12px" id="shipment-card-${s.id}">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:8px">
+        <div>
+          <strong>${escapeHtml(s.reference || `Поставка #${s.id}`)}</strong>
+          <div style="font-size:.82rem;color:var(--muted);margin-top:2px">Создана: ${String(s.created_at || "").slice(0, 10)}</div>
+        </div>
+        <span class="badge ${st.cls}">${st.label}</span>
+      </div>
+      <div style="display:flex;gap:16px;flex-wrap:wrap;margin-bottom:10px;font-size:.9rem">
+        ${s.origin_city ? `<div><span style="color:var(--muted)">Откуда:</span> ${escapeHtml(s.origin_city)}</div>` : ""}
+        ${s.current_city ? `<div><span style="color:var(--muted)">Сейчас:</span> ${escapeHtml(s.current_city)}</div>` : ""}
+        ${s.estimated_arrival ? `<div><span style="color:var(--muted)">ETA:</span> <strong>${escapeHtml(String(s.estimated_arrival))}</strong></div>` : ""}
+      </div>
+      ${s.notes ? `<div style="font-size:.85rem;background:var(--surface-2,#f5f5f5);padding:6px 10px;border-radius:6px;margin-bottom:10px">${escapeHtml(s.notes)}</div>` : ""}
+      <details>
+        <summary style="cursor:pointer;font-size:.85rem;color:var(--accent);font-weight:600">Обновить статус поставки</summary>
+        <form class="shipment-update-form" data-shipment-id="${s.id}" style="margin-top:10px;display:grid;gap:8px">
+          <label style="font-size:.85rem">Статус
+            <select name="status">
+              <option value="">— не менять —</option>
+              <option value="in_transit" ${s.status === "in_transit" ? "selected" : ""}>В пути</option>
+              <option value="delayed" ${s.status === "delayed" ? "selected" : ""}>Задержка</option>
+              <option value="delivered" ${s.status === "delivered" ? "selected" : ""}>Доставлено</option>
+            </select>
+          </label>
+          <label style="font-size:.85rem">Текущий город
+            <input type="text" name="current_city" value="${escapeAttr(s.current_city || "")}" placeholder="Алматы" />
+          </label>
+          <label style="font-size:.85rem">Ожидаемая дата прибытия
+            <input type="date" name="estimated_arrival" value="${escapeAttr(String(s.estimated_arrival || "").slice(0, 10))}" />
+          </label>
+          <label style="font-size:.85rem">Примечания
+            <textarea name="notes" rows="2">${escapeHtml(s.notes || "")}</textarea>
+          </label>
+          <button type="submit" class="primary" style="max-width:180px">Сохранить</button>
+        </form>
+      </details>
+    </div>`;
+  }).join("");
 }
 
 function renderSupplierReviews() {
   const rows = state.data.supplierPortal.reviews;
-  if (!rows.length) return `<p style="color:var(--muted)">Отзывов пока нет.</p>`;
-  return rows.map((r) => `
-    <div class="panel" style="margin-bottom:10px">
-      <span style="color:var(--warning)">${"★".repeat(r.rating)}${"☆".repeat(5 - r.rating)}</span>
-      <span style="font-size:.78rem;color:var(--muted);margin-left:8px">${escapeHtml(String(r.created_at).slice(0, 10))} · ${escapeHtml(r.status)}</span>
-      ${r.comment ? `<div style="margin-top:6px">${escapeHtml(r.comment)}</div>` : ""}
+  if (!rows.length) return `
+    <div class="panel" style="text-align:center;padding:32px 16px">
+      <div style="font-size:2rem;margin-bottom:8px">⭐</div>
+      <div style="color:var(--muted)">Отзывов пока нет.<br>Они появятся после завершения первых поставок.</div>
+    </div>`;
+  const avgRating = (rows.reduce((s, r) => s + (r.rating || 0), 0) / rows.length).toFixed(1);
+  return `
+    <div class="panel" style="margin-bottom:12px;display:flex;align-items:center;gap:16px">
+      <div style="font-size:2.5rem;font-weight:700;color:var(--accent)">${avgRating}</div>
+      <div>
+        <div style="color:var(--warning);font-size:1.2rem">${"★".repeat(Math.round(avgRating))}${"☆".repeat(5 - Math.round(avgRating))}</div>
+        <div style="color:var(--muted);font-size:.85rem">${rows.length} ${rows.length === 1 ? "отзыв" : rows.length < 5 ? "отзыва" : "отзывов"}</div>
+      </div>
     </div>
-  `).join("");
+    ${rows.map((r) => `
+    <div class="panel" style="margin-bottom:10px">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:4px">
+        <span style="color:var(--warning);font-size:1.1rem">${"★".repeat(r.rating || 0)}${"☆".repeat(5 - (r.rating || 0))}</span>
+        <span style="font-size:.78rem;color:var(--muted)">${escapeHtml(String(r.created_at).slice(0, 10))}</span>
+      </div>
+      ${r.comment ? `<div style="margin-top:6px;font-size:.9rem">${escapeHtml(r.comment)}</div>` : `<div style="color:var(--muted);font-size:.85rem;font-style:italic">Без комментария</div>`}
+    </div>`).join("")}`;
 }
 
 const supplierPortalRenderers = {
@@ -5521,7 +5662,7 @@ function renderSupplierMyApplications() {
         <strong>Заявка №${app.id}</strong>
         <span class="badge ${s.cls}">${s.label}</span>
       </div>
-      <div style="font-size:.85rem;color:var(--muted);margin-bottom:4px">Подана: ${escapeHtml(String(app.created_at||"").slice(0,10))}</div>
+      <div style="font-size:.85rem;color:var(--muted);margin-bottom:4px">Подана: ${escapeHtml(String(app.submitted_at||"").slice(0,10))}</div>
       ${app.review_reason ? `<div style="background:var(--surface-2,#f5f5f5);border-left:3px solid var(--warning,#f59e0b);padding:8px 12px;border-radius:0 4px 4px 0;margin:8px 0;font-size:.9rem">
         <strong>Комментарий модератора:</strong><br>${escapeHtml(app.review_reason)}
       </div>` : ""}
@@ -5639,6 +5780,36 @@ function bindSupplierActions() {
     render();
     setTimeout(() => el("become-supplier-button")?.click(), 100);
   });
+
+  // Shipment status update by supplier
+  document.querySelectorAll(".shipment-update-form").forEach((form) => {
+    form.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const shipmentId = form.dataset.shipmentId;
+      const fd = new FormData(form);
+      const body = {};
+      const status = fd.get("status");
+      if (status) body.status = status;
+      const city = (fd.get("current_city") || "").trim();
+      if (city) body.current_city = city;
+      const eta = (fd.get("estimated_arrival") || "").trim();
+      if (eta) body.estimated_arrival = eta;
+      const notes = (fd.get("notes") || "").trim();
+      if (notes !== undefined) body.notes = notes || null;
+      if (!Object.keys(body).length) return;
+      const btn = form.querySelector("button[type=submit]");
+      try {
+        if (btn) { btn.disabled = true; btn.textContent = "Сохраняю..."; }
+        const updated = await request(`/shipments/${shipmentId}`, { method: "PATCH", body: JSON.stringify(body) });
+        const idx = state.data.supplierPortal.shipments.findIndex((s) => String(s.id) === String(shipmentId));
+        if (idx >= 0) state.data.supplierPortal.shipments[idx] = updated;
+        render();
+      } catch (err) {
+        alert(err.message || "Ошибка при обновлении поставки");
+        if (btn) { btn.disabled = false; btn.textContent = "Сохранить"; }
+      }
+    });
+  });
 }
 
 async function placeSupplierBid(auctionId) {
@@ -5684,12 +5855,32 @@ async function loadSupplierPortalData() {
     state.data.supplierPortal.profile = await request(`/supplier/me`).catch(() => null);
   }
   state.data.supplierPortal.myApplications = await request(`/supplier/my-applications`).catch(() => []);
+  updateBecomeSupplierButton();
+}
+
+function updateBecomeSupplierButton() {
+  const btn = el("become-supplier-button");
+  if (!btn || btn.style.display === "none") return;
+  const apps = state.data.supplierPortal.myApplications || [];
+  const latest = apps[0];
+  if (!latest) return;
+  const STATUS_LABELS = {
+    pending: "⏳ Заявка на рассмотрении",
+    needs_changes: "✏️ Требуются исправления",
+    rejected: "❌ Заявка отклонена",
+    approved: null,
+  };
+  const label = STATUS_LABELS[latest.status];
+  if (!label) return;
+  btn.textContent = label;
+  btn.classList.remove("primary");
+  btn.classList.add(latest.status === "rejected" ? "danger" : "secondary");
 }
 
 async function toggleSupplierMode() {
   state.ui.supplierMode = !state.ui.supplierMode;
   if (state.ui.supplierMode) {
-    state.ui.supplierView = "auctions";
+    state.ui.supplierView = state.auth.supplierId ? "auctions" : "my-applications";
     render();
     await loadSupplierPortalData();
   }
@@ -7468,7 +7659,19 @@ el("nav-toggle")?.addEventListener("click", () => {
 el("show-supplier-application")?.addEventListener("click", () => {
   showSupplierApplicationScreen();
 });
-el("become-supplier-button")?.addEventListener("click", () => {
+el("become-supplier-button")?.addEventListener("click", async () => {
+  const apps = state.data.supplierPortal.myApplications || [];
+  const hasActiveApp = apps.some((a) => ["pending", "needs_changes"].includes(a.status));
+  if (hasActiveApp) {
+    state.ui.supplierMode = true;
+    state.ui.supplierView = "my-applications";
+    render();
+    if (!apps.length || state.data.supplierPortal.auctions.length === 0) {
+      await loadSupplierPortalData();
+      render();
+    }
+    return;
+  }
   showSupplierApplicationScreen();
 });
 el("hide-supplier-application")?.addEventListener("click", () => {

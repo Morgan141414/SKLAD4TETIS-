@@ -7359,6 +7359,14 @@ class WarehouseService:
         finally:
             self._close_connection(connection)
 
+    def get_shipment(self, shipment_id: int) -> dict | None:
+        connection = self.database.connect()
+        try:
+            row = connection.execute("SELECT * FROM shipments WHERE id = ?", (shipment_id,)).fetchone()
+            return dict(row) if row else None
+        finally:
+            self._close_connection(connection)
+
     def update_shipment(self, shipment_id: int, updates: dict):
         fields = []
         params = []

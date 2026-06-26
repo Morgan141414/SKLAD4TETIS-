@@ -2122,8 +2122,17 @@ def update_shipment_route(
     actor_ctx: ActorContext = Depends(get_actor_context),
 ) -> Shipment:
     try:
-        require_permission(actor_ctx, Permission.STOCK_RECEIVE)
-        row = service.update_shipment(shipment_id, body.model_dump(exclude_unset=True))
+        require_permission_or_supplier(actor_ctx, Permission.STOCK_RECEIVE)
+        row = service.get_shipment(shipment_id)
+        if row is None:
+            raise HTTPException(status_code=404, detail={"code": "not_found", "message": "Shipment not found", "details": {}})
+        if Role.SUPPLIER in actor_ctx.roles:
+            require_supplier_scope(actor_ctx, row["supplier_id"])
+            allowed = {"current_city", "current_lat", "current_lng", "estimated_arrival", "notes", "status"}
+            updates = {k: v for k, v in body.model_dump(exclude_unset=True).items() if k in allowed}
+        else:
+            updates = body.model_dump(exclude_unset=True)
+        row = service.update_shipment(shipment_id, updates)
         if row is None:
             raise HTTPException(status_code=404, detail={"code": "not_found", "message": "Shipment not found", "details": {}})
         return _shipment_row(row)
