@@ -649,6 +649,183 @@ class WarehouseService:
         finally:
             self._close_connection(connection)
 
+    def list_suppliers_directory(
+        self,
+        city: str | None = None,
+        category: str | None = None,
+        search: str | None = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> dict[str, Any]:
+        """Return all portal-enabled suppliers with their catalog stats."""
+        where = ["s.portal_access_enabled = TRUE"]
+        params: list[Any] = []
+        if city:
+            where.append("s.city ILIKE ?")
+            params.append(f"%{city}%")
+        if search:
+            where.append("(s.name ILIKE ? OR s.contact_person ILIKE ?)")
+            params.extend([f"%{search}%", f"%{search}%"])
+        if category:
+            where.append("EXISTS (SELECT 1 FROM supplier_catalog_items ci WHERE ci.supplier_id = s.id AND ci.category = ? AND ci.is_active = TRUE)")
+            params.append(category)
+        where_clause = f"WHERE {' AND '.join(where)}"
+        connection = self.database.connect()
+        try:
+            total_row = connection.execute(f"SELECT COUNT(*) AS n FROM suppliers s {where_clause}", tuple(params)).fetchone()
+            total = total_row["n"] if total_row else 0
+            rows = connection.execute(
+                f"""
+                SELECT s.id, s.name, s.city, s.address, s.phone, s.email,
+                       s.contact_person, s.delivery_days, s.rating, s.notes,
+                       s.is_preferred, s.payment_terms,
+                       COUNT(ci.id) FILTER (WHERE ci.is_active) AS catalog_items_count,
+                       MIN(ci.unit_price) AS min_price,
+                       MAX(ci.unit_price) AS max_price,
+                       array_agg(DISTINCT ci.category) FILTER (WHERE ci.category IS NOT NULL AND ci.is_active) AS categories
+                FROM suppliers s
+                LEFT JOIN supplier_catalog_items ci ON ci.supplier_id = s.id
+                {where_clause}
+                GROUP BY s.id
+                ORDER BY s.is_preferred DESC, s.rating DESC NULLS LAST, catalog_items_count DESC, s.id
+                LIMIT ? OFFSET ?
+                """,
+                tuple(params) + (limit, offset),
+            ).fetchall()
+            return {"items": [dict(r) for r in rows], "total": total}
+        finally:
+            self._close_connection(connection)
+
+    def get_supplier_stats(self, supplier_id: int) -> dict[str, Any]:
+        """Return dashboard stats for a supplier."""
+        connection = self.database.connect()
+        try:
+            catalog_row = connection.execute(
+                "SELECT COUNT(*) AS total, COUNT(*) FILTER (WHERE is_active) AS active FROM supplier_catalog_items WHERE supplier_id = ?",
+                (supplier_id,)
+            ).fetchone()
+            inquiry_row = connection.execute(
+                "SELECT COUNT(*) AS total, COUNT(*) FILTER (WHERE status = 'pending') AS pending FROM marketplace_inquiries WHERE supplier_id = ?",
+                (supplier_id,)
+            ).fetchone()
+            auction_row = connection.execute(
+                "SELECT COUNT(*) AS won FROM auctions WHERE winner_supplier_id = ?",
+                (supplier_id,)
+            ).fetchone()
+            review_row = connection.execute(
+                "SELECT COUNT(*) AS total, AVG(rating) AS avg FROM supplier_reviews WHERE supplier_id = ? AND status = 'published'",
+                (supplier_id,)
+            ).fetchone()
+            shipment_row = connection.execute(
+                "SELECT COUNT(*) AS active FROM shipments WHERE supplier_id = ? AND status IN ('in_transit','delayed')",
+                (supplier_id,)
+            ).fetchone()
+            return {
+                "catalog_total": catalog_row["total"] if catalog_row else 0,
+                "catalog_active": catalog_row["active"] if catalog_row else 0,
+                "inquiries_total": inquiry_row["total"] if inquiry_row else 0,
+                "inquiries_pending": inquiry_row["pending"] if inquiry_row else 0,
+                "auctions_won": auction_row["won"] if auction_row else 0,
+                "reviews_total": review_row["total"] if review_row else 0,
+                "reviews_avg": float(review_row["avg"]) if review_row and review_row["avg"] else None,
+                "shipments_active": shipment_row["active"] if shipment_row else 0,
+            }
+        finally:
+            self._close_connection(connection)
+
+    def create_marketplace_inquiry(
+        self, catalog_item_id: int, actor_id: str, quantity: float,
+        notes: str | None, warehouse_id: int | None
+    ) -> dict[str, Any]:
+        connection = self.database.connect()
+        try:
+            item = connection.execute(
+                "SELECT * FROM supplier_catalog_items WHERE id = ? AND is_active = TRUE",
+                (catalog_item_id,)
+            ).fetchone()
+            if item is None:
+                raise ValueError(f"Catalog item {catalog_item_id} not found or inactive")
+        finally:
+            self._close_connection(connection)
+        with self.database.transaction() as conn:
+            row_id = insert_and_get_id(
+                conn,
+                """INSERT INTO marketplace_inquiries
+                   (catalog_item_id, supplier_id, warehouse_id, actor_id, quantity, unit_price, notes)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                (catalog_item_id, item["supplier_id"], warehouse_id, actor_id, quantity, item["unit_price"], notes),
+            )
+            row = conn.execute("SELECT * FROM marketplace_inquiries WHERE id = ?", (row_id,)).fetchone()
+            return dict(row) if row else {}
+
+    def list_marketplace_inquiries(
+        self,
+        supplier_id: int | None = None,
+        actor_id: str | None = None,
+        status: str | None = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> dict[str, Any]:
+        where = []
+        params: list[Any] = []
+        if supplier_id is not None:
+            where.append("mi.supplier_id = ?")
+            params.append(supplier_id)
+        if actor_id is not None:
+            where.append("mi.actor_id = ?")
+            params.append(actor_id)
+        if status:
+            where.append("mi.status = ?")
+            params.append(status)
+        where_clause = f"WHERE {' AND '.join(where)}" if where else ""
+        connection = self.database.connect()
+        try:
+            total_row = connection.execute(
+                f"SELECT COUNT(*) AS n FROM marketplace_inquiries mi {where_clause}", tuple(params)
+            ).fetchone()
+            total = total_row["n"] if total_row else 0
+            rows = connection.execute(
+                f"""
+                SELECT mi.*, ci.product_name, ci.unit, ci.sku,
+                       s.name AS supplier_name, s.phone AS supplier_phone, s.email AS supplier_email,
+                       w.name AS warehouse_name
+                FROM marketplace_inquiries mi
+                JOIN supplier_catalog_items ci ON ci.id = mi.catalog_item_id
+                JOIN suppliers s ON s.id = mi.supplier_id
+                LEFT JOIN warehouses w ON w.id = mi.warehouse_id
+                {where_clause}
+                ORDER BY mi.created_at DESC
+                LIMIT ? OFFSET ?
+                """,
+                tuple(params) + (limit, offset),
+            ).fetchall()
+            return {"items": [dict(r) for r in rows], "total": total}
+        finally:
+            self._close_connection(connection)
+
+    def respond_to_inquiry(
+        self, inquiry_id: int, supplier_id: int, response_text: str
+    ) -> dict[str, Any]:
+        with self.database.transaction() as conn:
+            row = conn.execute(
+                "SELECT id, supplier_id FROM marketplace_inquiries WHERE id = ?", (inquiry_id,)
+            ).fetchone()
+            if row is None or row["supplier_id"] != supplier_id:
+                raise PermissionError("Inquiry not found or not yours")
+            conn.execute(
+                "UPDATE marketplace_inquiries SET status = 'responded', supplier_response = ?, responded_at = NOW() WHERE id = ?",
+                (response_text, inquiry_id),
+            )
+            updated = conn.execute(
+                """SELECT mi.*, ci.product_name, ci.unit, s.name AS supplier_name
+                   FROM marketplace_inquiries mi
+                   JOIN supplier_catalog_items ci ON ci.id = mi.catalog_item_id
+                   JOIN suppliers s ON s.id = mi.supplier_id
+                   WHERE mi.id = ?""",
+                (inquiry_id,)
+            ).fetchone()
+            return dict(updated) if updated else {}
+
     # ────────────────────────────────────────────────────────────────────────
 
     def review_supplier_application(

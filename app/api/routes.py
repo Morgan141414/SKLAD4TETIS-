@@ -5029,3 +5029,114 @@ def delete_catalog_item_endpoint(
         raise
     except Exception as error:
         raise map_error(error) from error
+
+
+class MarketplaceInquiryCreate(BaseModel):
+    quantity: float = Field(gt=0, default=1)
+    notes: str | None = None
+    warehouse_id: int | None = None
+
+
+class InquiryResponseBody(BaseModel):
+    response_text: str = Field(min_length=1)
+
+
+# ── Marketplace Directory ────────────────────────────────────────────────────
+
+@router.get("/marketplace/suppliers", tags=["marketplace"])
+def list_supplier_directory(
+    city: str | None = None,
+    category: str | None = None,
+    search: str | None = None,
+    limit: int = 50,
+    offset: int = 0,
+    actor_ctx: ActorContext = Depends(get_actor_context),
+) -> Any:
+    try:
+        return get_warehouse_service().list_suppliers_directory(
+            city=city, category=category, search=search, limit=limit, offset=offset
+        )
+    except Exception as error:
+        raise map_error(error) from error
+
+
+@router.get("/supplier/stats", tags=["supplier-self"])
+def get_supplier_dashboard_stats(actor_ctx: ActorContext = Depends(get_actor_context)) -> Any:
+    if actor_ctx.supplier_id is None:
+        raise HTTPException(status_code=404, detail={"code": "not_found", "message": "No supplier linked", "details": {}})
+    try:
+        return get_warehouse_service().get_supplier_stats(actor_ctx.supplier_id)
+    except Exception as error:
+        raise map_error(error) from error
+
+
+# ── Marketplace Inquiries ────────────────────────────────────────────────────
+
+@router.post("/marketplace/inquire/{item_id}", status_code=201, tags=["marketplace"])
+def create_inquiry(
+    item_id: int,
+    body: MarketplaceInquiryCreate,
+    actor_ctx: ActorContext = Depends(get_actor_context),
+) -> Any:
+    try:
+        svc = get_warehouse_service()
+        warehouse_id = body.warehouse_id
+        if warehouse_id is None and actor_ctx.warehouse_ids:
+            warehouse_id = list(actor_ctx.warehouse_ids)[0]
+        return svc.create_marketplace_inquiry(
+            catalog_item_id=item_id,
+            actor_id=actor_ctx.actor_id,
+            quantity=body.quantity,
+            notes=body.notes,
+            warehouse_id=warehouse_id,
+        )
+    except ValueError as error:
+        raise HTTPException(status_code=404, detail={"code": "not_found", "message": str(error), "details": {}}) from error
+    except Exception as error:
+        raise map_error(error) from error
+
+
+@router.get("/marketplace/my-inquiries", tags=["marketplace"])
+def list_my_inquiries(
+    status: str | None = None,
+    limit: int = 50,
+    actor_ctx: ActorContext = Depends(get_actor_context),
+) -> Any:
+    try:
+        return get_warehouse_service().list_marketplace_inquiries(
+            actor_id=actor_ctx.actor_id, status=status, limit=limit
+        )
+    except Exception as error:
+        raise map_error(error) from error
+
+
+@router.get("/supplier/inquiries", tags=["supplier-self"])
+def list_supplier_inquiries(
+    status: str | None = None,
+    limit: int = 50,
+    actor_ctx: ActorContext = Depends(get_actor_context),
+) -> Any:
+    if actor_ctx.supplier_id is None:
+        raise HTTPException(status_code=403, detail={"code": "forbidden", "message": "No supplier linked", "details": {}})
+    try:
+        return get_warehouse_service().list_marketplace_inquiries(
+            supplier_id=actor_ctx.supplier_id, status=status, limit=limit
+        )
+    except Exception as error:
+        raise map_error(error) from error
+
+
+@router.post("/supplier/inquiries/{inquiry_id}/respond", tags=["supplier-self"])
+def respond_to_inquiry_endpoint(
+    inquiry_id: int,
+    body: InquiryResponseBody,
+    actor_ctx: ActorContext = Depends(get_actor_context),
+) -> Any:
+    if actor_ctx.supplier_id is None:
+        raise HTTPException(status_code=403, detail={"code": "forbidden", "message": "No supplier linked", "details": {}})
+    try:
+        return get_warehouse_service().respond_to_inquiry(inquiry_id, actor_ctx.supplier_id, body.response_text)
+    except PermissionError as error:
+        raise HTTPException(status_code=403, detail={"code": "forbidden", "message": str(error), "details": {}}) from error
+    except Exception as error:
+        raise map_error(error) from error

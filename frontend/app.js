@@ -491,7 +491,7 @@ const state = {
     repackTemplates: [],
     procedureConsumptionTemplates: [],
     supplierApplications: { items: [], total: 0 },
-    supplierPortal: { auctions: [], myBids: {}, priceHistory: [], shipments: [], reviews: [], profile: null, myApplications: [], myCatalog: [] },
+    supplierPortal: { auctions: [], myBids: {}, priceHistory: [], shipments: [], reviews: [], profile: null, myApplications: [], myCatalog: [], inquiries: [], stats: null },
     analytics: { items: [], analysis_days: 90, warehouse_id: null, generated_at: null },
     abcXyzRuns: { items: [], total: 0 },
     sensorDevices: [],
@@ -4945,9 +4945,21 @@ function renderJobStatus() {
 }
 
 function renderMarketplace() {
+  const tab = state.ui.marketplaceTab || "catalog";
   const mp = state.data.marketplace || { items: [], total: 0 };
   const categories = state.data.marketplaceCategories || [];
-  const filter = state.ui.marketplaceFilter || { search: "", category: "", supplier_id: null };
+  const filter = state.ui.marketplaceFilter || { search: "", category: "" };
+  const suppliers = state.data.marketplaceSuppliers || { items: [], total: 0 };
+
+  const tabBar = `
+    <div style="display:flex;gap:4px;margin-bottom:16px;border-bottom:2px solid var(--line,#eee);padding-bottom:0">
+      <button class="${tab === "catalog" ? "active" : "secondary"}" style="border-radius:6px 6px 0 0;border-bottom:none;font-size:.9rem" data-mp-tab="catalog">🛍️ Каталог товаров</button>
+      <button class="${tab === "suppliers" ? "active" : "secondary"}" style="border-radius:6px 6px 0 0;border-bottom:none;font-size:.9rem" data-mp-tab="suppliers">🏢 Поставщики</button>
+    </div>`;
+
+  if (tab === "suppliers") {
+    return tabBar + renderMarketplaceSuppliers(suppliers, filter);
+  }
 
   function itemCard(item) {
     const rating = item.supplier_rating != null ? `${"★".repeat(Math.round(item.supplier_rating))}${"☆".repeat(5 - Math.round(item.supplier_rating))}` : "";
@@ -4983,7 +4995,7 @@ function renderMarketplace() {
     </div>`;
   }
 
-  return `
+  return tabBar + `
     <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;align-items:center">
       <input type="text" id="mp-search" placeholder="Поиск по названию, артикулу..." value="${escapeAttr(filter.search)}" style="flex:1;min-width:160px" />
       <select id="mp-category" style="padding:.35rem .5rem;border:1px solid var(--line);border-radius:6px">
@@ -4999,6 +5011,43 @@ function renderMarketplace() {
           <div style="font-size:2.5rem;margin-bottom:8px">🛒</div>
           <div>Ничего не найдено.<br>Попробуйте изменить запрос.</div>
         </div>`}
+    </div>`;
+}
+
+function renderMarketplaceSuppliers(suppliers, filter) {
+  const items = suppliers.items || [];
+  return `
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;align-items:center">
+      <input type="text" id="mp-supplier-search" placeholder="Поиск по названию или контакту..." value="${escapeAttr(filter.supplierSearch || "")}" style="flex:1;min-width:160px" />
+      <button class="primary" id="mp-supplier-search-btn">Найти</button>
+    </div>
+    <div style="color:var(--muted);font-size:.85rem;margin-bottom:10px">Поставщиков: ${suppliers.total || 0}</div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:12px">
+      ${items.length ? items.map((s) => {
+        const rating = s.rating != null ? Number(s.rating).toFixed(1) : "—";
+        const cats = Array.isArray(s.categories) ? s.categories.filter(Boolean).slice(0, 3) : [];
+        return `
+        <div class="panel" style="display:flex;flex-direction:column;gap:8px">
+          <div style="display:flex;justify-content:space-between;align-items:flex-start">
+            <div>
+              <strong style="font-size:1rem">${escapeHtml(s.name || "")}</strong>
+              ${s.is_preferred ? `<span style="font-size:.75rem;color:var(--success,#16a34a);margin-left:6px">⭐ Предпочтительный</span>` : ""}
+              <div style="font-size:.82rem;color:var(--muted)">${escapeHtml(s.city || "")}${s.delivery_days ? ` · доставка ${s.delivery_days} дн.` : ""}</div>
+            </div>
+            ${s.rating != null ? `<div style="text-align:center;background:var(--surface-2,#f5f5f5);padding:4px 8px;border-radius:8px"><div style="font-size:1rem;font-weight:700;color:var(--accent)">${rating}</div><div style="font-size:.7rem;color:var(--muted)">★</div></div>` : ""}
+          </div>
+          ${cats.length ? `<div style="display:flex;flex-wrap:wrap;gap:4px">${cats.map((c) => `<span style="font-size:.75rem;background:var(--surface-2,#eef);padding:2px 8px;border-radius:10px;color:var(--accent)">${escapeHtml(c)}</span>`).join("")}</div>` : ""}
+          <div style="font-size:.85rem;color:var(--muted);display:flex;gap:12px">
+            ${s.catalog_items_count ? `<span>🛍️ ${s.catalog_items_count} тов.</span>` : ""}
+            ${s.phone ? `<a href="tel:${escapeAttr(s.phone)}" style="color:var(--accent)">📞 ${escapeHtml(s.phone)}</a>` : ""}
+          </div>
+          ${s.min_price != null ? `<div style="font-size:.82rem;color:var(--muted)">Цены: от ${fmtMoneyKzt(s.min_price)} до ${fmtMoneyKzt(s.max_price)} тг</div>` : ""}
+          <button class="secondary" style="font-size:.82rem;margin-top:auto" data-mp-supplier-catalog="${s.id}">Посмотреть каталог →</button>
+        </div>`;
+      }).join("") : `<div style="grid-column:1/-1;text-align:center;padding:40px;color:var(--muted)">
+        <div style="font-size:2.5rem;margin-bottom:8px">🏢</div>
+        <div>Поставщиков не найдено</div>
+      </div>`}
     </div>`;
 }
 
@@ -5061,6 +5110,74 @@ function renderSupplierMap() {
 </div>`;
 }
 
+function showInquiryModal(item) {
+  const existing = document.getElementById("inquiry-modal-overlay");
+  if (existing) existing.remove();
+  const overlay = document.createElement("div");
+  overlay.id = "inquiry-modal-overlay";
+  overlay.style.cssText = "position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:9999;display:flex;align-items:center;justify-content:center;padding:16px";
+  overlay.innerHTML = `
+    <div style="background:var(--surface,#fff);border-radius:12px;padding:24px;max-width:480px;width:100%;box-shadow:0 8px 32px rgba(0,0,0,.2)">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:16px">
+        <div>
+          <h3 style="margin:0 0 4px">${escapeHtml(item.product_name)}</h3>
+          <div style="font-size:.9rem;color:var(--muted)">${escapeHtml(item.supplier_name)} · ${escapeHtml(item.supplier_city || "")}</div>
+        </div>
+        <button id="inquiry-modal-close" style="background:none;border:none;font-size:1.4rem;cursor:pointer;color:var(--muted);padding:0 4px">&times;</button>
+      </div>
+      <div style="display:flex;gap:16px;margin-bottom:16px;padding:12px;background:var(--surface-2,#f5f5f5);border-radius:8px">
+        <div><div style="font-size:.75rem;color:var(--muted)">Цена</div><div style="font-weight:700;font-size:1.1rem;color:var(--accent)">${fmtMoneyKzt(item.unit_price)} тг/${escapeHtml(item.unit)}</div></div>
+        ${item.delivery_days || item.supplier_delivery_days ? `<div><div style="font-size:.75rem;color:var(--muted)">Доставка</div><div style="font-weight:600">${item.delivery_days || item.supplier_delivery_days} дн.</div></div>` : ""}
+        ${item.stock_qty != null ? `<div><div style="font-size:.75rem;color:var(--muted)">В наличии</div><div style="font-weight:600">${item.stock_qty} ${escapeHtml(item.unit)}</div></div>` : ""}
+      </div>
+      <div style="font-size:.85rem;margin-bottom:12px;color:var(--muted)">Контакты: ${escapeHtml(item.supplier_phone || "")} · ${escapeHtml(item.supplier_email || "")}</div>
+      <form id="inquiry-modal-form" style="display:grid;gap:10px">
+        <label style="font-size:.88rem">Количество (${escapeHtml(item.unit)})
+          <input type="number" name="quantity" value="${item.min_order_qty || 1}" min="${item.min_order_qty || 1}" step="1" required />
+        </label>
+        <label style="font-size:.88rem">Комментарий (необязательно)
+          <textarea name="notes" rows="2" placeholder="Нужна срочная поставка / конкретный вопрос о товаре..."></textarea>
+        </label>
+        <div style="display:flex;gap:8px">
+          <button type="submit" class="primary" style="flex:1" id="inquiry-submit-btn">Отправить запрос</button>
+          <button type="button" class="secondary" id="inquiry-cancel-btn">Отмена</button>
+        </div>
+        <div id="inquiry-modal-result" style="display:none;font-size:.88rem;padding:8px 12px;border-radius:6px"></div>
+      </form>
+    </div>`;
+  document.body.appendChild(overlay);
+
+  document.getElementById("inquiry-modal-close")?.addEventListener("click", () => overlay.remove());
+  document.getElementById("inquiry-cancel-btn")?.addEventListener("click", () => overlay.remove());
+  overlay.addEventListener("click", (e) => { if (e.target === overlay) overlay.remove(); });
+
+  document.getElementById("inquiry-modal-form")?.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const fd = new FormData(e.target);
+    const body = { quantity: Number(fd.get("quantity")) };
+    const notes = (fd.get("notes") || "").trim();
+    if (notes) body.notes = notes;
+    const btn = document.getElementById("inquiry-submit-btn");
+    const result = document.getElementById("inquiry-modal-result");
+    try {
+      if (btn) { btn.disabled = true; btn.textContent = "Отправляю..."; }
+      await request(`/marketplace/inquire/${item.id}`, { method: "POST", body: JSON.stringify(body) });
+      result.style.display = "block";
+      result.style.background = "var(--success-bg,#f0fff4)";
+      result.style.color = "var(--success,#16a34a)";
+      result.textContent = "✓ Запрос отправлен! Поставщик получит уведомление и свяжется с вами.";
+      if (btn) { btn.disabled = true; btn.textContent = "Отправлено"; }
+      setTimeout(() => overlay.remove(), 2000);
+    } catch (err) {
+      result.style.display = "block";
+      result.style.background = "var(--danger-bg,#fff0f0)";
+      result.style.color = "var(--danger,#dc2626)";
+      result.textContent = err.message || "Ошибка при отправке";
+      if (btn) { btn.disabled = false; btn.textContent = "Отправить запрос"; }
+    }
+  });
+}
+
 async function initMarketplace() {
   if (!state.ui.marketplaceFilter) state.ui.marketplaceFilter = { search: "", category: "" };
 
@@ -5088,14 +5205,55 @@ async function initMarketplace() {
     el("mp-search-btn")?.click();
   });
 
-  // Request to buy (opens purchase request with supplier pre-filled)
+  // Request to buy (opens inquiry modal)
   document.querySelectorAll("[data-mp-order]").forEach((btn) => {
     btn.addEventListener("click", () => {
       const itemId = btn.dataset.mpOrder;
       const item = (state.data.marketplace?.items || []).find((i) => String(i.id) === String(itemId));
       if (!item) return;
-      const message = `Запрос на закупку: ${item.product_name} — ${fmtMoneyKzt(item.unit_price)} тг/${item.unit}\nПоставщик: ${item.supplier_name} (${item.supplier_city || ""})\nТелефон: ${item.supplier_phone || "—"}\nEmail: ${item.supplier_email || "—"}`;
-      alert(message);
+      showInquiryModal(item);
+    });
+  });
+
+  // Tab switching
+  document.querySelectorAll("[data-mp-tab]").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      state.ui.marketplaceTab = btn.dataset.mpTab;
+      if (state.ui.marketplaceTab === "suppliers" && !state.data.marketplaceSuppliers) {
+        try {
+          state.data.marketplaceSuppliers = await request("/marketplace/suppliers?limit=50");
+        } catch (_) { state.data.marketplaceSuppliers = { items: [], total: 0 }; }
+      }
+      render();
+      if (state.view === "marketplace") initMarketplace();
+    });
+  });
+
+  // Supplier search
+  document.getElementById("mp-supplier-search-btn")?.addEventListener("click", async () => {
+    const s = (document.getElementById("mp-supplier-search")?.value || "").trim();
+    if (!state.ui.marketplaceFilter) state.ui.marketplaceFilter = {};
+    state.ui.marketplaceFilter.supplierSearch = s;
+    try {
+      state.data.marketplaceSuppliers = await request(`/marketplace/suppliers?limit=50${s ? `&search=${encodeURIComponent(s)}` : ""}`);
+    } catch (_) { state.data.marketplaceSuppliers = { items: [], total: 0 }; }
+    render();
+    if (state.view === "marketplace") initMarketplace();
+  });
+
+  // Browse supplier catalog
+  document.querySelectorAll("[data-mp-supplier-catalog]").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const supplierId = btn.dataset.mpSupplierCatalog;
+      if (!state.ui.marketplaceFilter) state.ui.marketplaceFilter = {};
+      state.ui.marketplaceFilter.search = "";
+      state.ui.marketplaceFilter.category = "";
+      state.ui.marketplaceTab = "catalog";
+      try {
+        state.data.marketplace = await request(`/marketplace/catalog?supplier_id=${supplierId}&limit=60`);
+      } catch (_) { state.data.marketplace = { items: [], total: 0 }; }
+      render();
+      if (state.view === "marketplace") initMarketplace();
     });
   });
 }
@@ -5496,6 +5654,7 @@ const supplierPortalNav = [
   ["auctions", "Аукционы"],
   ["my-bids", "Мои ставки"],
   ["my-catalog", "Мой каталог"],
+  ["inquiries", "Запросы"],
   ["price-history", "История цен"],
   ["shipments", "Мои поставки"],
   ["reviews", "Отзывы о нас"],
@@ -5507,7 +5666,7 @@ function renderSupplierNav() {
   const isFullSupplier = !!state.auth.supplierId;
   const visibleNav = isFullSupplier
     ? supplierPortalNav
-    : supplierPortalNav.filter(([id]) => ["my-applications", "auctions", "my-catalog"].includes(id));
+    : supplierPortalNav.filter(([id]) => ["my-applications", "auctions"].includes(id));
   el("nav").innerHTML = visibleNav.map(([id, label]) => `
     <button class="${state.ui.supplierView === id ? "active" : ""}" data-supplier-view="${id}">${escapeHtml(t(label))}</button>
   `).join("");
@@ -5736,6 +5895,7 @@ const supplierPortalRenderers = {
   auctions: renderSupplierAuctions,
   "my-bids": renderSupplierMyBids,
   "my-catalog": renderSupplierMyCatalog,
+  inquiries: renderSupplierInquiries,
   "price-history": renderSupplierPriceHistory,
   shipments: renderSupplierShipments,
   reviews: renderSupplierReviews,
@@ -5785,6 +5945,56 @@ function renderSupplierMyApplications() {
           </form>
         </details>
       ` : ""}
+    </div>`;
+  }).join("");
+}
+
+function renderSupplierInquiries() {
+  const items = state.data.supplierPortal.inquiries || [];
+  const STATUS = {
+    pending: { label: "Ожидает ответа", cls: "warning" },
+    responded: { label: "Отвечено", cls: "ok" },
+    ordered: { label: "Заказано", cls: "ok" },
+    closed: { label: "Закрыт", cls: "" },
+  };
+  if (!items.length) return `
+    <div class="panel" style="text-align:center;padding:32px 16px">
+      <div style="font-size:2rem;margin-bottom:8px">📨</div>
+      <div style="color:var(--muted)">Входящих запросов нет.<br>Они появятся, когда склад запросит ваш товар из каталога.</div>
+    </div>`;
+  return items.map((inq) => {
+    const st = STATUS[inq.status] || { label: inq.status, cls: "" };
+    return `
+    <div class="panel" style="margin-bottom:12px" id="inquiry-card-${inq.id}">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:8px">
+        <div>
+          <strong>${escapeHtml(inq.product_name || "")}</strong>
+          ${inq.sku ? `<span style="font-size:.8rem;color:var(--muted);margin-left:6px">(${escapeHtml(inq.sku)})</span>` : ""}
+          <div style="font-size:.82rem;color:var(--muted);margin-top:2px">
+            Запрос от: <strong>${escapeHtml(inq.warehouse_name || inq.actor_id || "—")}</strong>
+            · ${String(inq.created_at || "").slice(0, 10)}
+          </div>
+        </div>
+        <span class="badge ${st.cls}">${st.label}</span>
+      </div>
+      <div style="display:flex;gap:16px;flex-wrap:wrap;font-size:.9rem;margin-bottom:8px">
+        <div>Количество: <strong>${inq.quantity} ${escapeHtml(inq.unit || "")}</strong></div>
+        ${inq.unit_price ? `<div>Цена: <strong>${fmtMoneyKzt(inq.unit_price)} тг/${escapeHtml(inq.unit || "")}</strong></div>` : ""}
+        ${inq.warehouse_name ? `<div>Склад: <strong>${escapeHtml(inq.warehouse_name)}</strong></div>` : ""}
+      </div>
+      ${inq.notes ? `<div style="background:var(--surface-2,#f5f5f5);padding:8px 12px;border-radius:6px;font-size:.88rem;margin-bottom:8px">${escapeHtml(inq.notes)}</div>` : ""}
+      ${inq.supplier_response ? `
+        <div style="background:var(--surface-2,#f0fff4);border-left:3px solid var(--success,#16a34a);padding:8px 12px;border-radius:0 6px 6px 0;font-size:.88rem;margin-bottom:8px">
+          <strong>Ваш ответ:</strong> ${escapeHtml(inq.supplier_response)}
+        </div>` : ""}
+      ${inq.status === "pending" ? `
+        <details style="margin-top:8px">
+          <summary style="cursor:pointer;font-size:.85rem;color:var(--accent);font-weight:600">Ответить</summary>
+          <form class="inquiry-respond-form" data-inquiry-id="${inq.id}" style="margin-top:8px;display:grid;gap:8px">
+            <textarea name="response_text" rows="3" placeholder="Подтверждаем наличие, готовы отгрузить в течение 3 дней..." required style="font-size:.88rem"></textarea>
+            <button type="submit" class="primary" style="max-width:160px;font-size:.85rem">Отправить ответ</button>
+          </form>
+        </details>` : ""}
     </div>`;
   }).join("");
 }
@@ -5889,7 +6099,23 @@ function renderSupplierProfile() {
   const p = state.data.supplierPortal.profile;
   if (!p) return `<div class="panel"><p style="color:var(--muted)">Загрузка...</p></div>`;
   const field = (label, val) => val ? `<div style="margin-bottom:6px"><span style="color:var(--muted);font-size:.82rem">${label}</span><div style="font-weight:500">${escapeHtml(String(val))}</div></div>` : "";
-  return `
+  const stats = state.data.supplierPortal.stats;
+  const statsCard = stats ? `
+    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(110px,1fr));gap:8px;margin-bottom:12px">
+      ${[
+        ["🛍️", stats.catalog_active, "Товаров в каталоге"],
+        ["📨", stats.inquiries_pending, "Новых запросов"],
+        ["🚚", stats.shipments_active, "Поставок в пути"],
+        ["🏆", stats.auctions_won, "Выиграно аукционов"],
+        ["⭐", stats.reviews_avg != null ? Number(stats.reviews_avg).toFixed(1) : "—", "Рейтинг"],
+      ].map(([icon, val, label]) => `
+        <div class="panel" style="text-align:center;padding:12px 8px">
+          <div style="font-size:1.4rem">${icon}</div>
+          <div style="font-size:1.3rem;font-weight:700;color:var(--accent)">${val}</div>
+          <div style="font-size:.72rem;color:var(--muted);margin-top:2px">${label}</div>
+        </div>`).join("")}
+    </div>` : "";
+  return `${statsCard}
     <div class="panel" style="margin-bottom:12px">
       <h3 style="margin:0 0 12px">${escapeHtml(p.name||"")}</h3>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:16px">
@@ -6114,6 +6340,30 @@ function bindSupplierActions() {
       }
     });
   });
+
+  // Respond to marketplace inquiries
+  document.querySelectorAll(".inquiry-respond-form").forEach((form) => {
+    form.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const id = form.dataset.inquiryId;
+      const text = (form.querySelector("textarea").value || "").trim();
+      if (!text) return;
+      const btn = form.querySelector("button[type=submit]");
+      try {
+        if (btn) { btn.disabled = true; btn.textContent = "Отправляю..."; }
+        const updated = await request(`/supplier/inquiries/${id}/respond`, {
+          method: "POST",
+          body: JSON.stringify({ response_text: text }),
+        });
+        const idx = state.data.supplierPortal.inquiries.findIndex((i) => String(i.id) === String(id));
+        if (idx >= 0) state.data.supplierPortal.inquiries[idx] = updated;
+        render();
+      } catch (err) {
+        alert(err.message || "Ошибка при отправке ответа");
+        if (btn) { btn.disabled = false; btn.textContent = "Отправить ответ"; }
+      }
+    });
+  });
 }
 
 async function placeSupplierBid(auctionId) {
@@ -6158,6 +6408,8 @@ async function loadSupplierPortalData() {
     state.data.supplierPortal.reviews = await request(`/suppliers/${supplierId}/reviews`).catch(() => []);
     state.data.supplierPortal.profile = await request(`/supplier/me`).catch(() => null);
     state.data.supplierPortal.myCatalog = (await request(`/supplier/catalog`).catch(() => ({ items: [] }))).items || [];
+    state.data.supplierPortal.inquiries = (await request(`/supplier/inquiries`).catch(() => ({ items: [] }))).items || [];
+    state.data.supplierPortal.stats = await request(`/supplier/stats`).catch(() => null);
   }
   state.data.supplierPortal.myApplications = await request(`/supplier/my-applications`).catch(() => []);
   updateBecomeSupplierButton();
