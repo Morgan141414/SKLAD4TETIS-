@@ -560,7 +560,7 @@ class WarehouseService:
         connection.execute(
             "INSERT INTO sklad_users (username, full_name, password_hash, roles, warehouse_ids, supplier_id) "
             "VALUES (?, ?, ?, ?, ?, ?)",
-            (username, "Поставщик", secrets.token_hex(32), "other", "[]", supplier_id),
+            (username, "Поставщик", secrets.token_hex(32), "warehouse_manager", "[]", supplier_id),
         )
 
     def create_warehouse(self, data: WarehouseCreate, actor_id: str = "system") -> dict[str, Any]:
