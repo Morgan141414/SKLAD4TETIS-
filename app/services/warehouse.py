@@ -504,6 +504,153 @@ class WarehouseService:
             ).fetchone()
             return dict(row) if row else {}
 
+    # ── Supplier catalog (marketplace) ──────────────────────────────────────
+
+    def list_supplier_catalog(
+        self,
+        supplier_id: int | None = None,
+        category: str | None = None,
+        search: str | None = None,
+        min_price: float | None = None,
+        max_price: float | None = None,
+        active_only: bool = True,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> dict[str, Any]:
+        where = []
+        params: list[Any] = []
+        if active_only:
+            where.append("ci.is_active = TRUE")
+        if supplier_id is not None:
+            where.append("ci.supplier_id = ?")
+            params.append(supplier_id)
+        if category:
+            where.append("ci.category = ?")
+            params.append(category)
+        if search:
+            where.append("(ci.product_name ILIKE ? OR ci.sku ILIKE ? OR ci.description ILIKE ?)")
+            params.extend([f"%{search}%", f"%{search}%", f"%{search}%"])
+        if min_price is not None:
+            where.append("ci.unit_price >= ?")
+            params.append(min_price)
+        if max_price is not None:
+            where.append("ci.unit_price <= ?")
+            params.append(max_price)
+        where_clause = f"WHERE {' AND '.join(where)}" if where else ""
+        connection = self.database.connect()
+        try:
+            total_row = connection.execute(
+                f"SELECT COUNT(*) AS n FROM supplier_catalog_items ci {where_clause}", tuple(params)
+            ).fetchone()
+            total = total_row["n"] if total_row else 0
+            rows = connection.execute(
+                f"""
+                SELECT ci.*, s.name AS supplier_name, s.city AS supplier_city,
+                       s.rating AS supplier_rating, s.phone AS supplier_phone,
+                       s.email AS supplier_email, s.delivery_days AS supplier_delivery_days,
+                       p.name AS linked_product_name
+                FROM supplier_catalog_items ci
+                JOIN suppliers s ON s.id = ci.supplier_id
+                LEFT JOIN products p ON p.id = ci.product_id
+                {where_clause}
+                ORDER BY ci.updated_at DESC
+                LIMIT ? OFFSET ?
+                """,
+                tuple(params) + (limit, offset),
+            ).fetchall()
+            return {"items": [dict(r) for r in rows], "total": total}
+        finally:
+            self._close_connection(connection)
+
+    def get_catalog_item(self, item_id: int) -> dict[str, Any] | None:
+        connection = self.database.connect()
+        try:
+            row = connection.execute(
+                """
+                SELECT ci.*, s.name AS supplier_name, s.city AS supplier_city,
+                       s.rating AS supplier_rating, s.phone AS supplier_phone,
+                       s.email AS supplier_email, s.delivery_days AS supplier_delivery_days
+                FROM supplier_catalog_items ci
+                JOIN suppliers s ON s.id = ci.supplier_id
+                WHERE ci.id = ?
+                """,
+                (item_id,),
+            ).fetchone()
+            return dict(row) if row else None
+        finally:
+            self._close_connection(connection)
+
+    def create_catalog_item(self, supplier_id: int, data: dict[str, Any]) -> dict[str, Any]:
+        with self.database.transaction() as conn:
+            row_id = insert_and_get_id(
+                conn,
+                """INSERT INTO supplier_catalog_items
+                   (supplier_id, product_id, product_name, sku, unit, unit_price,
+                    min_order_qty, stock_qty, delivery_days, category, description, is_active)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    supplier_id,
+                    data.get("product_id"),
+                    data["product_name"],
+                    data.get("sku"),
+                    data.get("unit", "шт"),
+                    data["unit_price"],
+                    data.get("min_order_qty", 1),
+                    data.get("stock_qty"),
+                    data.get("delivery_days"),
+                    data.get("category"),
+                    data.get("description"),
+                    data.get("is_active", True),
+                ),
+            )
+            row = conn.execute("SELECT * FROM supplier_catalog_items WHERE id = ?", (row_id,)).fetchone()
+            return dict(row) if row else {}
+
+    def update_catalog_item(self, item_id: int, supplier_id: int, data: dict[str, Any]) -> dict[str, Any] | None:
+        allowed = {
+            "product_name", "sku", "unit", "unit_price", "min_order_qty",
+            "stock_qty", "delivery_days", "category", "description", "is_active", "product_id",
+        }
+        updates = {k: v for k, v in data.items() if k in allowed}
+        if not updates:
+            return self.get_catalog_item(item_id)
+        with self.database.transaction() as conn:
+            row = conn.execute(
+                "SELECT id, supplier_id FROM supplier_catalog_items WHERE id = ?", (item_id,)
+            ).fetchone()
+            if row is None or row["supplier_id"] != supplier_id:
+                return None
+            updates["updated_at"] = now_iso()
+            set_clause = ", ".join(f"{k} = ?" for k in updates)
+            conn.execute(
+                f"UPDATE supplier_catalog_items SET {set_clause} WHERE id = ?",
+                (*updates.values(), item_id),
+            )
+            updated = conn.execute("SELECT * FROM supplier_catalog_items WHERE id = ?", (item_id,)).fetchone()
+            return dict(updated) if updated else None
+
+    def delete_catalog_item(self, item_id: int, supplier_id: int) -> bool:
+        with self.database.transaction() as conn:
+            row = conn.execute(
+                "SELECT id, supplier_id FROM supplier_catalog_items WHERE id = ?", (item_id,)
+            ).fetchone()
+            if row is None or row["supplier_id"] != supplier_id:
+                return False
+            conn.execute("DELETE FROM supplier_catalog_items WHERE id = ?", (item_id,))
+            return True
+
+    def list_catalog_categories(self) -> list[str]:
+        connection = self.database.connect()
+        try:
+            rows = connection.execute(
+                "SELECT DISTINCT category FROM supplier_catalog_items WHERE category IS NOT NULL AND is_active = TRUE ORDER BY category"
+            ).fetchall()
+            return [r["category"] for r in rows]
+        finally:
+            self._close_connection(connection)
+
+    # ────────────────────────────────────────────────────────────────────────
+
     def review_supplier_application(
         self,
         application_id: int,

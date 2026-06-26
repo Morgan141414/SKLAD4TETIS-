@@ -4688,6 +4688,34 @@ class ApplicationResubmitBody(BaseModel):
     notes: str | None = None
 
 
+class CatalogItemCreate(BaseModel):
+    product_name: str
+    sku: str | None = None
+    unit: str = "шт"
+    unit_price: float
+    min_order_qty: float = 1
+    stock_qty: float | None = None
+    delivery_days: int | None = None
+    category: str | None = None
+    description: str | None = None
+    product_id: int | None = None
+    is_active: bool = True
+
+
+class CatalogItemUpdate(BaseModel):
+    product_name: str | None = None
+    sku: str | None = None
+    unit: str | None = None
+    unit_price: float | None = None
+    min_order_qty: float | None = None
+    stock_qty: float | None = None
+    delivery_days: int | None = None
+    category: str | None = None
+    description: str | None = None
+    product_id: int | None = None
+    is_active: bool | None = None
+
+
 @router.post("/mis/procedure-event", tags=["mis"])
 def mis_procedure_event(
     body: MisProcedureEventIn,
@@ -4885,5 +4913,119 @@ def resubmit_supplier_application_endpoint(
         raise HTTPException(status_code=403, detail={"code": "forbidden", "message": str(error), "details": {}}) from error
     except ValueError as error:
         raise HTTPException(status_code=400, detail={"code": "bad_request", "message": str(error), "details": {}}) from error
+    except Exception as error:
+        raise map_error(error) from error
+
+
+# ── Supplier Catalog / Marketplace ───────────────────────────────────────────
+
+@router.get("/marketplace/catalog", tags=["marketplace"])
+def browse_catalog(
+    supplier_id: int | None = None,
+    category: str | None = None,
+    search: str | None = None,
+    min_price: float | None = None,
+    max_price: float | None = None,
+    limit: int = 100,
+    offset: int = 0,
+    actor_ctx: ActorContext = Depends(get_actor_context),
+) -> Any:
+    """Browse all active supplier catalog items. Available to all authenticated users."""
+    try:
+        svc = get_warehouse_service()
+        return svc.list_supplier_catalog(
+            supplier_id=supplier_id, category=category, search=search,
+            min_price=min_price, max_price=max_price,
+            active_only=True, limit=limit, offset=offset,
+        )
+    except Exception as error:
+        raise map_error(error) from error
+
+
+@router.get("/marketplace/catalog/categories", tags=["marketplace"])
+def list_catalog_categories(actor_ctx: ActorContext = Depends(get_actor_context)) -> Any:
+    try:
+        return get_warehouse_service().list_catalog_categories()
+    except Exception as error:
+        raise map_error(error) from error
+
+
+@router.get("/marketplace/catalog/{item_id}", tags=["marketplace"])
+def get_catalog_item(
+    item_id: int,
+    actor_ctx: ActorContext = Depends(get_actor_context),
+) -> Any:
+    try:
+        svc = get_warehouse_service()
+        item = svc.get_catalog_item(item_id)
+        if item is None:
+            raise HTTPException(status_code=404, detail={"code": "not_found", "message": "Item not found", "details": {}})
+        return item
+    except HTTPException:
+        raise
+    except Exception as error:
+        raise map_error(error) from error
+
+
+@router.get("/supplier/catalog", tags=["supplier-self"])
+def get_my_catalog(actor_ctx: ActorContext = Depends(get_actor_context)) -> Any:
+    """Return all catalog items (incl. inactive) for the current supplier."""
+    if actor_ctx.supplier_id is None:
+        raise HTTPException(status_code=403, detail={"code": "forbidden", "message": "No supplier linked", "details": {}})
+    try:
+        svc = get_warehouse_service()
+        return svc.list_supplier_catalog(supplier_id=actor_ctx.supplier_id, active_only=False, limit=500)
+    except Exception as error:
+        raise map_error(error) from error
+
+
+@router.post("/supplier/catalog", status_code=201, tags=["supplier-self"])
+def create_catalog_item_endpoint(
+    body: CatalogItemCreate,
+    actor_ctx: ActorContext = Depends(get_actor_context),
+) -> Any:
+    if actor_ctx.supplier_id is None:
+        raise HTTPException(status_code=403, detail={"code": "forbidden", "message": "No supplier linked", "details": {}})
+    try:
+        svc = get_warehouse_service()
+        return svc.create_catalog_item(actor_ctx.supplier_id, body.model_dump())
+    except Exception as error:
+        raise map_error(error) from error
+
+
+@router.patch("/supplier/catalog/{item_id}", tags=["supplier-self"])
+def update_catalog_item_endpoint(
+    item_id: int,
+    body: CatalogItemUpdate,
+    actor_ctx: ActorContext = Depends(get_actor_context),
+) -> Any:
+    if actor_ctx.supplier_id is None:
+        raise HTTPException(status_code=403, detail={"code": "forbidden", "message": "No supplier linked", "details": {}})
+    try:
+        svc = get_warehouse_service()
+        result = svc.update_catalog_item(item_id, actor_ctx.supplier_id, body.model_dump(exclude_none=True))
+        if result is None:
+            raise HTTPException(status_code=404, detail={"code": "not_found", "message": "Item not found or not yours", "details": {}})
+        return result
+    except HTTPException:
+        raise
+    except Exception as error:
+        raise map_error(error) from error
+
+
+@router.delete("/supplier/catalog/{item_id}", status_code=204, tags=["supplier-self"])
+def delete_catalog_item_endpoint(
+    item_id: int,
+    actor_ctx: ActorContext = Depends(get_actor_context),
+) -> None:
+    if actor_ctx.supplier_id is None:
+        raise HTTPException(status_code=403, detail={"code": "forbidden", "message": "No supplier linked", "details": {}})
+    try:
+        svc = get_warehouse_service()
+        ok = svc.delete_catalog_item(item_id, actor_ctx.supplier_id)
+        if not ok:
+            raise HTTPException(status_code=404, detail={"code": "not_found", "message": "Item not found or not yours", "details": {}})
+    except HTTPException:
+        raise
     except Exception as error:
         raise map_error(error) from error
