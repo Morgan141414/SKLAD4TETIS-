@@ -629,7 +629,7 @@ async function requestSkladTokenFromTetis() {
     return false;
   }
   const orgId = readTetisActiveOrgId();
-  const response = await fetch("/api/v1/sklad/token", {
+  const response = await fetch(API + "/sklad/token", {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
