@@ -4674,6 +4674,9 @@ class SupplierSelfUpdate(BaseModel):
     address: str | None = None
     delivery_days: int | None = None
     notes: str | None = None
+    bank_details: str | None = None
+    website: str | None = None
+    inn: str | None = None
 
 
 class ApplicationResubmitBody(BaseModel):
@@ -4700,6 +4703,7 @@ class CatalogItemCreate(BaseModel):
     description: str | None = None
     product_id: int | None = None
     is_active: bool = True
+    valid_until: str | None = None
 
 
 class CatalogItemUpdate(BaseModel):
@@ -4714,6 +4718,7 @@ class CatalogItemUpdate(BaseModel):
     description: str | None = None
     product_id: int | None = None
     is_active: bool | None = None
+    valid_until: str | None = None
 
 
 @router.post("/mis/procedure-event", tags=["mis"])

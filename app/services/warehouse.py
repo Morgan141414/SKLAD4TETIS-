@@ -470,7 +470,8 @@ class WarehouseService:
             """
             SELECT id, name, bin, email, phone, contact_person, city, address,
                    delivery_days, rating, notes, is_preferred, contract_number,
-                   contract_expires_on, payment_terms, city, lat, lng
+                   contract_expires_on, payment_terms, lat, lng,
+                   bank_details, website, inn
             FROM suppliers WHERE id = ?
             """,
             (supplier_id,),
@@ -483,7 +484,7 @@ class WarehouseService:
         self, supplier_id: int, data: dict[str, Any], actor_id: str
     ) -> dict[str, Any]:
         """Update supplier's own profile — only contact fields, not name/rating/contract."""
-        allowed = {"email", "phone", "contact_person", "city", "address", "delivery_days", "notes"}
+        allowed = {"email", "phone", "contact_person", "city", "address", "delivery_days", "notes", "bank_details", "website", "inn"}
         updates = {k: v for k, v in data.items() if k in allowed and v is not None}
         if not updates:
             return self.get_supplier_by_id(supplier_id)
@@ -497,7 +498,8 @@ class WarehouseService:
                 """
                 SELECT id, name, bin, email, phone, contact_person, city, address,
                        delivery_days, rating, notes, is_preferred, contract_number,
-                       contract_expires_on, payment_terms, lat, lng
+                       contract_expires_on, payment_terms, lat, lng,
+                       bank_details, website, inn
                 FROM suppliers WHERE id = ?
                 """,
                 (supplier_id,),
@@ -594,8 +596,9 @@ class WarehouseService:
                 conn,
                 """INSERT INTO supplier_catalog_items
                    (supplier_id, product_id, product_name, sku, unit, unit_price,
-                    min_order_qty, stock_qty, delivery_days, category, description, is_active)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    min_order_qty, stock_qty, delivery_days, category, description, is_active,
+                    valid_until)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     supplier_id,
                     data.get("product_id"),
@@ -609,6 +612,7 @@ class WarehouseService:
                     data.get("category"),
                     data.get("description"),
                     data.get("is_active", True),
+                    data.get("valid_until"),
                 ),
             )
             row = conn.execute("SELECT * FROM supplier_catalog_items WHERE id = ?", (row_id,)).fetchone()
@@ -618,6 +622,7 @@ class WarehouseService:
         allowed = {
             "product_name", "sku", "unit", "unit_price", "min_order_qty",
             "stock_qty", "delivery_days", "category", "description", "is_active", "product_id",
+            "valid_until",
         }
         updates = {k: v for k, v in data.items() if k in allowed}
         if not updates:
