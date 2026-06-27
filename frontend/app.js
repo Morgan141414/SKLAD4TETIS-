@@ -463,6 +463,9 @@ const state = {
     batchFilterProductId: null,
     supplierMode: false,
     supplierView: "auctions",
+    catalogSubTab: "items",
+    catalogSearch: "",
+    catalogStatusFilter: "all",
   },
   data: {
     health: null,
@@ -491,7 +494,7 @@ const state = {
     repackTemplates: [],
     procedureConsumptionTemplates: [],
     supplierApplications: { items: [], total: 0 },
-    supplierPortal: { auctions: [], myBids: {}, priceHistory: [], shipments: [], reviews: [], profile: null, myApplications: [], myCatalog: [], inquiries: [], stats: null },
+    supplierPortal: { auctions: [], myBids: {}, priceHistory: [], shipments: [], reviews: [], profile: null, myApplications: [], myCatalog: [], inquiries: [], stats: null, orders: { items: [], total: 0 }, catalogAnalytics: [] },
     analytics: { items: [], analysis_days: 90, warehouse_id: null, generated_at: null },
     abcXyzRuns: { items: [], total: 0 },
     sensorDevices: [],
@@ -6010,6 +6013,7 @@ const supplierPortalNav = [
   ["my-bids", "Мои ставки"],
   ["my-catalog", "Мой каталог"],
   ["inquiries", "Запросы"],
+  ["orders", "История заказов"],
   ["price-history", "История цен"],
   ["shipments", "Мои поставки"],
   ["reviews", "Отзывы о нас"],
@@ -6246,7 +6250,72 @@ function renderSupplierReviews() {
         <span style="font-size:.78rem;color:var(--muted)">${escapeHtml(String(r.created_at).slice(0, 10))}</span>
       </div>
       ${r.comment ? `<div style="margin-top:6px;font-size:.9rem">${escapeHtml(r.comment)}</div>` : `<div style="color:var(--muted);font-size:.85rem;font-style:italic">Без комментария</div>`}
+      ${r.supplier_reply ? `
+        <div style="margin-top:8px;background:var(--surface-2,#f0f9ff);border-left:3px solid var(--accent,#2563eb);padding:8px 12px;border-radius:0 6px 6px 0;font-size:.85rem">
+          <strong>Ответ компании:</strong> ${escapeHtml(r.supplier_reply)}
+          <div style="font-size:.75rem;color:var(--muted);margin-top:2px">${String(r.replied_at || "").slice(0, 10)}</div>
+        </div>` : (r.status === "approved" ? `
+        <details style="margin-top:6px">
+          <summary style="cursor:pointer;font-size:.8rem;color:var(--accent)">Ответить на отзыв</summary>
+          <form class="review-reply-form" data-review-id="${r.id}" style="margin-top:6px;display:grid;gap:6px">
+            <textarea name="reply_text" rows="2" placeholder="Благодарим за обратную связь..." required style="font-size:.85rem"></textarea>
+            <button type="submit" class="primary" style="font-size:.82rem;max-width:160px">Отправить ответ</button>
+          </form>
+        </details>` : "")}
     </div>`).join("")}`;
+}
+
+function renderSupplierOrders() {
+  const orders = state.data.supplierPortal.orders || { items: [], total: 0 };
+  const items = orders.items || [];
+  const STATUS = {
+    ordered: { label: "Заказано", cls: "ok" },
+    closed: { label: "Завершён", cls: "" },
+  };
+  if (!items.length) return `
+    <div class="panel" style="text-align:center;padding:32px 16px">
+      <div style="font-size:2rem;margin-bottom:8px">📋</div>
+      <div style="color:var(--muted)">Нет завершённых заказов.<br>Здесь появятся запросы со статусом «Заказано» или «Завершён».</div>
+    </div>`;
+  const totalRevenue = items.reduce((s, o) => s + Number(o.total_amount || 0), 0);
+  return `
+    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:8px;margin-bottom:12px">
+      <div class="panel" style="text-align:center;padding:10px">
+        <div style="font-size:1.3rem;font-weight:700;color:var(--accent)">${items.length}</div>
+        <div style="font-size:.75rem;color:var(--muted)">Всего заказов</div>
+      </div>
+      <div class="panel" style="text-align:center;padding:10px">
+        <div style="font-size:1.1rem;font-weight:700;color:var(--accent)">${fmtMoneyKzt(totalRevenue)} тг</div>
+        <div style="font-size:.75rem;color:var(--muted)">Выручка</div>
+      </div>
+      <div class="panel" style="text-align:center;padding:10px">
+        <div style="font-size:1.3rem;font-weight:700;color:var(--accent)">${items.filter(o => o.status === "ordered").length}</div>
+        <div style="font-size:.75rem;color:var(--muted)">Активных</div>
+      </div>
+    </div>
+    ${items.map((o) => {
+      const st = STATUS[o.status] || { label: o.status, cls: "" };
+      return `
+      <div class="panel" style="margin-bottom:8px">
+        <div style="display:flex;justify-content:space-between;align-items:flex-start">
+          <div>
+            <strong>${escapeHtml(o.product_name || "")}</strong>
+            ${o.sku ? `<span style="font-size:.78rem;color:var(--muted);margin-left:6px">(${escapeHtml(o.sku)})</span>` : ""}
+            <div style="font-size:.82rem;color:var(--muted);margin-top:2px">
+              ${escapeHtml(o.warehouse_name || o.actor_id || "—")} · ${String(o.created_at || "").slice(0, 10)}
+            </div>
+          </div>
+          <span class="badge ${st.cls}">${st.label}</span>
+        </div>
+        <div style="display:flex;gap:16px;flex-wrap:wrap;font-size:.88rem;margin-top:6px">
+          <span>Кол-во: <strong>${o.quantity} ${escapeHtml(o.unit || "")}</strong></span>
+          ${o.unit_price ? `<span>Цена: <strong>${fmtMoneyKzt(o.unit_price)} тг</strong></span>` : ""}
+          ${o.total_amount ? `<span>Итого: <strong style="color:var(--accent)">${fmtMoneyKzt(o.total_amount)} тг</strong></span>` : ""}
+        </div>
+        ${o.notes ? `<div style="font-size:.82rem;color:var(--muted);margin-top:4px">${escapeHtml(o.notes)}</div>` : ""}
+      </div>`;
+    }).join("")}
+    ${orders.total > items.length ? `<div style="text-align:center;padding:12px;color:var(--muted);font-size:.85rem">Показано ${items.length} из ${orders.total}</div>` : ""}`;
 }
 
 const supplierPortalRenderers = {
@@ -6255,6 +6324,7 @@ const supplierPortalRenderers = {
   "my-bids": renderSupplierMyBids,
   "my-catalog": renderSupplierMyCatalog,
   inquiries: renderSupplierInquiries,
+  orders: renderSupplierOrders,
   "price-history": renderSupplierPriceHistory,
   shipments: renderSupplierShipments,
   reviews: renderSupplierReviews,
@@ -6365,7 +6435,19 @@ function renderSupplierInquiries() {
 }
 
 function renderSupplierMyCatalog() {
-  const items = state.data.supplierPortal.myCatalog;
+  const catalogTab = state.ui.catalogSubTab || "items";
+  if (catalogTab === "analytics") return renderCatalogAnalytics();
+
+  const allItems = state.data.supplierPortal.myCatalog;
+  const catalogSearch = (state.ui.catalogSearch || "").toLowerCase();
+  const catalogStatusFilter = state.ui.catalogStatusFilter || "all";
+  const items = allItems.filter((item) => {
+    if (catalogSearch && !item.product_name.toLowerCase().includes(catalogSearch) && !(item.sku || "").toLowerCase().includes(catalogSearch) && !(item.category || "").toLowerCase().includes(catalogSearch)) return false;
+    if (catalogStatusFilter === "active" && !item.is_active) return false;
+    if (catalogStatusFilter === "hidden" && item.is_active) return false;
+    return true;
+  });
+  const filteredItems = items;
   const UNITS = ["шт", "уп", "кг", "л", "мл", "рулон", "ампула", "флакон", "бут", "коробка", "пачка"];
 
   function itemCard(item) {
@@ -6431,11 +6513,35 @@ function renderSupplierMyCatalog() {
     <datalist id="mp-product-suggestions">
       ${uniqueProductSuggestions.map((n) => `<option value="${escapeAttr(n)}">`).join("")}
     </datalist>
-    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;flex-wrap:wrap;gap:8px">
-      <div style="color:var(--muted);font-size:.9rem">${items.length} ${items.length === 1 ? "позиция" : items.length < 5 ? "позиции" : "позиций"}</div>
-      <div style="display:flex;gap:8px;flex-wrap:wrap">
-        <button class="secondary" style="font-size:.82rem" id="catalog-import-btn">📥 Импорт CSV</button>
-        <button class="primary" id="catalog-add-btn">+ Добавить товар</button>
+    <div style="display:flex;gap:6px;margin-bottom:12px;border-bottom:2px solid var(--border,#e2e8f0);padding-bottom:0">
+      <button class="${catalogTab === "items" ? "primary" : "secondary"}" style="font-size:.82rem;border-radius:6px 6px 0 0;border-bottom:none" id="catalog-tab-items">Товары (${allItems.length})</button>
+      <button class="${catalogTab === "analytics" ? "primary" : "secondary"}" style="font-size:.82rem;border-radius:6px 6px 0 0;border-bottom:none" id="catalog-tab-analytics">Аналитика</button>
+    </div>
+    <div style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap;align-items:center">
+      <input id="catalog-search-input" type="search" placeholder="Поиск по названию, артикулу..." value="${escapeAttr(state.ui.catalogSearch || "")}" style="flex:1;min-width:160px;font-size:.88rem;padding:6px 10px" />
+      <select id="catalog-status-filter" style="font-size:.85rem;padding:6px 8px">
+        <option value="all" ${catalogStatusFilter === "all" ? "selected" : ""}>Все</option>
+        <option value="active" ${catalogStatusFilter === "active" ? "selected" : ""}>Только активные</option>
+        <option value="hidden" ${catalogStatusFilter === "hidden" ? "selected" : ""}>Только скрытые</option>
+      </select>
+      <button class="secondary" style="font-size:.82rem" id="catalog-bulk-price-btn">% Цены</button>
+      <button class="secondary" style="font-size:.82rem" id="catalog-import-btn">📥 CSV</button>
+      <button class="primary" id="catalog-add-btn">+ Добавить</button>
+    </div>
+    <div id="catalog-bulk-price-panel" style="display:none;margin-bottom:12px">
+      <div class="panel" style="background:var(--surface-2,#f5f5f5)">
+        <strong style="display:block;margin-bottom:8px">Изменение цен в процентах</strong>
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+          <label style="font-size:.85rem;display:flex;align-items:center;gap:6px">
+            Изменить цены на
+            <input type="number" id="bulk-price-pct" value="0" step="0.1" style="width:80px;font-size:.9rem" />
+            %
+          </label>
+          <span style="font-size:.8rem;color:var(--muted)">(применится ко всем товарам в каталоге)</span>
+          <button class="primary" style="font-size:.85rem" id="bulk-price-apply">Применить</button>
+          <button class="secondary" style="font-size:.85rem" id="bulk-price-cancel">Отмена</button>
+        </div>
+        <div id="bulk-price-result" style="display:none;margin-top:8px;font-size:.85rem;padding:6px 10px;border-radius:6px"></div>
       </div>
     </div>
     <div id="catalog-import-panel" style="display:none;margin-bottom:12px">
@@ -6477,11 +6583,36 @@ function renderSupplierMyCatalog() {
         </form>
       </div>
     </div>
-    ${items.length ? items.map(itemCard).join("") : `
+    ${filteredItems.length ? filteredItems.map(itemCard).join("") : `
       <div class="panel" style="text-align:center;padding:32px 16px">
-        <div style="font-size:2.5rem;margin-bottom:8px">🛍️</div>
-        <div style="color:var(--muted)">Ваш каталог пуст.<br>Нажмите «+ Добавить товар», чтобы опубликовать первую позицию.</div>
+        <div style="font-size:2.5rem;margin-bottom:8px">${items.length ? "🔍" : "🛍️"}</div>
+        <div style="color:var(--muted)">${items.length ? "Ничего не найдено по вашему поиску." : "Ваш каталог пуст.<br>Нажмите «+ Добавить товар», чтобы опубликовать первую позицию."}</div>
       </div>`}`;
+}
+
+function renderCatalogAnalytics() {
+  const analytics = state.data.supplierPortal.catalogAnalytics || [];
+  if (!analytics.length) return `<div class="panel" style="text-align:center;padding:32px"><div style="color:var(--muted)">Нет данных. Аналитика появится когда на ваши товары начнут поступать запросы.</div></div>`;
+  const maxInq = Math.max(...analytics.map((a) => a.inquiries_total || 0), 1);
+  return `
+    <div class="panel" style="margin-bottom:12px">
+      <div style="font-weight:600;margin-bottom:8px">Спрос по позициям каталога</div>
+      ${analytics.map((a) => `
+        <div style="margin-bottom:10px">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
+            <span style="font-size:.88rem;font-weight:500">${escapeHtml(a.product_name)}</span>
+            <span style="font-size:.82rem;color:var(--muted)">${a.inquiries_total} запр.</span>
+          </div>
+          <div style="background:var(--surface-2,#f0f0f0);border-radius:4px;height:8px;overflow:hidden">
+            <div style="height:100%;background:var(--accent,#2563eb);border-radius:4px;width:${Math.round(100*(a.inquiries_total||0)/maxInq)}%;transition:width .3s"></div>
+          </div>
+          <div style="display:flex;gap:10px;margin-top:3px;font-size:.75rem;color:var(--muted)">
+            <span>Ожидают: <strong style="color:var(--warning,#d97706)">${a.inquiries_pending}</strong></span>
+            <span>Заказано: <strong style="color:var(--success,#16a34a)">${a.inquiries_ordered}</strong></span>
+            <span class="badge ${a.is_active ? "ok" : "danger"}" style="font-size:.7rem">${a.is_active ? "Активен" : "Скрыт"}</span>
+          </div>
+        </div>`).join("")}
+    </div>`;
 }
 
 function renderSupplierProfile() {
@@ -6625,12 +6756,65 @@ function bindSupplierActions() {
   });
 
   // ── Catalog management ──────────────────────────────────────────────────
+
+  // Tab switching
+  el("catalog-tab-items")?.addEventListener("click", () => { state.ui.catalogSubTab = "items"; render(); });
+  el("catalog-tab-analytics")?.addEventListener("click", () => { state.ui.catalogSubTab = "analytics"; render(); });
+
+  // Search & filter
+  el("catalog-search-input")?.addEventListener("input", (e) => {
+    state.ui.catalogSearch = e.target.value;
+    render();
+  });
+  el("catalog-status-filter")?.addEventListener("change", (e) => {
+    state.ui.catalogStatusFilter = e.target.value;
+    render();
+  });
+
   el("catalog-add-btn")?.addEventListener("click", () => {
     const f = el("catalog-add-form");
     if (f) f.style.display = f.style.display === "none" ? "" : "none";
   });
   el("catalog-add-cancel")?.addEventListener("click", () => {
     el("catalog-add-form").style.display = "none";
+  });
+
+  // Bulk price panel toggle
+  el("catalog-bulk-price-btn")?.addEventListener("click", () => {
+    const p = el("catalog-bulk-price-panel");
+    if (p) p.style.display = p.style.display === "none" ? "" : "none";
+  });
+  el("bulk-price-cancel")?.addEventListener("click", () => {
+    if (el("catalog-bulk-price-panel")) el("catalog-bulk-price-panel").style.display = "none";
+  });
+  el("bulk-price-apply")?.addEventListener("click", async () => {
+    const pctInput = el("bulk-price-pct");
+    const pct = Number(pctInput?.value);
+    if (isNaN(pct) || pct === 0) { alert("Введите ненулевой процент"); return; }
+    if (!confirm(`Изменить цены на ${pct > 0 ? "+" : ""}${pct}% для всех товаров в каталоге?`)) return;
+    const btn = el("bulk-price-apply");
+    const resultDiv = el("bulk-price-result");
+    try {
+      btn.disabled = true; btn.textContent = "Применяю...";
+      const res = await request("/supplier/catalog/bulk-price", { method: "POST", body: JSON.stringify({ percent_change: pct }) });
+      state.data.supplierPortal.myCatalog = (await request("/supplier/catalog").catch(() => ({ items: [] }))).items || [];
+      if (resultDiv) {
+        resultDiv.style.display = "block";
+        resultDiv.style.background = "var(--success-bg,#f0fff4)";
+        resultDiv.style.color = "var(--success,#16a34a)";
+        resultDiv.textContent = `Цены обновлены: ${res.updated || 0} позиций`;
+      }
+      setTimeout(() => render(), 1500);
+    } catch (err) {
+      if (resultDiv) {
+        resultDiv.style.display = "block";
+        resultDiv.style.background = "var(--danger-bg,#fff0f0)";
+        resultDiv.style.color = "var(--danger,#dc2626)";
+        resultDiv.textContent = err.message || "Ошибка";
+      }
+    } finally {
+      btn.disabled = false; btn.textContent = "Применить";
+    }
   });
 
   // CSV import panel toggle
@@ -6806,6 +6990,30 @@ function bindSupplierActions() {
       } catch (_) {}
     });
   });
+
+  // Review reply forms
+  document.querySelectorAll(".review-reply-form").forEach((form) => {
+    form.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const reviewId = form.dataset.reviewId;
+      const text = (form.querySelector("textarea").value || "").trim();
+      if (!text) return;
+      const btn = form.querySelector("button[type=submit]");
+      try {
+        if (btn) { btn.disabled = true; btn.textContent = "Отправляю..."; }
+        const updated = await request(`/supplier/reviews/${reviewId}/reply`, {
+          method: "POST",
+          body: JSON.stringify({ reply_text: text }),
+        });
+        const idx = (state.data.supplierPortal.reviews || []).findIndex((r) => String(r.id) === String(reviewId));
+        if (idx >= 0) state.data.supplierPortal.reviews[idx] = updated;
+        render();
+      } catch (err) {
+        alert(err.message || "Ошибка при отправке ответа");
+        if (btn) { btn.disabled = false; btn.textContent = "Отправить ответ"; }
+      }
+    });
+  });
 }
 
 async function placeSupplierBid(auctionId) {
@@ -6852,6 +7060,8 @@ async function loadSupplierPortalData() {
     state.data.supplierPortal.myCatalog = (await request(`/supplier/catalog`).catch(() => ({ items: [] }))).items || [];
     state.data.supplierPortal.inquiries = (await request(`/supplier/inquiries`).catch(() => ({ items: [] }))).items || [];
     state.data.supplierPortal.stats = await request(`/supplier/stats`).catch(() => null);
+    state.data.supplierPortal.orders = await request(`/supplier/orders?limit=100`).catch(() => ({ items: [], total: 0 }));
+    state.data.supplierPortal.catalogAnalytics = await request(`/supplier/catalog/analytics`).catch(() => []);
   }
   state.data.supplierPortal.myApplications = await request(`/supplier/my-applications`).catch(() => []);
   updateBecomeSupplierButton();
