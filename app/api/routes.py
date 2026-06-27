@@ -489,7 +489,7 @@ def exchange_tetis_token(
     scheme, _, token = authorization.partition(" ")
     if scheme.lower() != "bearer" or not token.strip():
         raise HTTPException(status_code=401, detail={"code": "unauthorized", "message": "Bearer token required", "details": {}})
-    TETIS_SECRET = "HcYnreHTy__68b2O1Zn1CACarfle5YjgBvT7syWg4Sg"
+    TETIS_SECRET = "local-dev-secret"
     try:
         from app.security.tokens import decode_jwt_hs256
         payload = decode_jwt_hs256(token.strip(), secret=TETIS_SECRET)

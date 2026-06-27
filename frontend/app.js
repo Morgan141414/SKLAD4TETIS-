@@ -662,7 +662,7 @@ async function showLoginScreen() {
   const msg = el("login-screen-message");
   if (msg) {
     if (hasTetis) {
-      msg.textContent = "Ваш аккаунт tetis1.kz не связан ни с одним складом. Обратитесь к администратору системы, чтобы вас добавили как пользователя склада.";
+      msg.textContent = "Сессия tetis1.kz истекла или недействительна. Войдите в tetis1.kz заново и вернитесь в Склад.";
     } else {
       msg.textContent = "Для входа в склад войдите в свой аккаунт на tetis1.kz и откройте раздел «Склад».";
     }
