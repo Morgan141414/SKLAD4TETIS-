@@ -5036,6 +5036,7 @@ class MarketplaceInquiryCreate(BaseModel):
     quantity: float = Field(gt=0, default=1)
     notes: str | None = None
     warehouse_id: int | None = None
+    purchase_request_id: int | None = None
 
 
 class InquiryResponseBody(BaseModel):
@@ -5090,6 +5091,7 @@ def create_inquiry(
             quantity=body.quantity,
             notes=body.notes,
             warehouse_id=warehouse_id,
+            purchase_request_id=body.purchase_request_id,
         )
     except ValueError as error:
         raise HTTPException(status_code=404, detail={"code": "not_found", "message": str(error), "details": {}}) from error

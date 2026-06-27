@@ -743,7 +743,8 @@ class WarehouseService:
 
     def create_marketplace_inquiry(
         self, catalog_item_id: int, actor_id: str, quantity: float,
-        notes: str | None, warehouse_id: int | None
+        notes: str | None, warehouse_id: int | None,
+        purchase_request_id: int | None = None,
     ) -> dict[str, Any]:
         connection = self.database.connect()
         try:
@@ -753,16 +754,31 @@ class WarehouseService:
             ).fetchone()
             if item is None:
                 raise ValueError(f"Catalog item {catalog_item_id} not found or inactive")
+            # Duplicate guard — warn if open inquiry already exists for this actor+supplier+product
+            existing = connection.execute(
+                """SELECT id FROM marketplace_inquiries
+                   WHERE catalog_item_id = ? AND actor_id = ? AND status IN ('pending','responded')
+                   LIMIT 1""",
+                (catalog_item_id, actor_id),
+            ).fetchone()
         finally:
             self._close_connection(connection)
+        if existing:
+            raise ValidationError(f"Уже есть открытый запрос #{existing['id']} на этот товар у этого поставщика")
         with self.database.transaction() as conn:
             row_id = insert_and_get_id(
                 conn,
                 """INSERT INTO marketplace_inquiries
-                   (catalog_item_id, supplier_id, warehouse_id, actor_id, quantity, unit_price, notes)
-                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
-                (catalog_item_id, item["supplier_id"], warehouse_id, actor_id, quantity, item["unit_price"], notes),
+                   (catalog_item_id, supplier_id, warehouse_id, actor_id, quantity, unit_price, notes, purchase_request_id)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                (catalog_item_id, item["supplier_id"], warehouse_id, actor_id, quantity, item["unit_price"], notes, purchase_request_id),
             )
+            # Auto-link purchase request status if provided
+            if purchase_request_id:
+                conn.execute(
+                    "UPDATE purchase_requests SET status = 'ordered' WHERE id = ? AND status = 'draft'",
+                    (purchase_request_id,),
+                )
             row = conn.execute("SELECT * FROM marketplace_inquiries WHERE id = ?", (row_id,)).fetchone()
             return dict(row) if row else {}
 
