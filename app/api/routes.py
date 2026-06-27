@@ -501,7 +501,7 @@ def exchange_tetis_token(
     if payload is None:
         raise HTTPException(status_code=401, detail={"code": "unauthorized", "message": "Invalid Tetis token", "details": {}})
     tetis_user_id = payload.get("sub", "")
-    import logging as _log; _log.getLogger("sklad.auth").warning("TETIS_EXCHANGE sub=%s role=%s", tetis_user_id, payload.get("role",""))
+    print(f"TETIS_EXCHANGE sub={tetis_user_id} role={payload.get('role',\)}", flush=True)
     svc = get_warehouse_service()
     user = svc.get_user_by_username(f"tetis:{tetis_user_id}")
     if user is None:

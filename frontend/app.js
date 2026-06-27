@@ -7333,6 +7333,7 @@ function applyDensity() {
 
 async function loadAll() {
   try {
+    console.log("[SKLAD_DBG]",{src:state.auth.source,hasLogin:!!state.auth.loginToken,hasAuthTok:!!el("auth-token").value.trim(),qormed:!!localStorage.getItem("qormed_token"),supToken:!!localStorage.getItem("sklad_supplier_token")});
     state.loadWarnings = [];
     state.auth.blockedMessage = "";
     if (state.auth.source === "login" && state.auth.loginToken) {
