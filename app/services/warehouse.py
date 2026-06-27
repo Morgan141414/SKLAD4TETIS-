@@ -7014,6 +7014,121 @@ class WarehouseService:
             ).fetchone()
             return dict(updated)
 
+    def reply_to_review(self, review_id: int, supplier_id: int, reply_text: str) -> dict:
+        if not reply_text or not reply_text.strip():
+            raise ValidationError("reply_text cannot be empty")
+        with self.database.transaction() as connection:
+            row = connection.execute(
+                "SELECT * FROM supplier_reviews WHERE id = ? AND supplier_id = ?",
+                (review_id, supplier_id),
+            ).fetchone()
+            if not row:
+                raise NotFoundError(f"supplier_reviews#{review_id} not found for this supplier")
+            if row["status"] != "approved":
+                raise ValidationError("Can only reply to approved reviews")
+            connection.execute(
+                "UPDATE supplier_reviews SET supplier_reply = ?, replied_at = ? WHERE id = ?",
+                (reply_text.strip(), now_iso(), review_id),
+            )
+            updated = connection.execute(
+                "SELECT * FROM supplier_reviews WHERE id = ?", (review_id,)
+            ).fetchone()
+            return dict(updated)
+
+    def list_supplier_orders(
+        self,
+        supplier_id: int,
+        status: str | None = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> dict[str, Any]:
+        """Completed/ordered inquiries for supplier — their order history."""
+        connection = self.database.connect()
+        try:
+            where = ["mi.supplier_id = ?"]
+            params: list = [supplier_id]
+            if status:
+                where.append("mi.status = ?")
+                params.append(status)
+            else:
+                where.append("mi.status IN ('ordered', 'closed')")
+            where_clause = "WHERE " + " AND ".join(where)
+            total_row = connection.execute(
+                f"SELECT COUNT(*) AS n FROM marketplace_inquiries mi {where_clause}", params
+            ).fetchone()
+            rows = connection.execute(
+                f"""SELECT mi.*, ci.product_name, ci.sku, ci.unit,
+                           s.name AS supplier_name,
+                           w.name AS warehouse_name,
+                           COALESCE(mi.quantity * mi.unit_price, 0) AS total_amount
+                    FROM marketplace_inquiries mi
+                    JOIN supplier_catalog_items ci ON ci.id = mi.catalog_item_id
+                    JOIN suppliers s ON s.id = mi.supplier_id
+                    LEFT JOIN warehouses w ON w.id = mi.warehouse_id
+                    {where_clause}
+                    ORDER BY mi.created_at DESC
+                    LIMIT ? OFFSET ?""",
+                params + [limit, offset],
+            ).fetchall()
+            items = [dict(r) for r in rows]
+            return {"items": items, "total": total_row["n"] if total_row else 0}
+        finally:
+            self._close_connection(connection)
+
+    def bulk_update_catalog_prices(
+        self,
+        supplier_id: int,
+        item_ids: list[int] | None,
+        percent_change: float,
+    ) -> dict[str, Any]:
+        """Apply a percentage price change to selected (or all) catalog items."""
+        if not -99 < percent_change < 1000:
+            raise ValidationError("percent_change must be between -99 and 1000")
+        multiplier = 1 + percent_change / 100
+        with self.database.transaction() as connection:
+            if item_ids:
+                placeholders = ",".join("?" * len(item_ids))
+                connection.execute(
+                    f"""UPDATE supplier_catalog_items
+                        SET unit_price = ROUND(unit_price * ?, 2), updated_at = ?
+                        WHERE supplier_id = ? AND id IN ({placeholders})""",
+                    [multiplier, now_iso(), supplier_id] + list(item_ids),
+                )
+                updated_count = len(item_ids)
+            else:
+                result = connection.execute(
+                    """UPDATE supplier_catalog_items
+                       SET unit_price = ROUND(unit_price * ?, 2), updated_at = ?
+                       WHERE supplier_id = ?""",
+                    (multiplier, now_iso(), supplier_id),
+                )
+                updated_count = result.rowcount if hasattr(result, "rowcount") else 0
+            updated_rows = connection.execute(
+                "SELECT id, product_name, unit_price FROM supplier_catalog_items WHERE supplier_id = ? ORDER BY updated_at DESC",
+                (supplier_id,),
+            ).fetchall()
+            return {"updated": updated_count, "items": [dict(r) for r in updated_rows]}
+
+    def compare_catalog_items(self, item_ids: list[int]) -> list[dict[str, Any]]:
+        """Fetch multiple catalog items with supplier info for side-by-side comparison."""
+        if not item_ids or len(item_ids) > 6:
+            raise ValidationError("Provide 1–6 item IDs to compare")
+        connection = self.database.connect()
+        try:
+            placeholders = ",".join("?" * len(item_ids))
+            rows = connection.execute(
+                f"""SELECT ci.*, s.name AS supplier_name, s.city AS supplier_city,
+                           s.rating AS supplier_rating, s.delivery_days AS supplier_delivery_days,
+                           s.is_preferred AS supplier_is_preferred
+                    FROM supplier_catalog_items ci
+                    JOIN suppliers s ON s.id = ci.supplier_id
+                    WHERE ci.id IN ({placeholders}) AND ci.is_active = TRUE
+                    ORDER BY ci.unit_price ASC""",
+                item_ids,
+            ).fetchall()
+            return [dict(r) for r in rows]
+        finally:
+            self._close_connection(connection)
 
     def _generate_svg_barcode(self, barcode_value: str, symbology: str) -> str:
         try:

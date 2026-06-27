@@ -5259,3 +5259,84 @@ def get_catalog_analytics(actor_ctx: ActorContext = Depends(get_actor_context)) 
         return get_warehouse_service().get_catalog_item_inquiry_stats(actor_ctx.supplier_id)
     except Exception as error:
         raise map_error(error) from error
+
+
+class ReviewReplyBody(BaseModel):
+    reply_text: str = Field(min_length=1, max_length=2000)
+
+
+class BulkPriceUpdate(BaseModel):
+    percent_change: float = Field(description="Percentage change, e.g. 10 means +10%, -5 means -5%")
+    item_ids: list[int] | None = Field(default=None, description="Specific item IDs; omit to update all")
+
+
+@router.post("/supplier/reviews/{review_id}/reply", tags=["supplier-self"])
+def reply_to_review(
+    review_id: int,
+    body: ReviewReplyBody,
+    actor_ctx: ActorContext = Depends(get_actor_context),
+) -> Any:
+    if actor_ctx.supplier_id is None:
+        raise HTTPException(status_code=403, detail={"code": "forbidden", "message": "No supplier linked", "details": {}})
+    try:
+        return get_warehouse_service().reply_to_review(
+            review_id=review_id,
+            supplier_id=actor_ctx.supplier_id,
+            reply_text=body.reply_text,
+        )
+    except Exception as error:
+        raise map_error(error) from error
+
+
+@router.get("/supplier/orders", tags=["supplier-self"])
+def list_supplier_orders(
+    status: str | None = None,
+    limit: int = 50,
+    offset: int = 0,
+    actor_ctx: ActorContext = Depends(get_actor_context),
+) -> Any:
+    if actor_ctx.supplier_id is None:
+        raise HTTPException(status_code=403, detail={"code": "forbidden", "message": "No supplier linked", "details": {}})
+    try:
+        return get_warehouse_service().list_supplier_orders(
+            supplier_id=actor_ctx.supplier_id,
+            status=status,
+            limit=min(limit, 200),
+            offset=offset,
+        )
+    except Exception as error:
+        raise map_error(error) from error
+
+
+@router.post("/supplier/catalog/bulk-price", tags=["supplier-self"])
+def bulk_update_catalog_prices(
+    body: BulkPriceUpdate,
+    actor_ctx: ActorContext = Depends(get_actor_context),
+) -> Any:
+    if actor_ctx.supplier_id is None:
+        raise HTTPException(status_code=403, detail={"code": "forbidden", "message": "No supplier linked", "details": {}})
+    try:
+        return get_warehouse_service().bulk_update_catalog_prices(
+            supplier_id=actor_ctx.supplier_id,
+            item_ids=body.item_ids,
+            percent_change=body.percent_change,
+        )
+    except Exception as error:
+        raise map_error(error) from error
+
+
+@router.get("/marketplace/compare", tags=["marketplace"])
+def compare_catalog_items(
+    ids: str,
+    actor_ctx: ActorContext = Depends(get_actor_context),
+) -> Any:
+    """Compare up to 6 catalog items side-by-side. Pass ids as comma-separated: ?ids=1,2,3"""
+    try:
+        id_list = [int(x.strip()) for x in ids.split(",") if x.strip().isdigit()]
+        if not id_list:
+            raise HTTPException(status_code=422, detail={"code": "validation_error", "message": "ids must be comma-separated integers", "details": {}})
+        return get_warehouse_service().compare_catalog_items(id_list)
+    except HTTPException:
+        raise
+    except Exception as error:
+        raise map_error(error) from error
