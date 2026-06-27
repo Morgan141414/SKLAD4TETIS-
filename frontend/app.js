@@ -629,51 +629,47 @@ async function requestSkladTokenFromTetis() {
     return false;
   }
   const orgId = readTetisActiveOrgId();
-  const response = await fetch(API + "/sklad/token", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      ...(tetisToken ? { Authorization: `Bearer ${tetisToken}` } : {}),
-    },
-    credentials: "include",
-    body: JSON.stringify(orgId ? { org_id: orgId } : {}),
-  });
-  if (!response.ok) return false;
-  const payload = await response.json();
-  if (!payload?.access_token) return false;
-  el("auth-token").value = payload.access_token;
-  state.auth.source = "tetis";
-  state.auth.blockedMessage = "";
-  return true;
+  // Try the full exchange endpoint first
+  for (const url of [API + "/sklad/token", "/sklad/api/v1/sklad/token", "/api/v1/sklad/token"]) {
+    try {
+      const response = await fetch(url, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${tetisToken}`,
+        },
+        credentials: "include",
+        body: JSON.stringify(orgId ? { org_id: orgId } : {}),
+      });
+      if (!response.ok) continue;
+      const payload = await response.json();
+      if (!payload?.access_token) continue;
+      el("auth-token").value = payload.access_token;
+      state.auth.source = "tetis";
+      state.auth.blockedMessage = "";
+      return true;
+    } catch (_) { continue; }
+  }
+  return false;
 }
 
 async function showLoginScreen() {
-  const loginScreen = el("login-screen");
-  if (loginScreen) {
-    loginScreen.style.display = "flex";
-  }
-  const hasTetis = hasTetisSession();
-  // Hide "Стать поставщиком" when user already has tetis session
-  const becomeBtn = el("show-supplier-application");
-  if (becomeBtn) {
-    becomeBtn.style.display = hasTetis ? "none" : "";
-  }
-  // Show contextual message
-  const msg = el("login-screen-message");
-  if (msg) {
-    if (hasTetis) {
-      msg.textContent = "Сессия tetis1.kz истекла или недействительна. Войдите в tetis1.kz заново и вернитесь в Склад.";
-    } else {
-      msg.textContent = "Для входа в склад войдите в свой аккаунт на tetis1.kz и откройте раздел «Склад».";
-    }
-  }
+  // Sklad is only accessed through tetis1.kz — no standalone login screen needed.
+  // Show a non-blocking top banner instead.
+  const existing = document.getElementById("auth-error-banner");
+  if (existing) return;
+  const banner = document.createElement("div");
+  banner.id = "auth-error-banner";
+  banner.style.cssText = "position:fixed;top:0;left:0;right:0;background:#dc2626;color:#fff;text-align:center;padding:10px 16px;font-size:.9rem;font-weight:500;z-index:9999;display:flex;align-items:center;justify-content:center;gap:16px";
+  banner.innerHTML = `<span>Не удалось подключиться к складу. Обновите страницу или войдите в <a href="https://tetis1.kz/" style="color:#fff;font-weight:700;text-decoration:underline">tetis1.kz</a> заново.</span>
+    <button onclick="location.reload()" style="background:rgba(255,255,255,.2);border:1px solid rgba(255,255,255,.5);color:#fff;border-radius:6px;padding:4px 12px;cursor:pointer;font-size:.85rem">Обновить</button>`;
+  document.body.insertAdjacentElement("afterbegin", banner);
 }
 
 function hideLoginScreen() {
   const loginScreen = el("login-screen");
-  if (loginScreen) {
-    loginScreen.style.display = "none";
-  }
+  if (loginScreen) loginScreen.style.display = "none";
+  document.getElementById("auth-error-banner")?.remove();
 }
 
 function showSupplierApplicationScreen() {
@@ -7252,11 +7248,8 @@ async function loadAll() {
     if (state.auth.source === "login" && state.auth.loginToken) {
       el("auth-token").value = state.auth.loginToken;
     } else if (!el("auth-token").value.trim()) {
-      const ok = await requestSkladTokenFromTetis();
-      if (!ok && !state.auth.loginToken) {
-        await showLoginScreen();
-        return;
-      }
+      await requestSkladTokenFromTetis();
+      // If exchange failed, continue — /me will 401 and we'll show a banner
     }
     let profile = await request("/me");
     // If supplier access was approved since last login, silently re-exchange the tetis token
@@ -7394,9 +7387,8 @@ async function loadAll() {
     if (error instanceof AuthRequiredError) {
       state.auth.blockedMessage = "";
       el("api-status").className = "status-dot bad";
-      el("api-status").textContent = "Сервер требует вход";
+      el("api-status").textContent = "Ошибка входа";
       await showLoginScreen();
-      return;
     } else {
       el("api-status").className = "status-dot bad";
       el("api-status").textContent = t("Нет связи с сервером");
