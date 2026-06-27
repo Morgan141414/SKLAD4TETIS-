@@ -466,6 +466,7 @@ const state = {
     catalogSubTab: "items",
     catalogSearch: "",
     catalogStatusFilter: "all",
+    compareItems: [],
   },
   data: {
     health: null,
@@ -2728,6 +2729,7 @@ function renderNav() {
   ensureAccessibleView();
   const unreadCount = (state.data.notifications?.items || []).filter((n) => !n.is_read).length;
   const respondedInquiries = (state.data.myInquiries?.items || []).filter((i) => i.status === "responded").length;
+  const pendingApplications = (state.data.supplierApplications?.items || []).filter((a) => a.status === "pending").length;
   const allowedIds = new Set(visibleViews().map(([id]) => id));
   const viewById = new Map(views.map((view) => [view[0], view]));
   el("nav").innerHTML = navGroups.map((group) => {
@@ -2740,6 +2742,8 @@ function renderNav() {
         badge = `<span style="position:absolute;top:4px;right:4px;background:#dc2626;color:#fff;border-radius:9999px;font-size:.6rem;font-weight:700;min-width:1.1rem;height:1.1rem;display:inline-flex;align-items:center;justify-content:center;padding:0 .2rem">${unreadCount > 99 ? "99+" : unreadCount}</span>`;
       } else if (id === "marketplace" && respondedInquiries > 0) {
         badge = `<span style="position:absolute;top:4px;right:4px;background:#16a34a;color:#fff;border-radius:9999px;font-size:.6rem;font-weight:700;min-width:1.1rem;height:1.1rem;display:inline-flex;align-items:center;justify-content:center;padding:0 .2rem">${respondedInquiries}</span>`;
+      } else if (id === "users" && pendingApplications > 0) {
+        badge = `<span style="position:absolute;top:4px;right:4px;background:#d97706;color:#fff;border-radius:9999px;font-size:.6rem;font-weight:700;min-width:1.1rem;height:1.1rem;display:inline-flex;align-items:center;justify-content:center;padding:0 .2rem">${pendingApplications}</span>`;
       }
       return `
       <button class="${state.view === id ? "active" : ""}" data-view="${id}" style="position:relative">
@@ -4155,7 +4159,7 @@ function renderPurchaseRequests() {
             const offers = findMarketplaceOffersForProduct(row.product_id);
             if (!offers.length) return `<button class="secondary" style="font-size:.75rem;padding:.2rem .6rem" data-goto-marketplace="${rawNameById("products", row.product_id)}">🔍 Найти</button>`;
             const best = offers.reduce((a, b) => a.unit_price <= b.unit_price ? a : b);
-            return `<button class="secondary" style="font-size:.75rem;padding:.2rem .6rem;white-space:nowrap" data-show-pr-offers="${row.product_id}">📦 ${offers.length} · от ${fmtMoneyKzt(best.unit_price)} тг</button>`;
+            return `<button class="secondary" style="font-size:.75rem;padding:.2rem .6rem;white-space:nowrap" data-show-pr-offers="${row.product_id}" data-pr-id="${row.id}">📦 ${offers.length} · от ${fmtMoneyKzt(best.unit_price)} тг</button>`;
           }},
           { label: "Создано", render: (row) => dateText(row.created_at) },
           { label: "", render: (row) => row.status === "draft" ? `<div class="row-actions"><button class="primary" data-purchase-status="${row.id}" data-purchase-next-status="ordered">Заказано</button><button class="secondary" data-purchase-status="${row.id}" data-purchase-next-status="cancelled">Отменить</button></div>` : "" },
@@ -5070,9 +5074,12 @@ function renderMarketplace() {
         </div>
       </div>
       ${item.description ? `<div style="font-size:.83rem;color:var(--muted)">${escapeHtml(item.description)}</div>` : ""}
-      <div style="display:flex;gap:8px;margin-top:2px">
+      <div style="display:flex;gap:8px;margin-top:2px;flex-wrap:wrap">
         <button class="primary" style="font-size:.82rem" data-mp-order="${item.id}" data-supplier-id="${item.supplier_id}">Запросить</button>
-        <a href="tel:${escapeAttr(item.supplier_phone||"")}" class="secondary" style="font-size:.82rem;padding:.35rem .9rem;border-radius:6px;text-decoration:none;border:1px solid var(--line)" ${item.supplier_phone ? "" : "style='display:none'"}>📞 Позвонить</a>
+        <button class="${(state.ui.compareItems||[]).includes(item.id) ? "primary" : "secondary"}" style="font-size:.82rem" data-mp-compare="${item.id}">
+          ${(state.ui.compareItems||[]).includes(item.id) ? "✓ В сравнении" : "Сравнить"}
+        </button>
+        ${item.supplier_phone ? `<a href="tel:${escapeAttr(item.supplier_phone)}" class="secondary" style="font-size:.82rem;padding:.35rem .9rem;border-radius:6px;text-decoration:none;border:1px solid var(--line)">📞</a>` : ""}
       </div>
     </div>`;
   }
@@ -5110,7 +5117,81 @@ function renderMarketplace() {
         <button class="secondary" id="mp-load-more" data-offset="${mp.items.length}">
           Загрузить ещё (показано ${mp.items.length} из ${mp.total})
         </button>
+      </div>` : ""}
+    ${(state.ui.compareItems||[]).length >= 2 ? `
+      <div style="position:fixed;bottom:16px;left:50%;transform:translateX(-50%);background:var(--accent,#2563eb);color:#fff;border-radius:12px;padding:10px 20px;box-shadow:0 4px 20px rgba(0,0,0,.3);display:flex;align-items:center;gap:12px;z-index:1000;max-width:90vw">
+        <span style="font-weight:600">Сравниваем: ${(state.ui.compareItems||[]).length} позиции</span>
+        <button id="mp-compare-now-btn" style="background:#fff;color:var(--accent,#2563eb);border:none;border-radius:8px;padding:6px 16px;font-weight:700;cursor:pointer">Сравнить →</button>
+        <button id="mp-compare-clear-btn" style="background:rgba(255,255,255,.2);color:#fff;border:none;border-radius:8px;padding:6px 10px;cursor:pointer">✕</button>
       </div>` : ""}`;
+}
+
+async function showCompareModal() {
+  const ids = state.ui.compareItems || [];
+  if (ids.length < 2) return;
+  const existing = document.getElementById("compare-modal-overlay");
+  if (existing) existing.remove();
+  const overlay = document.createElement("div");
+  overlay.id = "compare-modal-overlay";
+  overlay.style.cssText = "position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:9999;display:flex;align-items:flex-start;justify-content:center;padding:20px;overflow-y:auto";
+  overlay.innerHTML = `<div style="background:var(--surface,#fff);border-radius:12px;padding:24px;width:100%;max-width:900px;box-shadow:0 8px 40px rgba(0,0,0,.25)">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
+      <h3 style="margin:0">Сравнение предложений</h3>
+      <button id="compare-close" style="background:none;border:none;font-size:1.4rem;cursor:pointer;color:var(--muted)">&times;</button>
+    </div>
+    <div id="compare-body" style="overflow-x:auto"><div style="color:var(--muted);text-align:center;padding:24px">Загрузка...</div></div>
+  </div>`;
+  document.body.appendChild(overlay);
+  overlay.addEventListener("click", (e) => { if (e.target === overlay) overlay.remove(); });
+  document.getElementById("compare-close")?.addEventListener("click", () => overlay.remove());
+  try {
+    const items = await request(`/marketplace/compare?ids=${ids.join(",")}`);
+    const fields = [
+      ["Поставщик", (i) => escapeHtml(i.supplier_name || "—")],
+      ["Город", (i) => escapeHtml(i.supplier_city || "—")],
+      ["Рейтинг", (i) => i.supplier_rating != null ? `${i.supplier_rating} ★` : "—"],
+      ["Цена", (i) => `<strong style="color:var(--accent)">${fmtMoneyKzt(i.unit_price)} тг</strong>/<span style="font-size:.8rem">${escapeHtml(i.unit)}</span>`],
+      ["Мин. заказ", (i) => i.min_order_qty > 1 ? i.min_order_qty : "1"],
+      ["В наличии", (i) => i.stock_qty != null ? `${i.stock_qty} ${escapeHtml(i.unit)}` : "—"],
+      ["Доставка", (i) => (i.delivery_days || i.supplier_delivery_days) ? `${i.delivery_days || i.supplier_delivery_days} дн.` : "—"],
+      ["Описание", (i) => escapeHtml(i.description || "—")],
+    ];
+    const minPrice = Math.min(...items.map((i) => Number(i.unit_price)));
+    const html = `
+      <table style="width:100%;border-collapse:collapse;font-size:.88rem;min-width:${items.length * 200}px">
+        <thead>
+          <tr>
+            <th style="text-align:left;padding:8px;border-bottom:2px solid var(--line);width:130px;color:var(--muted);font-weight:500">Параметр</th>
+            ${items.map((i) => `<th style="padding:8px;border-bottom:2px solid var(--line);text-align:center">
+              <div style="font-weight:700">${escapeHtml(i.product_name)}</div>
+              ${Number(i.unit_price) === minPrice ? `<div style="font-size:.72rem;background:#16a34a;color:#fff;border-radius:4px;padding:1px 6px;display:inline-block;margin-top:2px">Лучшая цена</div>` : ""}
+            </th>`).join("")}
+          </tr>
+        </thead>
+        <tbody>
+          ${fields.map(([label, fn], rowIdx) => `
+            <tr style="background:${rowIdx % 2 ? "var(--surface-2,#f9f9f9)" : "transparent"}">
+              <td style="padding:8px;color:var(--muted);font-weight:500">${label}</td>
+              ${items.map((i) => `<td style="padding:8px;text-align:center">${fn(i)}</td>`).join("")}
+            </tr>`).join("")}
+          <tr>
+            <td style="padding:8px"></td>
+            ${items.map((i) => `<td style="padding:8px;text-align:center">
+              <button class="primary" style="font-size:.82rem;width:100%" data-mp-order="${i.id}">Запросить</button>
+            </td>`).join("")}
+          </tr>
+        </tbody>
+      </table>`;
+    document.getElementById("compare-body").innerHTML = html;
+    document.getElementById("compare-body").querySelectorAll("[data-mp-order]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const item = items.find((i) => String(i.id) === String(btn.dataset.mpOrder));
+        if (item) { overlay.remove(); showInquiryModal(item); }
+      });
+    });
+  } catch (err) {
+    document.getElementById("compare-body").innerHTML = `<div style="color:var(--danger);padding:16px">${escapeHtml(err.message || "Ошибка загрузки")}</div>`;
+  }
 }
 
 function renderMarketplaceSuppliers(suppliers, filter) {
@@ -5406,7 +5487,7 @@ function showShipmentFromInquiryModal(inquiry) {
   });
 }
 
-function showInquiryModal(item) {
+function showInquiryModal(item, purchaseRequestId = null) {
   const existing = document.getElementById("inquiry-modal-overlay");
   if (existing) existing.remove();
   const overlay = document.createElement("div");
@@ -5427,6 +5508,7 @@ function showInquiryModal(item) {
         ${item.stock_qty != null ? `<div><div style="font-size:.75rem;color:var(--muted)">В наличии</div><div style="font-weight:600">${item.stock_qty} ${escapeHtml(item.unit)}</div></div>` : ""}
       </div>
       <div style="font-size:.85rem;margin-bottom:12px;color:var(--muted)">Контакты: ${escapeHtml(item.supplier_phone || "")} · ${escapeHtml(item.supplier_email || "")}</div>
+      ${purchaseRequestId ? `<div style="font-size:.82rem;background:var(--accent-bg,#eff6ff);color:var(--accent,#2563eb);border-radius:6px;padding:6px 10px;margin-bottom:8px">🔗 Привязать к заявке на закупку #${purchaseRequestId}</div>` : ""}
       <form id="inquiry-modal-form" style="display:grid;gap:10px">
         <label style="font-size:.88rem">Количество (${escapeHtml(item.unit)})
           <input type="number" name="quantity" value="${item.min_order_qty || 1}" min="${item.min_order_qty || 1}" step="1" required />
@@ -5453,6 +5535,7 @@ function showInquiryModal(item) {
     const body = { quantity: Number(fd.get("quantity")) };
     const notes = (fd.get("notes") || "").trim();
     if (notes) body.notes = notes;
+    if (purchaseRequestId) body.purchase_request_id = purchaseRequestId;
     const btn = document.getElementById("inquiry-submit-btn");
     const result = document.getElementById("inquiry-modal-result");
     try {
@@ -5514,6 +5597,34 @@ async function initMarketplace() {
       if (!item) return;
       showInquiryModal(item);
     });
+  });
+
+  // Compare toggle
+  document.querySelectorAll("[data-mp-compare]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const itemId = Number(btn.dataset.mpCompare);
+      if (!state.ui.compareItems) state.ui.compareItems = [];
+      const idx = state.ui.compareItems.indexOf(itemId);
+      if (idx >= 0) {
+        state.ui.compareItems = state.ui.compareItems.filter((id) => id !== itemId);
+      } else {
+        if (state.ui.compareItems.length >= 4) {
+          showAlert("Можно сравнить не более 4 позиций одновременно");
+          return;
+        }
+        state.ui.compareItems = [...state.ui.compareItems, itemId];
+      }
+      render();
+      if (state.view === "marketplace") initMarketplace();
+    });
+  });
+
+  // Compare bar buttons
+  el("mp-compare-now-btn")?.addEventListener("click", () => showCompareModal());
+  el("mp-compare-clear-btn")?.addEventListener("click", () => {
+    state.ui.compareItems = [];
+    render();
+    if (state.view === "marketplace") initMarketplace();
   });
 
   // "Load more" pagination
@@ -6468,6 +6579,7 @@ function renderSupplierMyCatalog() {
         ${item.min_order_qty > 1 ? `<span>Мин. заказ: <strong>${item.min_order_qty}</strong></span>` : ""}
         ${item.stock_qty != null ? `<span>В наличии: <strong>${item.stock_qty} ${escapeHtml(item.unit)}</strong></span>` : ""}
         ${item.delivery_days ? `<span>Доставка: <strong>${item.delivery_days} дн.</strong></span>` : ""}
+        ${item.valid_until ? `<span style="color:${new Date(item.valid_until) < new Date() ? "var(--danger,#dc2626)" : "var(--success,#16a34a)"}">До: <strong>${item.valid_until}</strong></span>` : ""}
         <span class="badge ${item.is_active ? "ok" : "danger"}">${item.is_active ? "Активен" : "Скрыт"}</span>
       </div>
       ${item.description ? `<div style="font-size:.85rem;color:var(--muted);margin-top:6px">${escapeHtml(item.description)}</div>` : ""}
@@ -6491,6 +6603,7 @@ function renderSupplierMyCatalog() {
             <label style="font-size:.85rem">В наличии<input type="number" name="stock_qty" value="${item.stock_qty ?? ""}" min="0" step="0.001" /></label>
             <label style="font-size:.85rem">Доставка (дней)<input type="number" name="delivery_days" value="${item.delivery_days ?? ""}" min="0" /></label>
             <label style="font-size:.85rem">Категория<input type="text" name="category" value="${escapeAttr(item.category||"")}" list="catalog-categories-list" /></label>
+            <label style="font-size:.85rem">Действует до<input type="date" name="valid_until" value="${escapeAttr(item.valid_until||"")}" title="Срок действия цены" /></label>
           </div>
           <label style="font-size:.85rem">Описание<textarea name="description" rows="2">${escapeHtml(item.description||"")}</textarea></label>
           <div style="display:flex;gap:8px">
@@ -6574,6 +6687,7 @@ function renderSupplierMyCatalog() {
             <label style="font-size:.85rem">В наличии<input type="number" name="stock_qty" placeholder="1000" min="0" step="0.001" /></label>
             <label style="font-size:.85rem">Доставка (дней)<input type="number" name="delivery_days" placeholder="3" min="0" /></label>
             <label style="font-size:.85rem">Категория<input type="text" name="category" placeholder="Расходники" list="catalog-categories-list" /></label>
+            <label style="font-size:.85rem">Действует до<input type="date" name="valid_until" title="Срок действия цены" /></label>
           </div>
           <label style="font-size:.85rem">Описание<textarea name="description" rows="2" placeholder="Краткое описание товара"></textarea></label>
           <div style="display:flex;gap:8px">
@@ -6619,6 +6733,7 @@ function renderSupplierProfile() {
   const p = state.data.supplierPortal.profile;
   if (!p) return `<div class="panel"><p style="color:var(--muted)">Загрузка...</p></div>`;
   const field = (label, val) => val ? `<div style="margin-bottom:6px"><span style="color:var(--muted);font-size:.82rem">${label}</span><div style="font-weight:500">${escapeHtml(String(val))}</div></div>` : "";
+  const fieldHtml = (label, html) => html ? `<div style="margin-bottom:6px"><span style="color:var(--muted);font-size:.82rem">${label}</span><div style="font-weight:500">${html}</div></div>` : "";
   const stats = state.data.supplierPortal.stats;
   const statsCard = stats ? `
     <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(110px,1fr));gap:8px;margin-bottom:12px">
@@ -6640,25 +6755,35 @@ function renderSupplierProfile() {
       <h3 style="margin:0 0 12px">${escapeHtml(p.name||"")}</h3>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:16px">
         ${field("БИН", p.bin)}
+        ${field("ИНН", p.inn)}
         ${field("Рейтинг", p.rating != null ? `${p.rating} ★` : null)}
         ${field("Email", p.email)}
         ${field("Телефон", p.phone)}
         ${field("Контактное лицо", p.contact_person)}
         ${field("Город", p.city)}
         ${field("Адрес", p.address)}
+        ${fieldHtml("Сайт", p.website ? `<a href="${escapeAttr(p.website)}" target="_blank" rel="noopener">${escapeHtml(p.website)}</a>` : null)}
         ${field("Срок доставки", p.delivery_days != null ? `${p.delivery_days} дней` : null)}
       </div>
+      ${p.bank_details ? `<div style="background:var(--surface-2,#f5f5f5);border-radius:6px;padding:10px 12px;font-size:.88rem;white-space:pre-wrap;margin-bottom:10px"><span style="color:var(--muted);display:block;font-size:.78rem;margin-bottom:4px">Банковские реквизиты</span>${escapeHtml(p.bank_details)}</div>` : ""}
       ${p.notes ? `<div style="font-size:.9rem;color:var(--muted)">${escapeHtml(p.notes)}</div>` : ""}
       <hr style="margin:16px 0">
       <details>
         <summary style="cursor:pointer;font-weight:600;color:var(--accent)">Редактировать контактную информацию</summary>
         <form id="supplier-profile-edit-form" style="margin-top:10px;display:grid;gap:8px">
-          <label>Email<input type="email" name="email" value="${escapeAttr(p.email||"")}" /></label>
-          <label>Телефон<input type="text" name="phone" value="${escapeAttr(p.phone||"")}" /></label>
-          <label>Контактное лицо<input type="text" name="contact_person" value="${escapeAttr(p.contact_person||"")}" /></label>
-          <label>Город<input type="text" name="city" value="${escapeAttr(p.city||"")}" /></label>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+            <label>Email<input type="email" name="email" value="${escapeAttr(p.email||"")}" /></label>
+            <label>Телефон<input type="text" name="phone" value="${escapeAttr(p.phone||"")}" /></label>
+            <label>Контактное лицо<input type="text" name="contact_person" value="${escapeAttr(p.contact_person||"")}" /></label>
+            <label>Город<input type="text" name="city" value="${escapeAttr(p.city||"")}" /></label>
+            <label>Срок доставки (дней)<input type="number" name="delivery_days" value="${escapeAttr(String(p.delivery_days||""))}" min="0" /></label>
+            <label>ИНН<input type="text" name="inn" value="${escapeAttr(p.inn||"")}" placeholder="Введите ИНН" /></label>
+          </div>
           <label>Адрес<input type="text" name="address" value="${escapeAttr(p.address||"")}" /></label>
-          <label>Срок доставки (дней)<input type="number" name="delivery_days" value="${escapeAttr(String(p.delivery_days||""))}" min="0" /></label>
+          <label>Сайт<input type="url" name="website" value="${escapeAttr(p.website||"")}" placeholder="https://example.com" /></label>
+          <label>Банковские реквизиты
+            <textarea name="bank_details" rows="3" placeholder="Наименование банка, ИИК, БИК, КБЕ...">${escapeHtml(p.bank_details||"")}</textarea>
+          </label>
           <label>Примечания<textarea name="notes" rows="2">${escapeHtml(p.notes||"")}</textarea></label>
           <button type="submit" class="primary" id="save-supplier-profile-btn">Сохранить</button>
         </form>
@@ -8008,6 +8133,7 @@ function bindActions() {
   document.querySelectorAll("[data-show-pr-offers]").forEach((btn) => {
     btn.addEventListener("click", () => {
       const productId = Number(btn.dataset.showPrOffers);
+      const purchaseRequestId = btn.dataset.prId ? Number(btn.dataset.prId) : null;
       // Find the nearest offers panel — in purchase-requests, balances, or recommendations
       const panel = document.getElementById("pr-offers-panel") || document.getElementById("pr-offers-panel-balances");
       if (!panel) return;
@@ -8044,7 +8170,7 @@ function bindActions() {
         ob.addEventListener("click", () => {
           const itemId = ob.dataset.mpOrder;
           const item = (state.data.marketplace?.items || []).find((i) => String(i.id) === String(itemId));
-          if (item) showInquiryModal(item);
+          if (item) showInquiryModal(item, purchaseRequestId);
         });
       });
     });
