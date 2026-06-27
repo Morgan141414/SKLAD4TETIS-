@@ -107,12 +107,14 @@
 
 
     <div id="login-screen" style="display:none; position:fixed; inset:0; background:#f5f5f5; align-items:center; justify-content:center; z-index:1000">
-      <div style="background:white; padding:2rem; border-radius:8px; box-shadow:0 2px 16px rgba(0,0,0,0.12); min-width:320px; max-width:380px; text-align:center">
-        <h2 style="margin:0 0 .75rem">Склад</h2>
-        <p style="color:#64748b; font-size:.9rem; margin:0 0 1.5rem">Вход в склад выполняется через tetis1.kz. Откройте tetis1.kz, войдите в свой аккаунт и перейдите в раздел «Склад».</p>
-        <a href="https://tetis1.kz/" style="display:block; width:100%; box-sizing:border-box; padding:.6rem; background:#2563eb; color:white; border:none; border-radius:4px; font-size:1rem; text-decoration:none">Перейти на tetis1.kz</a>
-        <div id="login-error" style="color:red; margin-top:1rem; font-size:.85rem; display:none"></div>
-        <button id="show-supplier-application" type="button" class="secondary" style="width:100%; margin-top:.75rem">Стать поставщиком</button>
+      <div style="background:white; padding:2rem; border-radius:8px; box-shadow:0 2px 16px rgba(0,0,0,0.12); min-width:320px; max-width:400px; text-align:center">
+        <div style="width:48px;height:48px;background:#2563eb;border-radius:12px;display:flex;align-items:center;justify-content:center;margin:0 auto .75rem;color:white;font-size:1.5rem">📦</div>
+        <h2 style="margin:0 0 .5rem">Склад</h2>
+        <p id="login-screen-message" style="color:#64748b; font-size:.9rem; margin:0 0 1.25rem">Для входа в склад войдите в свой аккаунт на tetis1.kz и откройте раздел «Склад».</p>
+        <a href="https://tetis1.kz/" style="display:block; width:100%; box-sizing:border-box; padding:.65rem; background:#2563eb; color:white; border:none; border-radius:6px; font-size:.95rem; text-decoration:none; font-weight:600">Перейти на tetis1.kz</a>
+        <div id="login-error" style="color:#dc2626; margin-top:.75rem; font-size:.83rem; display:none; background:#fff0f0; border-radius:6px; padding:8px 12px"></div>
+        <button id="show-supplier-application" type="button" class="secondary" style="width:100%; margin-top:.75rem; font-size:.88rem">Стать поставщиком</button>
+        <p style="margin-top:1rem;font-size:.78rem;color:#94a3b8">Уже вошли в tetis1.kz и видите эту страницу? <button onclick="location.reload()" style="background:none;border:none;color:#2563eb;cursor:pointer;font-size:.78rem;text-decoration:underline;padding:0">Нажмите здесь</button></p>
       </div>
     </div>
 
@@ -161,7 +163,7 @@
       </div>
     </div>
     <script src="html5-qrcode.min.js"></script>
-    <script src="app.js?v=81"></script>
+    <script src="app.js?v=82"></script>
     <script>
       if ("serviceWorker" in navigator) {
         let refreshedByWorker = false;

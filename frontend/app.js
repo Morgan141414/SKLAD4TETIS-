@@ -572,6 +572,14 @@ const managerOnlyViews = new Set(["audit", "users", "supplier-map", "auctions"])
 const el = (id) => document.getElementById(id);
 
 function readTetisToken() {
+  // tetis1.kz stores token as a plain string under "qormed_token"
+  for (const storage of [window.localStorage, window.sessionStorage]) {
+    try {
+      const direct = storage.getItem("qormed_token");
+      if (typeof direct === "string" && direct.trim()) return direct.trim();
+    } catch { /* ignore */ }
+  }
+  // Fallback: older auth-storage format with JSON envelope
   for (const storage of [window.localStorage, window.sessionStorage]) {
     try {
       const raw = storage.getItem("auth-storage");
@@ -583,6 +591,10 @@ function readTetisToken() {
     }
   }
   return "";
+}
+
+function hasTetisSession() {
+  return !!readTetisToken();
 }
 
 function readTetisActiveOrgId() {
@@ -635,6 +647,21 @@ async function showLoginScreen() {
   const loginScreen = el("login-screen");
   if (loginScreen) {
     loginScreen.style.display = "flex";
+  }
+  const hasTetis = hasTetisSession();
+  // Hide "Стать поставщиком" when user already has tetis session
+  const becomeBtn = el("show-supplier-application");
+  if (becomeBtn) {
+    becomeBtn.style.display = hasTetis ? "none" : "";
+  }
+  // Show contextual message
+  const msg = el("login-screen-message");
+  if (msg) {
+    if (hasTetis) {
+      msg.textContent = "Ваш аккаунт tetis1.kz не связан ни с одним складом. Обратитесь к администратору системы, чтобы вас добавили как пользователя склада.";
+    } else {
+      msg.textContent = "Для входа в склад войдите в свой аккаунт на tetis1.kz и откройте раздел «Склад».";
+    }
   }
 }
 
