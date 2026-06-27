@@ -48,6 +48,8 @@
             <input id="global-search" class="search-input" aria-label="Глобальный поиск по складу" placeholder="Поиск по товару, партии, складу" />
             <button id="supplier-mode-toggle" class="secondary" type="button" style="display:none" title="Переключиться между сотрудником склада и поставщиком">Режим: Поставщик</button>
             <button id="become-supplier-button" class="secondary" type="button" style="display:none" title="Подать заявку на статус поставщика">Стать поставщиком</button>
+            <button id="supplier-login-button" class="secondary" type="button" style="display:none" title="Войти с логином и паролем поставщика">Войти как поставщик</button>
+            <button id="supplier-logout-button" class="secondary" type="button" style="display:none" title="Выйти из аккаунта поставщика">Выйти из аккаунта</button>
             <button id="density-button" class="secondary" type="button" title="Сделать строки таблиц компактнее" aria-pressed="false">Компактно</button>
             <span id="api-status" class="status-dot muted">Проверяем связь</span>
             <span id="offline-badge" class="offline-badge" style="display:none" title="Нет соединения — операции сохраняются в очередь">
@@ -163,7 +165,7 @@
       </div>
     </div>
     <script src="html5-qrcode.min.js"></script>
-    <script src="app.js?v=84"></script>
+    <script src="app.js?v=85"></script>
     <script>
       if ("serviceWorker" in navigator) {
         let refreshedByWorker = false;

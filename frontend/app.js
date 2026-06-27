@@ -442,15 +442,18 @@ function getLang() { return _lang; }
 const APP_BASE = window.location.pathname.startsWith("/sklad") ? "/sklad" : "";
 const API = `${APP_BASE}/api/v1`;
 
+const _savedSupplierToken = (function() {
+  try { return localStorage.getItem("sklad_supplier_token") || ""; } catch(_) { return ""; }
+})();
 const state = {
   view: "dashboard",
   realtime: "offline",
   loadWarnings: [],
   auth: {
-    source: "demo",
+    source: _savedSupplierToken ? "login" : "demo",
     actor: null,
     blockedMessage: "",
-    loginToken: "",
+    loginToken: _savedSupplierToken,
     supplierId: null,
   },
   ui: {
@@ -672,6 +675,81 @@ function hideLoginScreen() {
   document.getElementById("auth-error-banner")?.remove();
 }
 
+
+function showSupplierLoginModal() {
+  const existing = document.getElementById("supplier-login-modal");
+  if (existing) { existing.remove(); return; }
+  const modal = document.createElement("div");
+  modal.id = "supplier-login-modal";
+  modal.style.cssText = "position:fixed;inset:0;background:rgba(0,0,0,.4);display:flex;align-items:center;justify-content:center;z-index:1100";
+  modal.innerHTML = `
+    <div style="background:#fff;border-radius:10px;padding:1.5rem;min-width:300px;max-width:360px;width:100%;box-shadow:0 4px 24px rgba(0,0,0,.18)">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem">
+        <h3 style="margin:0;font-size:1rem">Вход в портал поставщика</h3>
+        <button id="supplier-login-close" style="background:none;border:none;font-size:1.2rem;cursor:pointer;color:#6b7280">x</button>
+      </div>
+      <div style="margin-bottom:.75rem">
+        <label style="display:block;font-size:.82rem;color:#6b7280;margin-bottom:.25rem">Email</label>
+        <input id="supplier-login-email" type="email" autocomplete="email" style="width:100%;box-sizing:border-box;padding:.5rem;border:1px solid #d1d5db;border-radius:6px;font-size:.9rem" placeholder="email@example.com">
+      </div>
+      <div style="margin-bottom:1rem">
+        <label style="display:block;font-size:.82rem;color:#6b7280;margin-bottom:.25rem">Пароль</label>
+        <input id="supplier-login-password" type="password" autocomplete="current-password" style="width:100%;box-sizing:border-box;padding:.5rem;border:1px solid #d1d5db;border-radius:6px;font-size:.9rem" placeholder="...">
+      </div>
+      <div id="supplier-login-error" style="display:none;background:#fef2f2;color:#dc2626;border-radius:6px;padding:.5rem .75rem;font-size:.83rem;margin-bottom:.75rem"></div>
+      <button id="supplier-login-submit" class="primary" style="width:100%;margin:0">Войти</button>
+    </div>`;
+  document.body.appendChild(modal);
+  const close = () => modal.remove();
+  modal.querySelector("#supplier-login-close").addEventListener("click", close);
+  modal.addEventListener("click", e => { if (e.target === modal) close(); });
+  const submit = async () => {
+    const email = modal.querySelector("#supplier-login-email").value.trim();
+    const password = modal.querySelector("#supplier-login-password").value;
+    const errEl = modal.querySelector("#supplier-login-error");
+    const btn = modal.querySelector("#supplier-login-submit");
+    errEl.style.display = "none";
+    if (!email || !password) { errEl.textContent = "Введите email и пароль"; errEl.style.display = ""; return; }
+    btn.disabled = true; btn.textContent = "Входим...";
+    try {
+      const resp = await fetch(API + "/auth/supplier-login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email, password }),
+      });
+      const data = await resp.json();
+      if (!resp.ok) {
+        errEl.textContent = data?.detail?.message || data?.detail || "Неверный email или пароль";
+        errEl.style.display = "";
+        btn.disabled = false; btn.textContent = "Войти";
+        return;
+      }
+      const token = data.access_token;
+      try { localStorage.setItem("sklad_supplier_token", token); } catch(_) {}
+      state.auth.loginToken = token;
+      state.auth.source = "login";
+      el("auth-token").value = token;
+      modal.remove();
+      await loadAll();
+    } catch(e) {
+      errEl.textContent = "Ошибка соединения: " + e.message;
+      errEl.style.display = "";
+      btn.disabled = false; btn.textContent = "Войти";
+    }
+  };
+  modal.querySelector("#supplier-login-submit").addEventListener("click", submit);
+  modal.querySelector("#supplier-login-password").addEventListener("keydown", e => { if (e.key === "Enter") submit(); });
+  setTimeout(() => modal.querySelector("#supplier-login-email")?.focus(), 50);
+}
+
+function supplierLogout() {
+  try { localStorage.removeItem("sklad_supplier_token"); } catch(_) {}
+  state.auth.loginToken = "";
+  state.auth.source = "demo";
+  el("auth-token").value = "";
+  loadAll();
+}
+
 function showSupplierApplicationScreen() {
   const form = el("supplier-application-form");
   const result = el("supplier-application-result");
@@ -769,6 +847,18 @@ function applyActorProfile(profile) {
   if (becomeSupplierButton) {
     becomeSupplierButton.style.display = (!canBeSupplier && state.auth.source === "tetis") ? "" : "none";
     if (canBeSupplier) becomeSupplierButton.style.display = "none";
+  }
+  const supplierLoginBtn = el("supplier-login-button");
+  if (supplierLoginBtn) {
+    if (canBeSupplier || state.auth.source === "login") {
+      supplierLoginBtn.style.display = "none";
+    } else {
+      supplierLoginBtn.style.display = "";
+    }
+  }
+  const supplierLogoutBtn = el("supplier-logout-button");
+  if (supplierLogoutBtn) {
+    supplierLogoutBtn.style.display = (state.auth.source === "login") ? "" : "none";
   }
   // Show refresh banner if supplier access was approved since last login (token is stale)
   const existingBanner = document.getElementById("supplier-access-banner");
@@ -7388,6 +7478,12 @@ async function loadAll() {
       state.auth.blockedMessage = "";
       el("api-status").className = "status-dot bad";
       el("api-status").textContent = "Ошибка входа";
+      if (state.auth.source === "login") {
+        try { localStorage.removeItem("sklad_supplier_token"); } catch(_) {}
+        state.auth.loginToken = "";
+        state.auth.source = "demo";
+        el("auth-token").value = "";
+      }
       await showLoginScreen();
     } else {
       el("api-status").className = "status-dot bad";
@@ -9082,6 +9178,8 @@ el("hide-supplier-application")?.addEventListener("click", () => {
 });
 el("supplier-application-form")?.addEventListener("submit", submitSupplierApplication);
 
+el("supplier-login-button")?.addEventListener("click", () => showSupplierLoginModal());
+el("supplier-logout-button")?.addEventListener("click", () => supplierLogout());
 el("supplier-mode-toggle")?.addEventListener("click", async () => {
   await toggleSupplierMode();
   const btn = el("supplier-mode-toggle");
