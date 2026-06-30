@@ -8692,6 +8692,17 @@ class WarehouseService:
             ).fetchone()
             return int(row["c"])
 
+    def list_warehouse_ids_by_mis_clinic(self, mis_clinic_id: str) -> list[int]:
+        """All sklad warehouses mapped to a given MIS clinic (any room), for SSO scoping."""
+        connection = self.database.connect()
+        try:
+            rows = connection.execute(
+                "SELECT id FROM warehouses WHERE mis_clinic_id = ?", (mis_clinic_id,)
+            ).fetchall()
+            return [row["id"] for row in rows]
+        finally:
+            self._close_connection(connection)
+
     # === MIS PROCEDURE CONSUMPTION TEMPLATES ===
 
     def create_procedure_consumption_template(self, data: dict, actor_id: str) -> dict:

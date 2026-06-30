@@ -262,6 +262,25 @@ class WarehouseServiceTest(TestCase):
         self.assertEqual(self.service.list_warehouse_ids_for_tetis_org(" org-1 "), [first["id"], second["id"]])
         self.assertEqual(self.service.list_warehouse_ids_for_tetis_org(""), [])
 
+    def test_mis_clinic_mapping_lists_local_warehouse_ids(self) -> None:
+        first = self.service.update_warehouse(
+            self.warehouse["id"],
+            WarehouseUpdate(name="Основной склад", department="Стационар", mis_clinic_id="clinic-1"),
+        )
+        second = self.service.create_warehouse(
+            WarehouseCreate(name="Кабинет 2", department="Стоматология", mis_clinic_id="clinic-1")
+        )
+        third = self.service.create_warehouse(
+            WarehouseCreate(name="Чужая клиника", mis_clinic_id="clinic-2")
+        )
+
+        self.assertEqual(
+            self.service.list_warehouse_ids_by_mis_clinic("clinic-1"),
+            [first["id"], second["id"]],
+        )
+        self.assertEqual(self.service.list_warehouse_ids_by_mis_clinic("clinic-2"), [third["id"]])
+        self.assertEqual(self.service.list_warehouse_ids_by_mis_clinic("unknown-clinic"), [])
+
     def test_sensor_readings_are_stored_with_threshold_status(self) -> None:
         device = self.service.create_sensor_device(
             SensorDeviceCreate(

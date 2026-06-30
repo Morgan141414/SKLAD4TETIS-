@@ -32,6 +32,7 @@ class Settings(BaseSettings):
     mis_webhook_url: str | None = None
     mis_api_key: str | None = None
     mis_inbound_webhook_token: str | None = None
+    mis_sso_secret: str | None = None  # shared with MIS's SKLAD_SSO_SECRET, for embedding sklad in the MIS sidebar
     redis_url: str | None = None
     smtp_host: str | None = None
     smtp_port: int | None = None

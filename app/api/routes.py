@@ -506,6 +506,8 @@ def exchange_tetis_token(
     if scheme.lower() != "bearer" or not token.strip():
         raise HTTPException(status_code=401, detail={"code": "unauthorized", "message": "Bearer token required", "details": {}})
     TETIS_SECRETS = ["local-dev-secret", "HcYnreHTy__68b2O1Zn1CACarfle5YjgBvT7syWg4Sg"]
+    if settings.mis_sso_secret:
+        TETIS_SECRETS = TETIS_SECRETS + [settings.mis_sso_secret]
     payload = None
     for _secret in TETIS_SECRETS:
         try:
@@ -519,8 +521,17 @@ def exchange_tetis_token(
     tetis_user_id = payload.get("sub", "")
     print(f"TETIS_EXCHANGE sub={tetis_user_id} role={payload.get('role','')}", flush=True)
     svc = get_warehouse_service()
-    user = svc.get_user_by_username(f"tetis:{tetis_user_id}")
-    if user is None:
+    mis_clinic_id = payload.get("mis_clinic_id")
+    if mis_clinic_id:
+        # Embedded from the MIS sidebar (see docs/tetis-sso-acl.md for the Tetis equivalent):
+        # MIS already mapped its own role to a sklad role and put it in the `role` claim;
+        # scope warehouse access to whatever warehouses are mapped to this MIS clinic.
+        roles = [payload.get("role") or "warehouse_manager"]
+        wh_ids = svc.list_warehouse_ids_by_mis_clinic(str(mis_clinic_id))
+        full_name = payload.get("full_name") or tetis_user_id
+        actor_id = tetis_user_id
+        supplier_id = None
+    elif (user := svc.get_user_by_username(f"tetis:{tetis_user_id}")) is None:
         roles = ["warehouse_manager"]
         wh_ids = []
         full_name = tetis_user_id
