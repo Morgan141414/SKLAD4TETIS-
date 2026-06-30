@@ -498,7 +498,7 @@ const state = {
     repackTemplates: [],
     procedureConsumptionTemplates: [],
     supplierApplications: { items: [], total: 0 },
-    supplierPortal: { auctions: [], myBids: {}, priceHistory: [], shipments: [], reviews: [], profile: null, myApplications: [], myCatalog: [], inquiries: [], stats: null, orders: { items: [], total: 0 }, catalogAnalytics: [] },
+    supplierPortal: { auctions: [], myBids: {}, priceHistory: [], shipments: [], reviews: [], profile: null, myApplications: [], myCatalog: [], inquiries: [], stats: null, orders: { items: [], total: 0 }, catalogAnalytics: [], verificationDocs: [] },
     analytics: { items: [], analysis_days: 90, warehouse_id: null, generated_at: null },
     abcXyzRuns: { items: [], total: 0 },
     sensorDevices: [],
@@ -561,6 +561,7 @@ const views = [
   ["supplier-map", `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 21s-7-6.5-7-11.5a7 7 0 1 1 14 0C19 14.5 12 21 12 21z"/><circle cx="12" cy="9.5" r="2.5"/></svg>`, "Карта поставщиков"],
   ["auctions", `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><line x1="4" y1="20" x2="20" y2="20"/><polyline points="4 14 9 9 13 13 20 5"/><polyline points="15 5 20 5 20 10"/></svg>`, "Аукционы"],
   ["marketplace", `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3h18l-2 9H5L3 3z"/><path d="M5 12v6a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-6"/><path d="M9 21v-6h6v6"/></svg>`, "Маркетплейс"],
+  ["support", `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 16v-1.5c1.66 0 3-1.12 3-2.5S13.66 9.5 12 9.5 9 10.62 9 12"/><line x1="12" y1="18.5" x2="12" y2="18.51"/></svg>`, "Поддержка"],
 ];
 
 const navGroups = [
@@ -570,9 +571,10 @@ const navGroups = [
   { label: "Учёт и документы", ids: ["catalog", "documents", "movements", "inventory", "conditions"] },
   { label: "Аналитика", ids: ["analytics", "notifications"] },
   { label: "Администрирование", ids: ["audit", "users"] },
+  { label: "Помощь", ids: ["support"] },
 ];
 
-const limitedRoleViews = new Set(["dashboard", "tablet-writeoff", "stock", "movements", "notifications"]);
+const limitedRoleViews = new Set(["dashboard", "tablet-writeoff", "stock", "movements", "notifications", "support"]);
 const limitedRoles = new Set(["nurse", "doctor", "other"]);
 const managerOnlyViews = new Set(["audit", "users", "supplier-map", "auctions"]);
 
@@ -5118,16 +5120,21 @@ function renderMarketplace() {
 
   const myInquiries = state.data.myInquiries || { items: [], total: 0 };
   const pendingMyCount = (myInquiries.items || []).filter((i) => i.status === "responded").length;
+  const cart = state.data.cart || { items: [], total_items: 0, total_amount: 0 };
 
   const tabBar = `
-    <div style="display:flex;gap:4px;margin-bottom:16px;border-bottom:2px solid var(--line,#eee);padding-bottom:0">
+    <div style="display:flex;gap:4px;margin-bottom:16px;border-bottom:2px solid var(--line,#eee);padding-bottom:0;flex-wrap:wrap">
       <button class="${tab === "catalog" ? "active" : "secondary"}" style="border-radius:6px 6px 0 0;border-bottom:none;font-size:.9rem" data-mp-tab="catalog">🛍️ Каталог товаров</button>
       <button class="${tab === "suppliers" ? "active" : "secondary"}" style="border-radius:6px 6px 0 0;border-bottom:none;font-size:.9rem" data-mp-tab="suppliers">🏢 Поставщики</button>
-      <button class="${tab === "my-inquiries" ? "active" : "secondary"}" style="border-radius:6px 6px 0 0;border-bottom:none;font-size:.9rem" data-mp-tab="my-inquiries">📋 Мои запросы${pendingMyCount > 0 ? ` <span style="background:var(--success,#16a34a);color:#fff;border-radius:10px;padding:0 6px;font-size:.75rem;margin-left:4px">${pendingMyCount}</span>` : ""}</button>
+      <button class="${tab === "cart" ? "active" : "secondary"}" style="border-radius:6px 6px 0 0;border-bottom:none;font-size:.9rem" data-mp-tab="cart">🛒 Корзина${cart.total_items > 0 ? ` <span style="background:var(--accent,#2563eb);color:#fff;border-radius:10px;padding:0 6px;font-size:.75rem;margin-left:4px">${cart.total_items}</span>` : ""}</button>
+      <button class="${tab === "my-inquiries" ? "active" : "secondary"}" style="border-radius:6px 6px 0 0;border-bottom:none;font-size:.9rem" data-mp-tab="my-inquiries">📋 Мои заказы${pendingMyCount > 0 ? ` <span style="background:var(--success,#16a34a);color:#fff;border-radius:10px;padding:0 6px;font-size:.75rem;margin-left:4px">${pendingMyCount}</span>` : ""}</button>
     </div>`;
 
   if (tab === "suppliers") {
     return tabBar + renderMarketplaceSuppliers(suppliers, filter);
+  }
+  if (tab === "cart") {
+    return tabBar + renderCart(cart);
   }
   if (tab === "my-inquiries") {
     return tabBar + renderMyInquiries(myInquiries.items || []);
@@ -5135,11 +5142,14 @@ function renderMarketplace() {
 
   function itemCard(item) {
     const rating = item.supplier_rating != null ? `${"★".repeat(Math.round(item.supplier_rating))}${"☆".repeat(5 - Math.round(item.supplier_rating))}` : "";
+    const itemRating = item.avg_rating != null ? `<span style="color:var(--warning,#f59e0b);font-size:.8rem">★ ${item.avg_rating} (${item.review_count})</span>` : "";
     return `
     <div class="panel" style="display:flex;flex-direction:column;gap:6px">
+      ${item.image_url ? `<img src="${escapeAttr(item.image_url)}" alt="" style="width:100%;height:160px;object-fit:cover;border-radius:6px;margin-bottom:2px;cursor:pointer" loading="lazy" data-mp-detail="${item.id}" />` : ""}
       <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px">
         <div style="flex:1">
-          <div style="font-weight:700;font-size:1rem">${escapeHtml(item.product_name)}</div>
+          <div style="font-weight:700;font-size:1rem;cursor:pointer" data-mp-detail="${item.id}">${escapeHtml(item.product_name)}</div>
+          ${itemRating ? `<div style="margin:2px 0">${itemRating}</div>` : ""}
           ${item.sku ? `<div style="font-size:.78rem;color:var(--muted)">Артикул: ${escapeHtml(item.sku)}</div>` : ""}
           ${item.category ? `<span style="font-size:.78rem;background:var(--surface-2,#eef);padding:1px 7px;border-radius:10px;color:var(--accent)">${escapeHtml(item.category)}</span>` : ""}
         </div>
@@ -5150,7 +5160,7 @@ function renderMarketplace() {
       </div>
       <div style="border-top:1px solid var(--line,#eee);padding-top:6px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">
         <div style="flex:1">
-          <div style="font-weight:600;font-size:.9rem">${escapeHtml(item.supplier_name || "")}</div>
+          <div style="font-weight:600;font-size:.9rem;cursor:pointer" data-mp-supplier-profile="${item.supplier_id}">${escapeHtml(item.supplier_name || "")}${item.supplier_is_verified ? ` <span title="Поставщик проверен" style="color:var(--success,#16a34a)">✓</span>` : ""}</div>
           <div style="font-size:.78rem;color:var(--muted)">${escapeHtml(item.supplier_city || "")} ${rating ? `· <span style="color:var(--warning)">${rating}</span>` : ""}</div>
         </div>
         <div style="font-size:.82rem;color:var(--muted);text-align:right">
@@ -5161,6 +5171,8 @@ function renderMarketplace() {
       </div>
       ${item.description ? `<div style="font-size:.83rem;color:var(--muted)">${escapeHtml(item.description)}</div>` : ""}
       <div style="display:flex;gap:8px;margin-top:2px;flex-wrap:wrap">
+        <button class="secondary" style="font-size:.82rem" data-mp-detail="${item.id}">Подробнее</button>
+        <button class="primary" style="font-size:.82rem" data-mp-cart-add="${item.id}">🛒 В корзину</button>
         <button class="primary" style="font-size:.82rem" data-mp-order="${item.id}" data-supplier-id="${item.supplier_id}">Запросить</button>
         <button class="${(state.ui.compareItems||[]).includes(item.id) ? "primary" : "secondary"}" style="font-size:.82rem" data-mp-compare="${item.id}">
           ${(state.ui.compareItems||[]).includes(item.id) ? "✓ В сравнении" : "Сравнить"}
@@ -5176,7 +5188,9 @@ function renderMarketplace() {
       <input type="text" id="mp-search" placeholder="Поиск по названию, артикулу..." value="${escapeAttr(filter.search)}" style="flex:1;min-width:160px" />
       <select id="mp-category" style="padding:.35rem .5rem;border:1px solid var(--line);border-radius:6px">
         <option value="">Все категории</option>
-        ${categories.map((c) => `<option value="${escapeAttr(c)}" ${filter.category === c ? "selected" : ""}>${escapeHtml(c)}</option>`).join("")}
+        ${(state.data.catalogTaxonomy||[]).length
+          ? (state.data.catalogTaxonomy||[]).map((c) => `<option value="${escapeAttr(c.name)}" ${filter.category === c.name ? "selected" : ""}>${c.icon || ""} ${escapeHtml(c.name)}</option>`).join("")
+          : categories.map((c) => `<option value="${escapeAttr(c)}" ${filter.category === c ? "selected" : ""}>${escapeHtml(c)}</option>`).join("")}
       </select>
       <select id="mp-sort" style="padding:.35rem .5rem;border:1px solid var(--line);border-radius:6px">
         <option value="">По умолчанию</option>
@@ -5191,6 +5205,11 @@ function renderMarketplace() {
       <div style="color:var(--muted);font-size:.85rem">Найдено позиций: ${mp.total}</div>
       ${filter.search ? `<button class="secondary" style="font-size:.82rem" id="mp-bulk-inquire-btn" title="Отправить запрос всем поставщикам у которых есть этот товар">📤 Запросить у всех поставщиков</button>` : ""}
     </div>
+    ${(state.data.catalogTaxonomy||[]).length ? `
+      <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px">
+        <button class="${!filter.category ? 'active' : 'secondary'}" style="font-size:.8rem;padding:.25rem .8rem;border-radius:20px" data-mp-cat="">Все</button>
+        ${(state.data.catalogTaxonomy||[]).map((c) => `<button class="${filter.category === c.name ? 'active' : 'secondary'}" style="font-size:.8rem;padding:.25rem .8rem;border-radius:20px" data-mp-cat="${escapeAttr(c.name)}">${c.icon||""} ${escapeHtml(c.name)}</button>`).join("")}
+      </div>` : ""}
     <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:12px">
       ${mp.items.length ? mp.items.map(itemCard).join("") : `
         <div style="grid-column:1/-1;text-align:center;padding:40px 16px;color:var(--muted)">
@@ -5317,6 +5336,35 @@ function renderMarketplaceSuppliers(suppliers, filter) {
     </div>`;
 }
 
+function renderCart(cart) {
+  const items = cart.items || [];
+  if (!items.length) return `
+    <div class="panel" style="text-align:center;padding:40px 16px">
+      <div style="font-size:2.5rem;margin-bottom:8px">🛒</div>
+      <div style="color:var(--muted)">Корзина пуста.<br>Добавьте товары из каталога.</div>
+      <button class="primary" style="margin-top:16px" data-mp-tab="catalog">Перейти в каталог</button>
+    </div>`;
+  return `
+    ${items.map((it) => `
+      <div class="panel" style="display:flex;gap:12px;align-items:center;margin-bottom:10px;flex-wrap:wrap" id="cart-item-${it.id}">
+        ${it.image_url ? `<img src="${escapeAttr(it.image_url)}" alt="" style="width:64px;height:64px;object-fit:cover;border-radius:6px" />` : `<div style="width:64px;height:64px;border-radius:6px;background:var(--surface-2,#f0f0f0);display:flex;align-items:center;justify-content:center;font-size:1.5rem">🛍️</div>`}
+        <div style="flex:1;min-width:160px">
+          <div style="font-weight:600">${escapeHtml(it.product_name)}</div>
+          <div style="font-size:.82rem;color:var(--muted)">${escapeHtml(it.supplier_name || "")} · ${fmtMoneyKzt(it.unit_price)} тг/${escapeHtml(it.unit)}</div>
+          ${!it.is_active ? `<div style="font-size:.78rem;color:var(--danger,#dc2626)">Товар больше не активен</div>` : ""}
+        </div>
+        <div style="display:flex;align-items:center;gap:6px">
+          <input type="number" min="${it.min_order_qty || 1}" step="1" value="${it.quantity}" data-cart-qty="${it.id}" style="width:80px" />
+        </div>
+        <div style="font-weight:700;color:var(--accent);min-width:110px;text-align:right">${fmtMoneyKzt(Number(it.unit_price) * Number(it.quantity))} тг</div>
+        <button class="secondary" style="font-size:.82rem" data-cart-remove="${it.id}">✕</button>
+      </div>`).join("")}
+    <div class="panel" style="display:flex;justify-content:space-between;align-items:center;margin-top:8px">
+      <div style="font-size:1.05rem">Итого (${cart.total_items} поз.): <strong style="color:var(--accent)">${fmtMoneyKzt(cart.total_amount)} тг</strong></div>
+      <button class="primary" id="cart-checkout-btn">Оформить заказ →</button>
+    </div>`;
+}
+
 function renderSupplierMap() {
   const suppliers = state.data.supplierMap || [];
   const shipments = state.data.shipments?.items || [];
@@ -5376,6 +5424,34 @@ function renderSupplierMap() {
 </div>`;
 }
 
+const SHIPMENT_STATUS_LABELS = { planned: "Готовится", in_transit: "В пути", delivered: "Доставлено", delayed: "Задержка", cancelled: "Отменено" };
+
+function orderTrackingSteps(inq) {
+  const po = inq.purchase_order;
+  const shipment = inq.shipment;
+  const delivered = shipment && shipment.status === "delivered";
+  const steps = [
+    { label: "Запрос отправлен", done: true },
+    { label: "Ответ поставщика", done: !!inq.responded_at },
+    { label: "Заказ оформлен", done: !!po || inq.status === "ordered" },
+    { label: "Поставка", done: !!shipment, note: shipment ? (SHIPMENT_STATUS_LABELS[shipment.status] || shipment.status) : null },
+    { label: "Получено", done: delivered || inq.status === "closed" },
+  ];
+  return `
+    <div style="display:flex;align-items:center;flex-wrap:wrap;gap:2px;margin:8px 0;font-size:.78rem">
+      ${steps.map((s, i) => `
+        <span style="display:flex;align-items:center;gap:4px;color:${s.done ? "var(--success,#16a34a)" : "var(--muted)"}">
+          <span style="width:16px;height:16px;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;background:${s.done ? "var(--success,#16a34a)" : "var(--surface-2,#e5e5e5)"};color:#fff;font-size:.65rem">${s.done ? "✓" : i + 1}</span>
+          ${s.label}${s.note ? ` (${escapeHtml(s.note)})` : ""}
+        </span>
+        ${i < steps.length - 1 ? `<span style="width:14px;height:1px;background:var(--line,#ddd)"></span>` : ""}
+      `).join("")}
+    </div>
+    ${shipment && shipment.estimated_arrival ? `<div style="font-size:.78rem;color:var(--muted);margin-bottom:4px">Ожидаемое прибытие: ${escapeHtml(String(shipment.estimated_arrival))}${shipment.current_city ? ` · сейчас в ${escapeHtml(shipment.current_city)}` : ""}</div>` : ""}
+    ${po ? `<div style="font-size:.78rem;color:var(--muted);margin-bottom:4px">Заказ ${escapeHtml(po.po_number || "")} · статус: ${escapeHtml(po.status)}</div>` : ""}
+  `;
+}
+
 function renderMyInquiries(items) {
   const STATUS = {
     pending: { label: "Ожидает ответа", cls: "warning" },
@@ -5407,6 +5483,7 @@ function renderMyInquiries(items) {
         </div>
         <span class="badge ${st.cls}" style="white-space:nowrap">${st.label}</span>
       </div>
+      ${orderTrackingSteps(inq)}
       <div style="display:flex;gap:16px;flex-wrap:wrap;font-size:.88rem;margin-bottom:8px">
         <div>Кол-во: <strong>${inq.quantity} ${escapeHtml(inq.unit || "")}</strong></div>
         ${inq.unit_price ? `<div>Цена: <strong>${fmtMoneyKzt(inq.unit_price)} тг/${escapeHtml(inq.unit || "")}</strong></div>` : ""}
@@ -5419,16 +5496,192 @@ function renderMyInquiries(items) {
           ${inq.responded_at ? `<div style="font-size:.75rem;color:var(--muted);margin-top:2px">${String(inq.responded_at).slice(0, 16).replace("T", " ")}</div>` : ""}
         </div>` : ""}
       ${inq.status === "responded" ? `
-        <div style="display:flex;gap:8px;margin-top:4px">
-          <button class="primary" style="font-size:.82rem" data-inquiry-mark="${inq.id}" data-status="ordered">✓ Оформить заказ</button>
+        <div style="display:flex;gap:8px;margin-top:4px;flex-wrap:wrap">
+          <button class="secondary" style="font-size:.82rem" data-inquiry-chat="${inq.id}" data-chat-role="buyer">💬 Переписка</button>
+          <button class="primary" style="font-size:.82rem" data-create-po="${inq.id}" data-inquiry-json='${JSON.stringify({product_name:inq.product_name,supplier_name:inq.supplier_name,quantity:inq.quantity,unit:inq.unit,unit_price:inq.unit_price})}'>📄 Заказ (PO)</button>
+          <button class="primary" style="font-size:.82rem;background:var(--success,#16a34a)" data-inquiry-mark="${inq.id}" data-status="ordered">✓ Оформить заказ</button>
           <button class="secondary" style="font-size:.82rem" data-inquiry-mark="${inq.id}" data-status="closed">Закрыть</button>
+        </div>` : ""}
+      ${inq.status === "ordered" ? `
+        <div style="display:flex;gap:8px;margin-top:4px;flex-wrap:wrap">
+          <button class="secondary" style="font-size:.82rem" data-inquiry-chat="${inq.id}" data-chat-role="buyer">💬 Переписка</button>
+          <button class="secondary" style="font-size:.82rem" data-create-po="${inq.id}" data-inquiry-json='${JSON.stringify({product_name:inq.product_name,supplier_name:inq.supplier_name,quantity:inq.quantity,unit:inq.unit,unit_price:inq.unit_price})}'>📄 Заказ (PO)</button>
         </div>` : ""}
       ${inq.status === "pending" ? `
         <div style="display:flex;gap:8px;margin-top:4px">
+          <button class="secondary" style="font-size:.82rem" data-inquiry-chat="${inq.id}" data-chat-role="buyer">💬 Переписка</button>
           <button class="secondary" style="font-size:.82rem" data-inquiry-mark="${inq.id}" data-status="closed">Отменить запрос</button>
         </div>` : ""}
     </div>`;
   }).join("");
+}
+
+function showPOModal(inquiryId, inquiryData) {
+  const existing = document.getElementById("po-modal-overlay");
+  if (existing) existing.remove();
+
+  const overlay = document.createElement("div");
+  overlay.id = "po-modal-overlay";
+  overlay.style.cssText = "position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:9999;display:flex;align-items:center;justify-content:center;padding:16px";
+
+  const qty = inquiryData.quantity || 0;
+  const price = inquiryData.unit_price || 0;
+  const total = price ? (qty * price).toFixed(2) : null;
+
+  overlay.innerHTML = `<div style="background:var(--surface,#fff);width:100%;max-width:540px;border-radius:12px;max-height:90vh;overflow-y:auto">
+    <div style="display:flex;justify-content:space-between;align-items:center;padding:16px 20px;border-bottom:1px solid var(--line)">
+      <strong>📄 Заказ на поставку</strong>
+      <button id="po-modal-close" class="secondary" style="font-size:.82rem">✕</button>
+    </div>
+    <div style="padding:16px 20px">
+      <div style="background:var(--surface-2,#f5f5f5);border-radius:8px;padding:10px 14px;margin-bottom:14px;font-size:.88rem">
+        <div><strong>${escapeHtml(inquiryData.product_name||"")}</strong></div>
+        <div style="color:var(--muted);margin-top:2px">Поставщик: ${escapeHtml(inquiryData.supplier_name||"—")} · Кол-во: ${qty} ${escapeHtml(inquiryData.unit||"")}${total ? " · Сумма: " + fmtMoneyKzt(total) + " тг" : ""}</div>
+      </div>
+      <form id="po-create-form" style="display:grid;gap:10px">
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+          <label style="font-size:.85rem">Ваша организация<input type="text" name="buyer_name" placeholder="ТОО «Компания»" /></label>
+          <label style="font-size:.85rem">БИН<input type="text" name="buyer_bin" placeholder="000000000000" /></label>
+        </div>
+        <label style="font-size:.85rem">Ваш адрес<input type="text" name="buyer_address" placeholder="г. Алматы, ул. ..." /></label>
+        <label style="font-size:.85rem">Контактное лицо<input type="text" name="buyer_contact" placeholder="Имя Фамилия, тел." /></label>
+        <label style="font-size:.85rem">Адрес доставки<input type="text" name="delivery_address" placeholder="Куда доставить" /></label>
+        <label style="font-size:.85rem">Условия оплаты<input type="text" name="payment_terms" value="По договорённости" /></label>
+        <label style="font-size:.85rem">Примечания<textarea name="notes" rows="2" placeholder="Срок, особые требования..."></textarea></label>
+        <div style="display:flex;gap:8px">
+          <button type="submit" class="primary" id="po-create-btn">Создать PO</button>
+          <button type="button" id="po-modal-close2" class="secondary">Отмена</button>
+        </div>
+      </form>
+    </div>
+  </div>`;
+
+  document.body.appendChild(overlay);
+  overlay.addEventListener("click", (e) => { if (e.target === overlay) overlay.remove(); });
+  document.getElementById("po-modal-close").addEventListener("click", () => overlay.remove());
+  document.getElementById("po-modal-close2").addEventListener("click", () => overlay.remove());
+
+  document.getElementById("po-create-form").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const fd = new FormData(e.target);
+    const body = {};
+    for (const [k, v] of fd.entries()) { if (v.trim()) body[k] = v.trim(); }
+    const btn = document.getElementById("po-create-btn");
+    try {
+      btn.disabled = true; btn.textContent = "Создание...";
+      const po = await request(`/marketplace/my-inquiries/${inquiryId}/purchase-order`, {
+        method: "POST",
+        body: JSON.stringify(body),
+      });
+      overlay.remove();
+      // Open print form via fetch so auth header is passed
+      try {
+        const resp = await fetch(`${API}/marketplace/my-inquiries/${inquiryId}/purchase-order/html`, {
+          headers: { Authorization: `Bearer ${el("auth-token").value.trim()}` },
+        });
+        if (resp.ok) {
+          const html = await resp.text();
+          const blob = new Blob([html], { type: "text/html" });
+          window.open(URL.createObjectURL(blob), "_blank");
+        } else {
+          alert("Не удалось открыть форму PO");
+        }
+      } catch (_) { alert("Ошибка при загрузке формы PO"); }
+    } catch (err) {
+      alert(err.message || "Ошибка создания PO");
+      btn.disabled = false; btn.textContent = "Создать PO";
+    }
+  });
+}
+
+function showPriceTiersModal(itemId, unit) {
+  const existing = document.getElementById("price-tiers-overlay");
+  if (existing) existing.remove();
+
+  const overlay = document.createElement("div");
+  overlay.id = "price-tiers-overlay";
+  overlay.style.cssText = "position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:9999;display:flex;align-items:center;justify-content:center;padding:16px";
+  overlay.innerHTML = `<div style="background:var(--surface,#fff);width:100%;max-width:480px;border-radius:12px;max-height:90vh;overflow-y:auto">
+    <div style="display:flex;justify-content:space-between;align-items:center;padding:14px 16px;border-bottom:1px solid var(--line)">
+      <strong>📊 Объёмные цены</strong>
+      <button id="tiers-close" class="secondary" style="font-size:.82rem">✕</button>
+    </div>
+    <div id="tiers-body" style="padding:14px 16px">
+      <div style="color:var(--muted);font-size:.85rem">Загрузка...</div>
+    </div>
+  </div>`;
+
+  document.body.appendChild(overlay);
+  overlay.addEventListener("click", (e) => { if (e.target === overlay) overlay.remove(); });
+  document.getElementById("tiers-close").addEventListener("click", () => overlay.remove());
+
+  const body = document.getElementById("tiers-body");
+
+  function renderTiers(tiers) {
+    body.innerHTML = `
+      <div style="font-size:.82rem;color:var(--muted);margin-bottom:10px">Укажите порог (мин. кол-во) и цену за единицу (${escapeHtml(unit||"шт")}). Тиер применяется автоматически при достижении объёма.</div>
+      <div id="tiers-list" style="display:grid;gap:8px">
+        ${tiers.map((t, i) => `
+          <div style="display:flex;gap:8px;align-items:center" id="tier-row-${i}">
+            <input type="number" class="tier-qty" value="${t.min_quantity}" min="0.001" step="0.001" placeholder="Мин. кол-во" style="width:110px;font-size:.85rem" />
+            <input type="number" class="tier-price" value="${t.unit_price}" min="0.01" step="0.01" placeholder="Цена тг" style="width:110px;font-size:.85rem" />
+            <input type="text" class="tier-label" value="${escapeAttr(t.label||"")}" placeholder="Метка (опц.)" style="flex:1;font-size:.85rem" />
+            <button class="danger" style="font-size:.78rem;padding:.25rem .6rem" onclick="document.getElementById('tier-row-${i}').remove()">✕</button>
+          </div>`).join("")}
+      </div>
+      <button id="add-tier-btn" class="secondary" style="font-size:.82rem;margin-top:8px">+ Добавить тиер</button>
+      <div style="display:flex;gap:8px;margin-top:14px">
+        <button id="save-tiers-btn" class="primary" style="font-size:.85rem">Сохранить</button>
+        <button id="clear-tiers-btn" class="secondary" style="font-size:.85rem">Очистить все</button>
+      </div>`;
+
+    document.getElementById("add-tier-btn").addEventListener("click", () => {
+      const list = document.getElementById("tiers-list");
+      const idx = list.children.length;
+      const row = document.createElement("div");
+      row.style.cssText = "display:flex;gap:8px;align-items:center";
+      row.id = `tier-row-${idx}`;
+      row.innerHTML = `<input type="number" class="tier-qty" min="0.001" step="0.001" placeholder="Мин. кол-во" style="width:110px;font-size:.85rem" /><input type="number" class="tier-price" min="0.01" step="0.01" placeholder="Цена тг" style="width:110px;font-size:.85rem" /><input type="text" class="tier-label" placeholder="Метка (опц.)" style="flex:1;font-size:.85rem" /><button class="danger" style="font-size:.78rem;padding:.25rem .6rem" onclick="this.parentElement.remove()">✕</button>`;
+      list.appendChild(row);
+    });
+
+    document.getElementById("clear-tiers-btn").addEventListener("click", () => {
+      document.getElementById("tiers-list").innerHTML = "";
+    });
+
+    document.getElementById("save-tiers-btn").addEventListener("click", async () => {
+      const rows = document.querySelectorAll("#tiers-list > div");
+      const tiers = [];
+      for (const row of rows) {
+        const qty = parseFloat(row.querySelector(".tier-qty").value);
+        const price = parseFloat(row.querySelector(".tier-price").value);
+        const label = row.querySelector(".tier-label").value.trim();
+        if (!qty || !price) continue;
+        tiers.push({ min_quantity: qty, unit_price: price, label: label || null });
+      }
+      tiers.sort((a, b) => a.min_quantity - b.min_quantity);
+      const btn = document.getElementById("save-tiers-btn");
+      try {
+        btn.disabled = true; btn.textContent = "Сохранение...";
+        const result = await request(`/supplier/catalog/${itemId}/price-tiers`, {
+          method: "PUT",
+          body: JSON.stringify({ tiers }),
+        });
+        // Update catalog item in state
+        const idx = state.data.supplierPortal.myCatalog.findIndex((i) => String(i.id) === String(itemId));
+        if (idx >= 0) state.data.supplierPortal.myCatalog[idx].price_tiers = result;
+        renderTiers(result);
+        btn.disabled = false; btn.textContent = "Сохранить";
+      } catch (err) {
+        alert(err.message || "Ошибка сохранения");
+        btn.disabled = false; btn.textContent = "Сохранить";
+      }
+    });
+  }
+
+  request(`/supplier/catalog/${itemId}/price-tiers`).then(renderTiers).catch(() => {
+    body.innerHTML = '<div style="color:red">Ошибка загрузки</div>';
+  });
 }
 
 function showBulkInquiryModal(productName) {
@@ -5645,6 +5898,218 @@ function showInquiryModal(item, purchaseRequestId = null) {
   });
 }
 
+function starRow(value, max = 5) {
+  const rounded = Math.round(Number(value) || 0);
+  return `${"★".repeat(rounded)}${"☆".repeat(max - rounded)}`;
+}
+
+async function showProductDetailModal(itemId) {
+  const existing = document.getElementById("product-detail-overlay");
+  if (existing) existing.remove();
+  const overlay = document.createElement("div");
+  overlay.id = "product-detail-overlay";
+  overlay.style.cssText = "position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:9999;display:flex;align-items:flex-start;justify-content:center;padding:20px;overflow-y:auto";
+  overlay.innerHTML = `<div style="background:var(--surface,#fff);border-radius:12px;padding:24px;width:100%;max-width:640px;box-shadow:0 8px 40px rgba(0,0,0,.25)">
+    <div style="display:flex;justify-content:flex-end"><button id="pd-close" style="background:none;border:none;font-size:1.4rem;cursor:pointer;color:var(--muted)">&times;</button></div>
+    <div id="pd-body"><div style="color:var(--muted);text-align:center;padding:24px">Загрузка...</div></div>
+  </div>`;
+  document.body.appendChild(overlay);
+  overlay.addEventListener("click", (e) => { if (e.target === overlay) overlay.remove(); });
+  document.getElementById("pd-close")?.addEventListener("click", () => overlay.remove());
+
+  async function load() {
+    const [item, reviews, tiers] = await Promise.all([
+      request(`/marketplace/catalog/${itemId}`),
+      request(`/marketplace/catalog/${itemId}/reviews`).catch(() => []),
+      request(`/marketplace/catalog/${itemId}/price-tiers`).catch(() => []),
+    ]);
+    const avg = reviews.length ? (reviews.reduce((s, r) => s + r.rating, 0) / reviews.length) : null;
+    document.getElementById("pd-body").innerHTML = `
+      ${item.image_url ? `<img src="${escapeAttr(item.image_url)}" alt="" style="width:100%;max-height:280px;object-fit:cover;border-radius:8px;margin-bottom:12px" />` : ""}
+      <h2 style="margin:0 0 4px">${escapeHtml(item.product_name)}</h2>
+      ${avg != null ? `<div style="margin-bottom:6px"><span style="color:var(--warning,#f59e0b)">${starRow(avg)}</span> <span style="color:var(--muted);font-size:.85rem">${avg.toFixed(1)} (${reviews.length} отзывов)</span></div>` : `<div style="color:var(--muted);font-size:.85rem;margin-bottom:6px">Отзывов пока нет</div>`}
+      <div style="font-size:.9rem;color:var(--muted);margin-bottom:10px;cursor:pointer" data-pd-supplier="${item.supplier_id}">
+        Поставщик: <strong style="color:var(--accent)">${escapeHtml(item.supplier_name || "")}</strong>${item.supplier_is_verified ? ` <span style="color:var(--success,#16a34a)">✓ проверен</span>` : ""} →
+      </div>
+      <div style="display:flex;gap:16px;flex-wrap:wrap;margin-bottom:12px;padding:12px;background:var(--surface-2,#f5f5f5);border-radius:8px">
+        <div><div style="font-size:.75rem;color:var(--muted)">Цена</div><div style="font-weight:700;font-size:1.2rem;color:var(--accent)">${fmtMoneyKzt(item.unit_price)} тг/${escapeHtml(item.unit)}</div></div>
+        ${item.stock_qty != null ? `<div><div style="font-size:.75rem;color:var(--muted)">В наличии</div><div style="font-weight:600">${item.stock_qty} ${escapeHtml(item.unit)}</div></div>` : ""}
+        ${item.delivery_days || item.supplier_delivery_days ? `<div><div style="font-size:.75rem;color:var(--muted)">Доставка</div><div style="font-weight:600">${item.delivery_days || item.supplier_delivery_days} дн.</div></div>` : ""}
+        ${item.min_order_qty > 1 ? `<div><div style="font-size:.75rem;color:var(--muted)">Мин. заказ</div><div style="font-weight:600">${item.min_order_qty} ${escapeHtml(item.unit)}</div></div>` : ""}
+      </div>
+      ${item.description ? `<p style="color:var(--text);font-size:.92rem">${escapeHtml(item.description)}</p>` : ""}
+      ${tiers.length ? `
+        <div style="margin:12px 0">
+          <div style="font-weight:600;font-size:.88rem;margin-bottom:4px">Цена за объём</div>
+          <table style="width:100%;border-collapse:collapse;font-size:.85rem">
+            ${tiers.map((t) => `<tr><td style="padding:4px 0;color:var(--muted)">от ${t.min_quantity} ${escapeHtml(item.unit)}${t.label ? ` (${escapeHtml(t.label)})` : ""}</td><td style="padding:4px 0;text-align:right;font-weight:600">${fmtMoneyKzt(t.unit_price)} тг</td></tr>`).join("")}
+          </table>
+        </div>` : ""}
+      <div style="display:flex;gap:8px;margin:12px 0;flex-wrap:wrap">
+        <button class="primary" id="pd-cart-add">🛒 В корзину</button>
+        <button class="secondary" id="pd-order">Запросить</button>
+      </div>
+      <hr style="border:none;border-top:1px solid var(--line,#eee);margin:16px 0" />
+      <div style="font-weight:600;margin-bottom:8px">Отзывы (${reviews.length})</div>
+      <div id="pd-reviews">
+        ${reviews.length ? reviews.map((r) => `
+          <div style="padding:8px 0;border-bottom:1px solid var(--line,#eee)">
+            <div style="color:var(--warning,#f59e0b)">${starRow(r.rating)}</div>
+            ${r.comment ? `<div style="font-size:.88rem;margin:2px 0">${escapeHtml(r.comment)}</div>` : ""}
+            <div style="font-size:.75rem;color:var(--muted)">${String(r.created_at || "").slice(0, 10)}</div>
+          </div>`).join("") : `<div style="color:var(--muted);font-size:.85rem">Будьте первым, кто оставит отзыв.</div>`}
+      </div>
+      <form id="pd-review-form" style="display:grid;gap:8px;margin-top:12px">
+        <label style="font-size:.85rem">Ваша оценка
+          <select name="rating" required>
+            <option value="">Выберите...</option>
+            <option value="5">★★★★★ Отлично</option>
+            <option value="4">★★★★☆ Хорошо</option>
+            <option value="3">★★★☆☆ Нормально</option>
+            <option value="2">★★☆☆☆ Плохо</option>
+            <option value="1">★☆☆☆☆ Очень плохо</option>
+          </select>
+        </label>
+        <textarea name="comment" rows="2" placeholder="Комментарий (необязательно)"></textarea>
+        <button type="submit" class="secondary">Оставить отзыв</button>
+        <div id="pd-review-result" style="display:none;font-size:.85rem;padding:6px 10px;border-radius:6px"></div>
+      </form>`;
+
+    document.getElementById("pd-cart-add")?.addEventListener("click", async () => {
+      try {
+        state.data.cart = await request("/marketplace/cart/items", {
+          method: "POST",
+          body: JSON.stringify({ catalog_item_id: item.id, quantity: item.min_order_qty || 1 }),
+        });
+        showAlert("Товар добавлен в корзину");
+        if (state.view === "marketplace") render();
+      } catch (err) { showAlert(err.message || "Ошибка", "error"); }
+    });
+    document.getElementById("pd-order")?.addEventListener("click", () => { overlay.remove(); showInquiryModal(item); });
+    document.querySelectorAll("[data-pd-supplier]").forEach((el2) => {
+      el2.addEventListener("click", () => { overlay.remove(); showSupplierProfileModal(el2.dataset.pdSupplier); });
+    });
+    document.getElementById("pd-review-form")?.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const fd = new FormData(e.target);
+      const rating = Number(fd.get("rating"));
+      const comment = (fd.get("comment") || "").trim();
+      const result = document.getElementById("pd-review-result");
+      try {
+        await request(`/marketplace/catalog/${itemId}/reviews`, {
+          method: "POST",
+          body: JSON.stringify({ rating, comment: comment || null }),
+        });
+        result.style.display = "block";
+        result.style.background = "var(--success-bg,#f0fff4)";
+        result.style.color = "var(--success,#16a34a)";
+        result.textContent = "✓ Спасибо за отзыв!";
+        await load();
+      } catch (err) {
+        result.style.display = "block";
+        result.style.background = "var(--danger-bg,#fff0f0)";
+        result.style.color = "var(--danger,#dc2626)";
+        result.textContent = err.message || "Ошибка";
+      }
+    });
+  }
+  try { await load(); } catch (err) {
+    document.getElementById("pd-body").innerHTML = `<div style="color:var(--danger);padding:16px">${escapeHtml(err.message || "Ошибка загрузки")}</div>`;
+  }
+}
+
+async function showSupplierProfileModal(supplierId) {
+  const existing = document.getElementById("supplier-profile-overlay");
+  if (existing) existing.remove();
+  const overlay = document.createElement("div");
+  overlay.id = "supplier-profile-overlay";
+  overlay.style.cssText = "position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:9999;display:flex;align-items:flex-start;justify-content:center;padding:20px;overflow-y:auto";
+  overlay.innerHTML = `<div style="background:var(--surface,#fff);border-radius:12px;padding:24px;width:100%;max-width:760px;box-shadow:0 8px 40px rgba(0,0,0,.25)">
+    <div style="display:flex;justify-content:flex-end"><button id="sp-close" style="background:none;border:none;font-size:1.4rem;cursor:pointer;color:var(--muted)">&times;</button></div>
+    <div id="sp-body"><div style="color:var(--muted);text-align:center;padding:24px">Загрузка...</div></div>
+  </div>`;
+  document.body.appendChild(overlay);
+  overlay.addEventListener("click", (e) => { if (e.target === overlay) overlay.remove(); });
+  document.getElementById("sp-close")?.addEventListener("click", () => overlay.remove());
+  try {
+    const s = await request(`/marketplace/suppliers/${supplierId}`);
+    document.getElementById("sp-body").innerHTML = `
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:12px;margin-bottom:12px">
+        <div>
+          <h2 style="margin:0 0 4px">${escapeHtml(s.name)} ${s.is_verified ? `<span style="font-size:.8rem;background:var(--success,#16a34a);color:#fff;border-radius:10px;padding:2px 10px;vertical-align:middle">✓ Проверенный поставщик</span>` : ""}</h2>
+          <div style="color:var(--muted);font-size:.9rem">${escapeHtml(s.city || "")}${s.delivery_days ? ` · доставка ${s.delivery_days} дн.` : ""}${s.is_preferred ? ` · ⭐ предпочтительный` : ""}</div>
+        </div>
+        ${s.reviews_avg != null ? `<div style="text-align:center;background:var(--surface-2,#f5f5f5);padding:8px 14px;border-radius:10px"><div style="font-size:1.3rem;font-weight:700;color:var(--accent)">${s.reviews_avg}</div><div style="color:var(--warning,#f59e0b)">${starRow(s.reviews_avg)}</div><div style="font-size:.75rem;color:var(--muted)">${s.reviews_count} отзывов</div></div>` : ""}
+      </div>
+      <div style="display:flex;gap:16px;flex-wrap:wrap;margin-bottom:14px;font-size:.88rem;color:var(--muted)">
+        ${s.phone ? `<a href="tel:${escapeAttr(s.phone)}" style="color:var(--accent)">📞 ${escapeHtml(s.phone)}</a>` : ""}
+        ${s.email ? `<span>✉️ ${escapeHtml(s.email)}</span>` : ""}
+        ${s.address ? `<span>📍 ${escapeHtml(s.address)}</span>` : ""}
+        ${s.catalog_items_count != null ? `<span>🛍️ ${s.catalog_items_count} товаров</span>` : ""}
+        ${s.min_price != null ? `<span>Цены от ${fmtMoneyKzt(s.min_price)} до ${fmtMoneyKzt(s.max_price)} тг</span>` : ""}
+      </div>
+      <div style="font-weight:600;margin-bottom:8px">Каталог поставщика</div>
+      <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:10px;margin-bottom:16px">
+        ${(s.catalog_items || []).map((it) => `
+          <div class="panel" style="padding:8px;cursor:pointer" data-sp-item="${it.id}">
+            ${it.image_url ? `<img src="${escapeAttr(it.image_url)}" alt="" style="width:100%;height:90px;object-fit:cover;border-radius:6px;margin-bottom:4px" />` : ""}
+            <div style="font-size:.82rem;font-weight:600">${escapeHtml(it.product_name)}</div>
+            <div style="font-size:.85rem;color:var(--accent);font-weight:700">${fmtMoneyKzt(it.unit_price)} тг</div>
+          </div>`).join("") || `<div style="color:var(--muted);grid-column:1/-1">Нет активных товаров</div>`}
+      </div>
+      <div style="font-weight:600;margin-bottom:8px">Отзывы о поставщике (${s.reviews_count})</div>
+      <div style="margin-bottom:12px">
+        ${(s.reviews || []).length ? s.reviews.map((r) => `
+          <div style="padding:8px 0;border-bottom:1px solid var(--line,#eee)">
+            <div style="color:var(--warning,#f59e0b)">${starRow(r.rating)}</div>
+            ${r.comment ? `<div style="font-size:.88rem;margin:2px 0">${escapeHtml(r.comment)}</div>` : ""}
+            <div style="font-size:.75rem;color:var(--muted)">${String(r.created_at || "").slice(0, 10)}</div>
+          </div>`).join("") : `<div style="color:var(--muted);font-size:.85rem">Отзывов пока нет.</div>`}
+      </div>
+      <form id="sp-review-form" style="display:grid;gap:8px">
+        <label style="font-size:.85rem">Оценить поставщика
+          <select name="rating" required>
+            <option value="">Выберите...</option>
+            <option value="5">★★★★★ Отлично</option>
+            <option value="4">★★★★☆ Хорошо</option>
+            <option value="3">★★★☆☆ Нормально</option>
+            <option value="2">★★☆☆☆ Плохо</option>
+            <option value="1">★☆☆☆☆ Очень плохо</option>
+          </select>
+        </label>
+        <textarea name="comment" rows="2" placeholder="Комментарий (необязательно)"></textarea>
+        <button type="submit" class="secondary">Оставить отзыв</button>
+        <div id="sp-review-result" style="display:none;font-size:.85rem;padding:6px 10px;border-radius:6px"></div>
+      </form>`;
+    document.querySelectorAll("[data-sp-item]").forEach((el2) => {
+      el2.addEventListener("click", () => { overlay.remove(); showProductDetailModal(Number(el2.dataset.spItem)); });
+    });
+    document.getElementById("sp-review-form")?.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const fd = new FormData(e.target);
+      const result = document.getElementById("sp-review-result");
+      try {
+        await request(`/suppliers/${supplierId}/reviews`, {
+          method: "POST",
+          body: JSON.stringify({ rating: Number(fd.get("rating")), comment: (fd.get("comment") || "").trim() || null }),
+        });
+        result.style.display = "block";
+        result.style.background = "var(--success-bg,#f0fff4)";
+        result.style.color = "var(--success,#16a34a)";
+        result.textContent = "✓ Спасибо! Отзыв отправлен на модерацию.";
+        e.target.reset();
+      } catch (err) {
+        result.style.display = "block";
+        result.style.background = "var(--danger-bg,#fff0f0)";
+        result.style.color = "var(--danger,#dc2626)";
+        result.textContent = err.message || "Ошибка";
+      }
+    });
+  } catch (err) {
+    document.getElementById("sp-body").innerHTML = `<div style="color:var(--danger);padding:16px">${escapeHtml(err.message || "Ошибка загрузки")}</div>`;
+  }
+}
+
 async function initMarketplace() {
   if (!state.ui.marketplaceFilter) state.ui.marketplaceFilter = { search: "", category: "" };
 
@@ -5660,6 +6125,21 @@ async function initMarketplace() {
     render();
     if (state.view === "marketplace") initMarketplace();
   }
+
+  // Category chip navigation
+  document.querySelectorAll("[data-mp-cat]").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const cat = btn.dataset.mpCat;
+      state.ui.marketplaceFilter = { ...(state.ui.marketplaceFilter || {}), category: cat, offset: 0 };
+      el("mp-category") && (el("mp-category").value = cat);
+      const search = el("mp-search")?.value?.trim() || "";
+      const sort = el("mp-sort")?.value || "";
+      state.data.marketplace = await request(
+        `/marketplace/catalog?limit=50&search=${encodeURIComponent(search)}&category=${encodeURIComponent(cat)}&sort=${encodeURIComponent(sort)}`
+      ).catch(() => ({ items: [], total: 0 }));
+      render();
+    });
+  });
 
   el("mp-search-btn")?.addEventListener("click", async () => {
     const search = el("mp-search")?.value?.trim() || "";
@@ -5756,12 +6236,106 @@ async function initMarketplace() {
       if (state.ui.marketplaceTab === "my-inquiries") {
         state.data.myInquiries = await request("/marketplace/my-inquiries?limit=50").catch(() => ({ items: [], total: 0 }));
       }
+      if (state.ui.marketplaceTab === "cart") {
+        state.data.cart = await request("/marketplace/cart").catch(() => ({ items: [], total_items: 0, total_amount: 0 }));
+      }
       render();
       if (state.view === "marketplace") initMarketplace();
     });
   });
 
+  // Open product detail modal
+  document.querySelectorAll("[data-mp-detail]").forEach((el2) => {
+    el2.addEventListener("click", () => showProductDetailModal(Number(el2.dataset.mpDetail)));
+  });
+
+  // Open supplier storefront modal
+  document.querySelectorAll("[data-mp-supplier-profile]").forEach((el2) => {
+    el2.addEventListener("click", () => showSupplierProfileModal(Number(el2.dataset.mpSupplierProfile)));
+  });
+
+  // Add to cart from catalog grid
+  document.querySelectorAll("[data-mp-cart-add]").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const itemId = Number(btn.dataset.mpCartAdd);
+      const item = (state.data.marketplace?.items || []).find((i) => i.id === itemId);
+      try {
+        state.data.cart = await request("/marketplace/cart/items", {
+          method: "POST",
+          body: JSON.stringify({ catalog_item_id: itemId, quantity: item?.min_order_qty || 1 }),
+        });
+        showAlert("Товар добавлен в корзину");
+        render();
+        if (state.view === "marketplace") initMarketplace();
+      } catch (err) { showAlert(err.message || "Ошибка", "error"); }
+    });
+  });
+
+  // Cart: quantity change
+  document.querySelectorAll("[data-cart-qty]").forEach((input) => {
+    input.addEventListener("change", async () => {
+      const cartItemId = Number(input.dataset.cartQty);
+      const qty = Number(input.value);
+      if (!(qty > 0)) return;
+      try {
+        state.data.cart = await request(`/marketplace/cart/items/${cartItemId}`, {
+          method: "PATCH",
+          body: JSON.stringify({ quantity: qty }),
+        });
+        render();
+        if (state.view === "marketplace") initMarketplace();
+      } catch (err) { showAlert(err.message || "Ошибка", "error"); }
+    });
+  });
+
+  // Cart: remove item
+  document.querySelectorAll("[data-cart-remove]").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const cartItemId = Number(btn.dataset.cartRemove);
+      try {
+        state.data.cart = await request(`/marketplace/cart/items/${cartItemId}`, { method: "DELETE" });
+        render();
+        if (state.view === "marketplace") initMarketplace();
+      } catch (err) { showAlert(err.message || "Ошибка", "error"); }
+    });
+  });
+
+  // Cart: checkout
+  el("cart-checkout-btn")?.addEventListener("click", async () => {
+    const btn = el("cart-checkout-btn");
+    try {
+      if (btn) { btn.disabled = true; btn.textContent = "Оформляю..."; }
+      const created = await request("/marketplace/cart/checkout", { method: "POST", body: JSON.stringify({}) });
+      state.data.cart = await request("/marketplace/cart").catch(() => ({ items: [], total_items: 0, total_amount: 0 }));
+      state.data.myInquiries = await request("/marketplace/my-inquiries?limit=50").catch(() => ({ items: [], total: 0 }));
+      state.ui.marketplaceTab = "my-inquiries";
+      showAlert(`Заказ оформлен: создано запросов — ${created.length}`);
+      render();
+      if (state.view === "marketplace") initMarketplace();
+    } catch (err) {
+      showAlert(err.message || "Ошибка оформления заказа", "error");
+      if (btn) { btn.disabled = false; btn.textContent = "Оформить заказ →"; }
+    }
+  });
+
   // Mark inquiry as ordered / closed
+  document.querySelectorAll("[data-inquiry-chat]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const id = parseInt(btn.dataset.inquiryChat, 10);
+      const role = btn.dataset.chatRole || "buyer";
+      showInquiryChatModal(id, role);
+    });
+  });
+
+  document.querySelectorAll("[data-create-po]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const id = parseInt(btn.dataset.createPo, 10);
+      let inqData = {};
+      try { inqData = JSON.parse(btn.dataset.inquiryJson || "{}"); } catch (_) {}
+      showPOModal(id, inqData);
+    });
+  });
+
   document.querySelectorAll("[data-inquiry-mark]").forEach((btn) => {
     btn.addEventListener("click", async () => {
       const id = btn.dataset.inquiryMark;
@@ -6137,6 +6711,41 @@ function initBarcodeOverlay() {
   });
 }
 
+function renderSupport() {
+  return `
+    <div style="max-width:680px;margin:0 auto">
+      <div class="panel" style="text-align:center;padding:32px 20px;margin-bottom:16px">
+        <div style="font-size:2.5rem;margin-bottom:8px">🛟</div>
+        <h2 style="margin:0 0 6px">Техподдержка</h2>
+        <div style="color:var(--muted)">Раздел в разработке. Здесь появятся контакты, форма обращения и база знаний.</div>
+      </div>
+      <div class="panel" style="margin-bottom:16px">
+        <div style="font-weight:600;margin-bottom:10px">Контакты</div>
+        <div style="display:grid;gap:8px;color:var(--muted);font-size:.92rem">
+          <div>📞 Телефон: <em>будет добавлен</em></div>
+          <div>✉️ Email: <em>будет добавлен</em></div>
+          <div>💬 Telegram: <em>будет добавлен</em></div>
+        </div>
+      </div>
+      <div class="panel" style="margin-bottom:16px">
+        <div style="font-weight:600;margin-bottom:10px">Частые вопросы</div>
+        <div style="color:var(--muted);font-size:.92rem">Раздел FAQ скоро появится здесь.</div>
+      </div>
+      <div class="panel">
+        <div style="font-weight:600;margin-bottom:10px">Написать в поддержку</div>
+        <form style="display:grid;gap:10px" onsubmit="return false">
+          <label style="font-size:.88rem">Тема
+            <input type="text" placeholder="Кратко опишите проблему" disabled />
+          </label>
+          <label style="font-size:.88rem">Сообщение
+            <textarea rows="4" placeholder="Подробности..." disabled></textarea>
+          </label>
+          <button type="submit" class="secondary" disabled title="Форма обращений скоро заработает">Отправить (скоро)</button>
+        </form>
+      </div>
+    </div>`;
+}
+
 const renderers = {
   dashboard: renderDashboard,
   "tablet-writeoff": renderTabletWriteoff,
@@ -6159,6 +6768,7 @@ const renderers = {
   "supplier-map": renderSupplierMap,
   auctions: renderAuctions,
   marketplace: renderMarketplace,
+  support: renderSupport,
 };
 
 
@@ -6613,6 +7223,9 @@ function renderSupplierInquiries() {
         <div style="background:var(--surface-2,#f0fff4);border-left:3px solid var(--success,#16a34a);padding:8px 12px;border-radius:0 6px 6px 0;font-size:.88rem;margin-bottom:8px">
           <strong>Ваш ответ:</strong> ${escapeHtml(inq.supplier_response)}
         </div>` : ""}
+      <div style="display:flex;gap:8px;margin-top:8px">
+        <button class="secondary" style="font-size:.82rem" data-inquiry-chat="${inq.id}" data-chat-role="supplier">💬 Переписка</button>
+      </div>
       ${inq.status === "pending" ? `
         <details style="margin-top:8px">
           <summary style="cursor:pointer;font-size:.85rem;color:var(--accent);font-weight:600">Ответить</summary>
@@ -6650,6 +7263,7 @@ function renderSupplierMyCatalog() {
   function itemCard(item) {
     return `
     <div class="panel" style="margin-bottom:10px" id="catalog-item-${item.id}">
+      ${item.image_url ? `<div style="position:relative;margin-bottom:8px"><img src="${escapeAttr(item.image_url)}" alt="" style="width:100%;height:180px;object-fit:cover;border-radius:6px" loading="lazy" /><button class="danger" style="position:absolute;top:6px;right:6px;font-size:.75rem;padding:3px 8px;opacity:.85" data-catalog-del-image="${item.id}">✕ Удалить фото</button></div>` : ""}
       <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px">
         <div style="flex:1">
           <div style="font-weight:700;font-size:1rem">${escapeHtml(item.product_name)}</div>
@@ -6674,6 +7288,8 @@ function renderSupplierMyCatalog() {
         <button class="${item.is_active ? "secondary" : "primary"}" style="font-size:.82rem" data-catalog-toggle="${item.id}" data-catalog-active="${item.is_active}">
           ${item.is_active ? "Скрыть" : "Опубликовать"}
         </button>
+        ${item.image_url ? "" : `<label class="secondary" style="font-size:.82rem;padding:.35rem .9rem;border-radius:6px;cursor:pointer;border:1px solid var(--line)">📷 Фото<input type="file" accept="image/*" style="display:none" data-catalog-upload-image="${item.id}" /></label>`}
+        <button class="secondary" style="font-size:.82rem" data-catalog-tiers="${item.id}" data-catalog-unit="${escapeAttr(item.unit||"")}">📊 Объём</button>
         <button class="danger" style="font-size:.82rem" data-catalog-delete="${item.id}">Удалить</button>
       </div>
       <div id="catalog-edit-form-${item.id}" style="display:none;margin-top:12px">
@@ -6854,6 +7470,7 @@ function renderSupplierProfile() {
       ${p.bank_details ? `<div style="background:var(--surface-2,#f5f5f5);border-radius:6px;padding:10px 12px;font-size:.88rem;white-space:pre-wrap;margin-bottom:10px"><span style="color:var(--muted);display:block;font-size:.78rem;margin-bottom:4px">Банковские реквизиты</span>${escapeHtml(p.bank_details)}</div>` : ""}
       ${p.notes ? `<div style="font-size:.9rem;color:var(--muted)">${escapeHtml(p.notes)}</div>` : ""}
       <hr style="margin:16px 0">
+      ${p.is_verified ? `<div style="background:#f0fff4;border:1px solid #16a34a;border-radius:8px;padding:10px 14px;margin-bottom:12px;display:flex;align-items:center;gap:8px"><span style="font-size:1.2rem">✅</span><div><strong style="color:#16a34a">Поставщик верифицирован</strong>${p.verified_at ? `<div style="font-size:.78rem;color:var(--muted)">${String(p.verified_at).slice(0,10)}</div>` : ""}</div></div>` : `<div style="background:#fffbeb;border:1px solid #f59e0b;border-radius:8px;padding:10px 14px;margin-bottom:12px;display:flex;align-items:center;gap:10px"><span style="font-size:1.2rem">⏳</span><div><strong style="color:#92400e">Верификация не пройдена</strong><div style="font-size:.8rem;color:var(--muted);margin-top:2px">Загрузите документы ниже чтобы получить значок верифицированного поставщика</div></div></div>`}
       <details>
         <summary style="cursor:pointer;font-weight:600;color:var(--accent)">Редактировать контактную информацию</summary>
         <form id="supplier-profile-edit-form" style="margin-top:10px;display:grid;gap:8px">
@@ -6874,6 +7491,31 @@ function renderSupplierProfile() {
           <button type="submit" class="primary" id="save-supplier-profile-btn">Сохранить</button>
         </form>
       </details>
+    </div>
+    <div class="panel" style="margin-bottom:12px">
+      <h4 style="margin:0 0 10px">📋 Документы для верификации</h4>
+      ${(state.data.supplierPortal.verificationDocs||[]).length ? (state.data.supplierPortal.verificationDocs||[]).map((d) => `
+        <div style="display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid var(--line)">
+          <div>
+            <a href="${escapeAttr(d.file_url)}" target="_blank" style="color:var(--accent);font-size:.9rem">${escapeHtml(d.original_name||d.file_url)}</a>
+            <div style="font-size:.75rem;color:var(--muted)">${escapeHtml(d.doc_type)} · ${String(d.uploaded_at||"").slice(0,10)}</div>
+          </div>
+          <button class="danger" style="font-size:.78rem;padding:.25rem .7rem" data-del-vdoc="${d.id}">✕</button>
+        </div>`).join("") : `<div style="color:var(--muted);font-size:.88rem">Документы ещё не загружены</div>`}
+      <div style="margin-top:14px;display:grid;gap:8px">
+        <div style="font-size:.82rem;color:var(--muted)">Загрузить документ:</div>
+        <select id="vdoc-type" style="font-size:.88rem">
+          <option value="registration">Свидетельство о регистрации</option>
+          <option value="license">Лицензия / Разрешение</option>
+          <option value="certificate">Сертификат качества</option>
+          <option value="bank">Банковские реквизиты</option>
+          <option value="other">Другое</option>
+        </select>
+        <label class="primary" style="cursor:pointer;display:inline-block;padding:.5rem 1rem;border-radius:6px;font-size:.88rem;text-align:center">
+          📎 Выбрать файл
+          <input type="file" id="vdoc-file-input" style="display:none" accept=".pdf,.jpg,.jpeg,.png,.doc,.docx" />
+        </label>
+      </div>
     </div>`;
 }
 
@@ -6911,6 +7553,62 @@ function bindSupplierActions() {
   });
 
   // Save profile
+  // Price tiers modal
+  document.querySelectorAll("[data-catalog-tiers]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      showPriceTiersModal(btn.dataset.catalogTiers, btn.dataset.catalogUnit);
+    });
+  });
+
+  // Load verification docs when profile view active
+  if (state.ui.supplierView === "profile") {
+    request("/supplier/verification-docs").then((docs) => {
+      state.data.supplierPortal.verificationDocs = docs;
+      render();
+    }).catch(() => {});
+  }
+
+  // Delete verification doc
+  document.querySelectorAll("[data-del-vdoc]").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      if (!confirm("Удалить этот документ?")) return;
+      const id = btn.dataset.delVdoc;
+      try {
+        await request(`/supplier/verification-docs/${id}`, { method: "DELETE" });
+        state.data.supplierPortal.verificationDocs = state.data.supplierPortal.verificationDocs.filter((d) => String(d.id) !== String(id));
+        render();
+      } catch (err) { alert(err.message || "Ошибка"); }
+    });
+  });
+
+  // Upload verification doc
+  document.getElementById("vdoc-file-input")?.addEventListener("change", async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    const docType = document.getElementById("vdoc-type")?.value || "other";
+    const formData = new FormData();
+    formData.append("file", file);
+    const label = e.target.closest("label");
+    if (label) label.textContent = "Загрузка...";
+    try {
+      const result = await fetch(`${API}/supplier/verification-docs/upload?doc_type=${encodeURIComponent(docType)}`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${el("auth-token").value.trim()}` },
+        body: formData,
+      });
+      if (!result.ok) {
+        const err = await result.json().catch(() => ({}));
+        throw new Error(err?.detail?.message || "Ошибка загрузки");
+      }
+      const doc = await result.json();
+      state.data.supplierPortal.verificationDocs = [...(state.data.supplierPortal.verificationDocs || []), doc];
+      render();
+    } catch (err) {
+      alert(err.message || "Ошибка при загрузке");
+      if (label) label.textContent = "📎 Выбрать файл";
+    }
+  });
+
   document.getElementById("supplier-profile-edit-form")?.addEventListener("submit", async (e) => {
     e.preventDefault();
     const form = e.target;
@@ -7163,6 +7861,54 @@ function bindSupplierActions() {
         render();
       } catch (err) {
         alert(err.message || "Ошибка при удалении");
+        btn.disabled = false;
+      }
+    });
+  });
+
+  // Catalog item photo upload
+  document.querySelectorAll("[data-catalog-upload-image]").forEach((input) => {
+    input.addEventListener("change", async (e) => {
+      const id = input.dataset.catalogUploadImage;
+      const file = e.target.files[0];
+      if (!file) return;
+      const formData = new FormData();
+      formData.append("file", file);
+      try {
+        const label = input.closest("label");
+        if (label) label.textContent = "Загрузка...";
+        const result = await fetch(`${API}/supplier/catalog/${id}/image/upload`, {
+          method: "POST",
+          headers: { Authorization: `Bearer ${el("auth-token").value.trim()}` },
+          body: formData,
+        });
+        if (!result.ok) {
+          const err = await result.json().catch(() => ({}));
+          throw new Error(err?.detail?.message || "Ошибка загрузки");
+        }
+        const data = await result.json();
+        const idx = state.data.supplierPortal.myCatalog.findIndex((i) => String(i.id) === String(id));
+        if (idx >= 0) state.data.supplierPortal.myCatalog[idx].image_url = data.image_url;
+        render();
+      } catch (err) {
+        alert(err.message || "Ошибка при загрузке фото");
+      }
+    });
+  });
+
+  // Catalog item photo delete
+  document.querySelectorAll("[data-catalog-del-image]").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      if (!confirm("Удалить фото этого товара?")) return;
+      const id = btn.dataset.catalogDelImage;
+      try {
+        btn.disabled = true;
+        await request(`/supplier/catalog/${id}/image`, { method: "DELETE" });
+        const idx = state.data.supplierPortal.myCatalog.findIndex((i) => String(i.id) === String(id));
+        if (idx >= 0) state.data.supplierPortal.myCatalog[idx].image_url = null;
+        render();
+      } catch (err) {
+        alert(err.message || "Ошибка при удалении фото");
         btn.disabled = false;
       }
     });
@@ -7430,12 +8176,15 @@ async function loadAll() {
     try {
       state.data.marketplace = await request("/marketplace/catalog?limit=50");
       state.data.marketplaceCategories = await request("/marketplace/catalog/categories");
+      state.data.catalogTaxonomy = await request("/catalog-categories").catch(() => []);
     } catch (_) {
       state.data.marketplace = { items: [], total: 0 };
       state.data.marketplaceCategories = [];
     }
     // Load my sent inquiries
     state.data.myInquiries = await request("/marketplace/my-inquiries?limit=50").catch(() => ({ items: [], total: 0 }));
+    // Load cart
+    state.data.cart = await request("/marketplace/cart").catch(() => ({ items: [], total_items: 0, total_amount: 0 }));
     // Load users if manager
     if (hasPermission("admin:users")) {
       try {

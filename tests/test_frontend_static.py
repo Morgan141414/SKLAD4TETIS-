@@ -745,7 +745,7 @@ class FrontendStaticTest(TestCase):
         for snippet in (
             '["tablet-writeoff", `<svg',
             '"Списание"],',
-            'const limitedRoleViews = new Set(["dashboard", "tablet-writeoff", "stock", "movements", "notifications"])',
+            'const limitedRoleViews = new Set(["dashboard", "tablet-writeoff", "stock", "movements", "notifications", "support"])',
             'const limitedRoles = new Set(["nurse", "doctor", "other"])',
             "function visibleViews()",
             "function canAccessView(viewId)",

@@ -33,6 +33,12 @@ class Settings(BaseSettings):
     mis_api_key: str | None = None
     mis_inbound_webhook_token: str | None = None
     redis_url: str | None = None
+    smtp_host: str | None = None
+    smtp_port: int | None = None
+    smtp_user: str | None = None
+    smtp_pass: str | None = None
+    smtp_from: str | None = None
+    smtp_tls: bool = True
     telegram_bot_token: str | None = None
     telegram_chat_id: str | None = None
 

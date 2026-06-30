@@ -4,6 +4,7 @@ from decimal import Decimal
 from typing import Any
 
 from fastapi import APIRouter, Body, Depends, File, Header, HTTPException, Response, UploadFile, WebSocket, WebSocketDisconnect, status
+from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
 
 from app.core.config import get_settings
@@ -319,6 +320,21 @@ def supplier_login(body: SupplierLoginRequest) -> TokenResponse:
     supplier = svc.get_supplier_by_email(body.email)
     if supplier is None or not verify_password(body.password, supplier["password_hash"]):
         raise HTTPException(status_code=401, detail={"code": "unauthorized", "message": "Invalid credentials", "details": {}})
+    # Store buyer email from JWT payload so we can notify them later
+    _tetis_email = payload.get("email") or payload.get("e") or ""
+    if _tetis_email and user is not None:
+        try:
+            _svc2 = get_warehouse_service()
+            _conn_e = _svc2.database.connect()
+            try:
+                _conn_e.execute(
+                    "UPDATE sklad_users SET email = ? WHERE username = ? AND (email IS NULL OR email = '')",
+                    (_tetis_email, f"tetis:{tetis_user_id}"),
+                )
+            finally:
+                _svc2._close_connection(_conn_e)
+        except Exception:
+            pass
     import time
     now = int(time.time())
     payload = {
@@ -2860,7 +2876,7 @@ def balances_pdf(
         from reportlab.lib.units import cm
         from reportlab.pdfbase import pdfmetrics
         from reportlab.pdfbase.ttfonts import TTFont
-        from fastapi.responses import Response
+        from fastapi.responses import HTMLResponse, Response
 
         try:
             pdfmetrics.registerFont(TTFont("DejaVu", "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"))
@@ -4898,6 +4914,81 @@ def update_my_supplier_profile(
     except Exception as error:
         raise map_error(error) from error
 
+@router.get("/supplier/verification-docs", tags=["supplier-self"])
+def get_my_verification_docs(actor_ctx: ActorContext = Depends(get_actor_context)) -> Any:
+    if actor_ctx.supplier_id is None:
+        raise HTTPException(status_code=403, detail={"code": "forbidden", "message": "No supplier linked", "details": {}})
+    try:
+        return get_warehouse_service().list_supplier_verification_docs(actor_ctx.supplier_id)
+    except Exception as error:
+        raise map_error(error) from error
+
+
+@router.post("/supplier/verification-docs/upload", tags=["supplier-self"])
+async def upload_verification_doc(
+    doc_type: str = "other",
+    file: UploadFile = File(...),
+    actor_ctx: ActorContext = Depends(get_actor_context),
+) -> Any:
+    if actor_ctx.supplier_id is None:
+        raise HTTPException(status_code=403, detail={"code": "forbidden", "message": "No supplier linked", "details": {}})
+    allowed_types = {"registration", "license", "certificate", "bank", "other"}
+    if doc_type not in allowed_types:
+        raise HTTPException(status_code=422, detail={"code": "validation_error", "message": f"doc_type must be one of {allowed_types}", "details": {}})
+    import os, uuid
+    from pathlib import Path
+    uploads_dir = Path(os.getenv("SKLAD_UPLOADS_DIR", "/opt/sklad/uploads")) / "verification"
+    uploads_dir.mkdir(parents=True, exist_ok=True)
+    suffix = Path(file.filename or "doc").suffix or ".bin"
+    fname = f"{uuid.uuid4().hex}{suffix}"
+    fpath = uploads_dir / fname
+    content = await file.read()
+    if len(content) > 10 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail={"code": "file_too_large", "message": "Max file size is 10MB", "details": {}})
+    with open(fpath, "wb") as fp:
+        fp.write(content)
+    file_url = f"/sklad/uploads/verification/{fname}"
+    try:
+        return get_warehouse_service().add_supplier_verification_doc(
+            actor_ctx.supplier_id, doc_type, file_url, file.filename, actor_ctx.actor_id
+        )
+    except Exception as error:
+        raise map_error(error) from error
+
+
+@router.delete("/supplier/verification-docs/{doc_id}", status_code=204, tags=["supplier-self"])
+def delete_verification_doc(
+    doc_id: int,
+    actor_ctx: ActorContext = Depends(get_actor_context),
+) -> None:
+    if actor_ctx.supplier_id is None:
+        raise HTTPException(status_code=403, detail={"code": "forbidden", "message": "No supplier linked", "details": {}})
+    try:
+        get_warehouse_service().delete_supplier_verification_doc(doc_id, actor_ctx.supplier_id)
+    except Exception as error:
+        raise map_error(error) from error
+
+
+class SupplierVerifyBody(BaseModel):
+    is_verified: bool
+    comment: str | None = None
+
+
+@router.post("/admin/suppliers/{supplier_id}/verify", tags=["admin"])
+def set_supplier_verified(
+    supplier_id: int,
+    body: SupplierVerifyBody,
+    actor_ctx: ActorContext = Depends(get_actor_context),
+) -> Any:
+    require_permission(actor_ctx, Permission.ADMIN_USERS)
+    try:
+        return get_warehouse_service().set_supplier_verified(
+            supplier_id, body.is_verified, body.comment, actor_ctx.actor_id
+        )
+    except Exception as error:
+        raise map_error(error) from error
+
+
 @router.get("/supplier/my-applications", tags=["supplier-self"])
 def get_my_supplier_applications(actor_ctx: ActorContext = Depends(get_actor_context)) -> Any:
     """Return supplier applications submitted by the current actor. Works for all authenticated users."""
@@ -4975,6 +5066,52 @@ def get_catalog_item(
         return item
     except HTTPException:
         raise
+    except Exception as error:
+        raise map_error(error) from error
+
+
+class CatalogItemReviewCreate(BaseModel):
+    rating: int = Field(ge=1, le=5)
+    comment: str | None = None
+
+
+@router.post("/marketplace/catalog/{item_id}/reviews", status_code=201, tags=["marketplace"])
+def create_catalog_item_review_endpoint(
+    item_id: int,
+    body: CatalogItemReviewCreate,
+    actor_ctx: ActorContext = Depends(get_actor_context),
+) -> Any:
+    try:
+        svc = get_warehouse_service()
+        return svc.create_catalog_item_review(item_id, body.rating, body.comment, actor_ctx.actor_id)
+    except Exception as error:
+        raise map_error(error) from error
+
+
+@router.get("/marketplace/catalog/{item_id}/reviews", tags=["marketplace"])
+def list_catalog_item_reviews_endpoint(
+    item_id: int,
+    actor_ctx: ActorContext = Depends(get_actor_context),
+) -> Any:
+    try:
+        return get_warehouse_service().list_catalog_item_reviews(item_id)
+    except Exception as error:
+        raise map_error(error) from error
+
+
+class CatalogItemReviewModerate(BaseModel):
+    action: str = Field(pattern="^(approve|reject)$")
+
+
+@router.patch("/catalog-item-reviews/{review_id}", tags=["admin"])
+def moderate_catalog_item_review_endpoint(
+    review_id: int,
+    body: CatalogItemReviewModerate,
+    actor_ctx: ActorContext = Depends(get_actor_context),
+) -> Any:
+    try:
+        require_permission(actor_ctx, Permission.ADMIN_USERS)
+        return get_warehouse_service().moderate_catalog_item_review(review_id, body.action)
     except Exception as error:
         raise map_error(error) from error
 
@@ -5073,6 +5210,23 @@ def list_supplier_directory(
         raise map_error(error) from error
 
 
+@router.get("/marketplace/suppliers/{supplier_id}", tags=["marketplace"])
+def get_supplier_profile_endpoint(
+    supplier_id: int,
+    actor_ctx: ActorContext = Depends(get_actor_context),
+) -> Any:
+    """Public seller storefront: profile, rating, catalog and reviews."""
+    try:
+        profile = get_warehouse_service().get_supplier_profile(supplier_id)
+        if profile is None:
+            raise HTTPException(status_code=404, detail={"code": "not_found", "message": "Supplier not found", "details": {}})
+        return profile
+    except HTTPException:
+        raise
+    except Exception as error:
+        raise map_error(error) from error
+
+
 @router.get("/supplier/stats", tags=["supplier-self"])
 def get_supplier_dashboard_stats(actor_ctx: ActorContext = Depends(get_actor_context)) -> Any:
     if actor_ctx.supplier_id is None:
@@ -5156,6 +5310,74 @@ def respond_to_inquiry_endpoint(
         raise map_error(error) from error
 
 
+class InquiryMessageBody(BaseModel):
+    body: str = Field(min_length=1, max_length=4000)
+
+
+@router.get("/marketplace/my-inquiries/{inquiry_id}/messages", tags=["marketplace"])
+def get_inquiry_messages_buyer(
+    inquiry_id: int,
+    actor_ctx: ActorContext = Depends(get_actor_context),
+) -> Any:
+    """Buyer fetches full chat thread for their inquiry."""
+    try:
+        return get_warehouse_service().list_inquiry_messages(inquiry_id, actor_ctx.actor_id)
+    except PermissionError as error:
+        raise HTTPException(status_code=403, detail={"code": "forbidden", "message": str(error), "details": {}}) from error
+    except Exception as error:
+        raise map_error(error) from error
+
+
+@router.post("/marketplace/my-inquiries/{inquiry_id}/messages", tags=["marketplace"])
+def add_inquiry_message_buyer(
+    inquiry_id: int,
+    body: InquiryMessageBody,
+    actor_ctx: ActorContext = Depends(get_actor_context),
+) -> Any:
+    """Buyer sends a follow-up message on an inquiry."""
+    try:
+        return get_warehouse_service().add_inquiry_message(inquiry_id, actor_ctx.actor_id, body.body)
+    except PermissionError as error:
+        raise HTTPException(status_code=403, detail={"code": "forbidden", "message": str(error), "details": {}}) from error
+    except Exception as error:
+        raise map_error(error) from error
+
+
+@router.get("/supplier/inquiries/{inquiry_id}/messages", tags=["supplier-self"])
+def get_inquiry_messages_supplier(
+    inquiry_id: int,
+    actor_ctx: ActorContext = Depends(get_actor_context),
+) -> Any:
+    """Supplier fetches full chat thread for an inquiry."""
+    if actor_ctx.supplier_id is None:
+        raise HTTPException(status_code=403, detail={"code": "forbidden", "message": "No supplier linked", "details": {}})
+    try:
+        supplier_actor = f"supplier-actor:{actor_ctx.supplier_id}"
+        return get_warehouse_service().list_inquiry_messages(inquiry_id, supplier_actor)
+    except PermissionError as error:
+        raise HTTPException(status_code=403, detail={"code": "forbidden", "message": str(error), "details": {}}) from error
+    except Exception as error:
+        raise map_error(error) from error
+
+
+@router.post("/supplier/inquiries/{inquiry_id}/messages", tags=["supplier-self"])
+def add_inquiry_message_supplier(
+    inquiry_id: int,
+    body: InquiryMessageBody,
+    actor_ctx: ActorContext = Depends(get_actor_context),
+) -> Any:
+    """Supplier sends a follow-up message (alternative to respond endpoint)."""
+    if actor_ctx.supplier_id is None:
+        raise HTTPException(status_code=403, detail={"code": "forbidden", "message": "No supplier linked", "details": {}})
+    try:
+        supplier_actor = f"supplier-actor:{actor_ctx.supplier_id}"
+        return get_warehouse_service().add_inquiry_message(inquiry_id, supplier_actor, body.body)
+    except PermissionError as error:
+        raise HTTPException(status_code=403, detail={"code": "forbidden", "message": str(error), "details": {}}) from error
+    except Exception as error:
+        raise map_error(error) from error
+
+
 class InquiryStatusUpdate(BaseModel):
     status: str = Field(pattern="^(ordered|closed)$")
 
@@ -5202,6 +5424,79 @@ def create_shipment_from_inquiry(
         )
     except PermissionError as error:
         raise HTTPException(status_code=403, detail={"code": "forbidden", "message": str(error), "details": {}}) from error
+    except Exception as error:
+        raise map_error(error) from error
+
+
+# ── Marketplace cart (Kaspi/Amazon-style checkout) ──────────────────────────
+
+class CartItemAdd(BaseModel):
+    catalog_item_id: int
+    quantity: float = Field(gt=0, default=1)
+
+
+class CartItemQuantityUpdate(BaseModel):
+    quantity: float = Field(gt=0)
+
+
+class CartCheckout(BaseModel):
+    warehouse_id: int | None = None
+    notes: str | None = None
+
+
+@router.get("/marketplace/cart", tags=["marketplace"])
+def get_cart_endpoint(actor_ctx: ActorContext = Depends(get_actor_context)) -> Any:
+    try:
+        return get_warehouse_service().get_cart(actor_ctx.actor_id)
+    except Exception as error:
+        raise map_error(error) from error
+
+
+@router.post("/marketplace/cart/items", status_code=201, tags=["marketplace"])
+def add_cart_item_endpoint(
+    body: CartItemAdd,
+    actor_ctx: ActorContext = Depends(get_actor_context),
+) -> Any:
+    try:
+        return get_warehouse_service().add_to_cart(actor_ctx.actor_id, body.catalog_item_id, body.quantity)
+    except Exception as error:
+        raise map_error(error) from error
+
+
+@router.patch("/marketplace/cart/items/{cart_item_id}", tags=["marketplace"])
+def update_cart_item_endpoint(
+    cart_item_id: int,
+    body: CartItemQuantityUpdate,
+    actor_ctx: ActorContext = Depends(get_actor_context),
+) -> Any:
+    try:
+        return get_warehouse_service().update_cart_item(actor_ctx.actor_id, cart_item_id, body.quantity)
+    except Exception as error:
+        raise map_error(error) from error
+
+
+@router.delete("/marketplace/cart/items/{cart_item_id}", tags=["marketplace"])
+def remove_cart_item_endpoint(
+    cart_item_id: int,
+    actor_ctx: ActorContext = Depends(get_actor_context),
+) -> Any:
+    try:
+        return get_warehouse_service().remove_from_cart(actor_ctx.actor_id, cart_item_id)
+    except Exception as error:
+        raise map_error(error) from error
+
+
+@router.post("/marketplace/cart/checkout", status_code=201, tags=["marketplace"])
+def checkout_cart_endpoint(
+    body: CartCheckout,
+    actor_ctx: ActorContext = Depends(get_actor_context),
+) -> Any:
+    try:
+        svc = get_warehouse_service()
+        warehouse_id = body.warehouse_id
+        if warehouse_id is None and actor_ctx.warehouse_ids:
+            warehouse_id = list(actor_ctx.warehouse_ids)[0]
+        return svc.checkout_cart(actor_ctx.actor_id, warehouse_id, body.notes)
     except Exception as error:
         raise map_error(error) from error
 
@@ -5334,6 +5629,328 @@ def bulk_update_catalog_prices(
             item_ids=body.item_ids,
             percent_change=body.percent_change,
         )
+    except Exception as error:
+        raise map_error(error) from error
+
+
+
+
+# ── Supplier catalog item image ───────────────────────────────────────────────
+
+@router.post("/supplier/catalog/{item_id}/image/upload", tags=["supplier-self"], summary="Upload catalog item photo")
+async def upload_catalog_item_image(
+    item_id: int,
+    file: UploadFile,
+    actor_ctx: ActorContext = Depends(get_actor_context),
+) -> Any:
+    import uuid, aiofiles
+    from pathlib import Path
+    if actor_ctx.supplier_id is None:
+        raise HTTPException(status_code=403, detail={"code": "forbidden", "message": "No supplier linked", "details": {}})
+    MAX_SIZE = 8 * 1024 * 1024
+    ALLOWED = {".jpg", ".jpeg", ".png", ".webp"}
+    ext = Path(file.filename or "").suffix.lower()
+    if ext not in ALLOWED:
+        raise HTTPException(status_code=422, detail={"code": "invalid_file_type", "message": f"Разрешены JPG PNG WEBP. Получен: {ext}", "details": {}})
+    content = await file.read()
+    if len(content) > MAX_SIZE:
+        raise HTTPException(status_code=422, detail={"code": "file_too_large", "message": "Файл больше 8 МБ", "details": {}})
+    try:
+        uploads_dir = Path(__file__).resolve().parents[2] / "uploads" / "catalog"
+        uploads_dir.mkdir(parents=True, exist_ok=True)
+        safe_name = f"{item_id}_{uuid.uuid4().hex[:8]}{ext}"
+        dest = uploads_dir / safe_name
+        async with aiofiles.open(dest, "wb") as f_out:
+            await f_out.write(content)
+        image_url = f"/uploads/catalog/{safe_name}"
+        svc = get_warehouse_service()
+        result = svc.update_catalog_item(item_id, actor_ctx.supplier_id, {"image_url": image_url})
+        if result is None:
+            dest.unlink(missing_ok=True)
+            raise HTTPException(status_code=404, detail={"code": "not_found", "message": "Item not found or not yours", "details": {}})
+        return {"item_id": item_id, "image_url": image_url, "item": result}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise map_error(exc) from exc
+
+
+@router.delete("/supplier/catalog/{item_id}/image", status_code=204, tags=["supplier-self"], summary="Remove catalog item photo")
+def delete_catalog_item_image(
+    item_id: int,
+    actor_ctx: ActorContext = Depends(get_actor_context),
+) -> None:
+    if actor_ctx.supplier_id is None:
+        raise HTTPException(status_code=403, detail={"code": "forbidden", "message": "No supplier linked", "details": {}})
+    try:
+        svc = get_warehouse_service()
+        result = svc.update_catalog_item(item_id, actor_ctx.supplier_id, {"image_url": None})
+        if result is None:
+            raise HTTPException(status_code=404, detail={"code": "not_found", "message": "Item not found or not yours", "details": {}})
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise map_error(exc) from exc
+
+
+@router.post("/admin/test-email", status_code=200, tags=["admin"])
+def test_email(
+    to_email: str,
+    actor_ctx: ActorContext = Depends(get_actor_context),
+) -> Any:
+    """Send a test email to verify SMTP configuration."""
+    require_permission(actor_ctx, Permission.ADMIN_USERS)
+    try:
+        from app.services.email_notifier import _send
+        from app.core.config import get_settings as _gs; _settings = _gs()
+        _send(_settings, to_email, "Тест: Sklad email работает",
+              "<h2>Тест успешен!</h2><p>SMTP настроен корректно.</p>")
+        return {"sent": True, "to": to_email}
+    except Exception as exc:
+        raise HTTPException(status_code=422, detail={"code": "smtp_error", "message": str(exc), "details": {}}) from exc
+class PurchaseOrderCreate(BaseModel):
+    buyer_name: str | None = None
+    buyer_bin: str | None = None
+    buyer_address: str | None = None
+    buyer_contact: str | None = None
+    delivery_address: str | None = None
+    payment_terms: str | None = None
+    notes: str | None = None
+
+
+@router.post("/marketplace/my-inquiries/{inquiry_id}/purchase-order", tags=["marketplace"])
+def create_po(
+    inquiry_id: int,
+    body: PurchaseOrderCreate,
+    actor_ctx: ActorContext = Depends(get_actor_context),
+) -> Any:
+    """Create (or return existing) Purchase Order for an inquiry."""
+    try:
+        return get_warehouse_service().create_purchase_order(
+            inquiry_id, actor_ctx.actor_id, body.model_dump(exclude_none=True)
+        )
+    except PermissionError as error:
+        raise HTTPException(status_code=403, detail={"code": "forbidden", "message": str(error), "details": {}}) from error
+    except Exception as error:
+        raise map_error(error) from error
+
+
+@router.get("/marketplace/my-inquiries/{inquiry_id}/purchase-order/html", tags=["marketplace"],
+            response_class=HTMLResponse)
+def get_po_html(
+    inquiry_id: int,
+    actor_ctx: ActorContext = Depends(get_actor_context),
+) -> Any:
+    """Return printable HTML for a Purchase Order."""
+    from fastapi.responses import HTMLResponse as _HR
+    try:
+        data = get_warehouse_service().get_purchase_order(inquiry_id, actor_ctx.actor_id)
+    except PermissionError as error:
+        raise HTTPException(status_code=403, detail={"code": "forbidden", "message": str(error), "details": {}}) from error
+    except Exception as error:
+        raise map_error(error) from error
+
+    inq = data["inquiry"]
+    po = data["po"]
+
+    def esc(v):
+        if v is None: return "—"
+        return str(v).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+    def row(label, val):
+        v = esc(val)
+        return f'<div style="margin-bottom:4px"><span style="color:#666;font-size:11px">{label}</span><div>{v}</div></div>' if val else ""
+
+    STATUS_LABELS = {"draft": "Черновик", "sent": "Отправлен", "accepted": "Принят", "completed": "Завершён", "cancelled": "Отменён"}
+    status_label = STATUS_LABELS.get(po["status"] if po else "draft", "—") if po else "Без PO"
+    po_number = po["po_number"] if po else f"INQ-{inquiry_id}"
+    created_date = (str(po["created_at"])[:10] if po else str(inq["created_at"])[:10])
+    verified_badge = '<div style="font-size:12px;margin-top:4px"><span style="background:#16a34a;color:#fff;padding:2px 8px;border-radius:10px;font-size:11px">✅ Верифицирован</span></div>' if inq.get("supplier_verified") else ""
+
+    buyer_rows = (
+        row("Организация", po["buyer_name"] if po else None) +
+        row("БИН", po["buyer_bin"] if po else None) +
+        row("Адрес", po["buyer_address"] if po else None) +
+        row("Контактное лицо", po["buyer_contact"] if po else None)
+    ) or "<div style='color:#999'>Данные не указаны</div>"
+
+    supplier_rows = (
+        row("Организация", inq["supplier_name"]) +
+        row("БИН/ИНН", inq.get("supplier_bin") or inq.get("supplier_inn")) +
+        row("Адрес", inq.get("supplier_address")) +
+        row("Город", inq.get("supplier_city")) +
+        row("Телефон", inq.get("supplier_phone")) +
+        row("Email", inq.get("supplier_email"))
+    ) or "<div style='color:#999'>—</div>"
+
+    unit_price_str = f'{float(inq["unit_price"]):,.2f} тг' if inq.get("unit_price") else "—"
+    qty = float(inq["quantity"])
+    total = float(inq["unit_price"]) * qty if inq.get("unit_price") else None
+    total_price_str = f'{total:,.2f} тг' if total else "—"
+
+    delivery_address_row = f'<strong>Адрес доставки:</strong> {esc(po["delivery_address"])}<br>' if po and po.get("delivery_address") else ""
+    notes_row = f'<strong>Примечания:</strong> {esc(po["notes"] if po else inq.get("notes"))}<br>' if (po and po.get("notes")) or inq.get("notes") else ""
+    sup_verified = ' <span style="background:#16a34a;color:#fff;padding:1px 6px;border-radius:8px;font-size:10px">✅</span>' if inq.get("supplier_verified") else ""
+    payment_terms = esc(po["payment_terms"] if po else None) if po else "По договорённости"
+
+    _PO_HTML_TEMPLATE = """<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<title>Заказ {po_number}</title>
+<style>
+  body{{font-family:Arial,sans-serif;font-size:13px;margin:0;padding:20px;color:#111}}
+  h1{{font-size:20px;margin:0 0 4px}}
+  .header{{display:flex;justify-content:space-between;margin-bottom:20px;border-bottom:2px solid #000;padding-bottom:14px}}
+  .parties{{display:grid;grid-template-columns:1fr 1fr;gap:20px;margin-bottom:20px}}
+  .party{{border:1px solid #ddd;padding:12px;border-radius:4px}}
+  .party h3{{margin:0 0 8px;font-size:14px;border-bottom:1px solid #eee;padding-bottom:6px}}
+  table{{width:100%;border-collapse:collapse;margin-bottom:20px}}
+  th{{background:#f5f5f5;text-align:left;padding:8px;font-size:12px;border:1px solid #ddd}}
+  td{{padding:8px;border:1px solid #ddd;font-size:12px}}
+  .total{{text-align:right;font-size:15px;font-weight:bold;margin-bottom:20px}}
+  .terms{{background:#f9f9f9;padding:12px;border-radius:4px;font-size:12px;margin-bottom:20px}}
+  .sign{{display:grid;grid-template-columns:1fr 1fr;gap:40px;margin-top:40px}}
+  .sign-block{{border-top:1px solid #000;padding-top:8px;font-size:12px;color:#555}}
+  @media print{{button{{display:none}}}}
+</style>
+</head>
+<body>
+<button onclick="window.print()" style="position:fixed;top:16px;right:16px;padding:8px 16px;background:#2563eb;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:13px">&#x1F5A8; Печать</button>
+<div class="header">
+  <div>
+    <h1>ЗАКАЗ НА ПОСТАВКУ</h1>
+    <div style="font-size:16px;font-weight:bold;color:#2563eb">{po_number}</div>
+    <div style="font-size:12px;color:#555;margin-top:4px">Дата: {created_date}</div>
+  </div>
+  <div style="text-align:right">
+    <div style="font-size:12px;color:#555">Статус: <strong>{status_label}</strong></div>
+    {verified_badge}
+  </div>
+</div>
+<div class="parties">
+  <div class="party"><h3>ПОКУПАТЕЛЬ</h3>{buyer_rows}</div>
+  <div class="party"><h3>ПОСТАВЩИК{sup_verified}</h3>{supplier_rows}</div>
+</div>
+<table>
+  <tr><th style="width:40%">Наименование товара</th><th>Кол-во</th><th>Ед. изм.</th><th>Цена за ед.</th><th>Сумма</th></tr>
+  <tr><td>{product_name}</td><td>{quantity}</td><td>{unit}</td><td>{unit_price}</td><td>{total_price}</td></tr>
+</table>
+<div class="total">ИТОГО: {total_price}</div>
+<div class="terms"><strong>Условия оплаты:</strong> {payment_terms}<br>{delivery_address_row}{notes_row}</div>
+<div class="sign">
+  <div class="sign-block">Покупатель: __________________ / ____________________</div>
+  <div class="sign-block">Поставщик: __________________ / ____________________</div>
+</div>
+</body>
+</html>"""
+
+    html = _PO_HTML_TEMPLATE.format(
+        po_number=esc(po_number),
+        created_date=esc(created_date),
+        status_label=esc(status_label),
+        verified_badge=verified_badge,
+        buyer_rows=buyer_rows,
+        supplier_rows=supplier_rows,
+        sup_verified=sup_verified,
+        product_name=esc(inq["product_name"]),
+        quantity=esc(str(qty)),
+        unit=esc(inq.get("unit", "")),
+        unit_price=unit_price_str,
+        total_price=total_price_str,
+        payment_terms=payment_terms,
+        delivery_address_row=delivery_address_row,
+        notes_row=notes_row,
+    )
+    return _HR(content=html)
+
+
+class CategoryCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=120)
+    slug: str | None = None
+    parent_id: int | None = None
+    icon: str | None = None
+    sort_order: int = 0
+
+
+@router.get("/catalog-categories", tags=["marketplace"])
+def list_categories(
+    parent_id: int | None = None,
+    actor_ctx: ActorContext = Depends(get_actor_context),
+) -> Any:
+    """List all categories or children of a specific category."""
+    try:
+        return get_warehouse_service().list_catalog_categories(parent_id)
+    except Exception as error:
+        raise map_error(error) from error
+
+
+@router.post("/catalog-categories", status_code=201, response_model=dict, tags=["admin"])
+def create_catalog_category_endpoint(
+    body: CategoryCreate,
+    actor_ctx: ActorContext = Depends(get_actor_context),
+) -> Any:
+    """Create a new catalog category (admin only)."""
+    require_permission(actor_ctx, Permission.CATALOG_WRITE)
+    try:
+        return get_warehouse_service().create_catalog_category(
+            body.model_dump(exclude_none=True), actor_ctx.actor_id
+        )
+    except Exception as error:
+        raise map_error(error) from error
+
+
+class PriceTierItem(BaseModel):
+    min_quantity: float = Field(gt=0)
+    unit_price: float = Field(gt=0)
+    label: str | None = None
+
+
+class PriceTiersBody(BaseModel):
+    tiers: list[PriceTierItem]
+
+
+@router.get("/supplier/catalog/{item_id}/price-tiers", tags=["supplier-self"])
+def get_price_tiers(
+    item_id: int,
+    actor_ctx: ActorContext = Depends(get_actor_context),
+) -> Any:
+    if actor_ctx.supplier_id is None:
+        raise HTTPException(status_code=403, detail={"code": "forbidden", "message": "No supplier linked", "details": {}})
+    try:
+        return get_warehouse_service().get_price_tiers(item_id)
+    except Exception as error:
+        raise map_error(error) from error
+
+
+@router.put("/supplier/catalog/{item_id}/price-tiers", tags=["supplier-self"])
+def set_price_tiers(
+    item_id: int,
+    body: PriceTiersBody,
+    actor_ctx: ActorContext = Depends(get_actor_context),
+) -> Any:
+    """Replace all price tiers for a catalog item. Send empty list to clear tiers."""
+    if actor_ctx.supplier_id is None:
+        raise HTTPException(status_code=403, detail={"code": "forbidden", "message": "No supplier linked", "details": {}})
+    try:
+        return get_warehouse_service().set_price_tiers(
+            item_id, actor_ctx.supplier_id,
+            [t.model_dump() for t in body.tiers]
+        )
+    except PermissionError as error:
+        raise HTTPException(status_code=403, detail={"code": "forbidden", "message": str(error), "details": {}}) from error
+    except Exception as error:
+        raise map_error(error) from error
+
+
+@router.get("/marketplace/catalog/{item_id}/price-tiers", tags=["marketplace"])
+def get_public_price_tiers(
+    item_id: int,
+    actor_ctx: ActorContext = Depends(get_actor_context),
+) -> Any:
+    """Public endpoint: price tiers for a catalog item (visible to buyers)."""
+    try:
+        return get_warehouse_service().get_price_tiers(item_id)
     except Exception as error:
         raise map_error(error) from error
 

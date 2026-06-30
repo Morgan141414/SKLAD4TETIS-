@@ -154,6 +154,7 @@ def create_app() -> FastAPI:
     uploads_dir.mkdir(parents=True, exist_ok=True)
     (uploads_dir / "certificates").mkdir(exist_ok=True)
     (uploads_dir / "products").mkdir(exist_ok=True)
+    (uploads_dir / "catalog").mkdir(exist_ok=True)
 
     if frontend_dir.exists():
         # Uploads must be mounted before /sklad so that /sklad/uploads/ takes priority
