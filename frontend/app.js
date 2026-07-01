@@ -839,7 +839,7 @@ function applyActorProfile(profile) {
       : "Демо-режим: роль и доступ задаются вручную.";
   }
   state.auth.supplierId = profile.supplier_id ?? null;
-  const canBeSupplier = (profile.roles || []).includes("supplier") && profile.supplier_id != null;
+  const canBeSupplier = state.auth.source === "demo" || ((profile.roles || []).includes("supplier") && profile.supplier_id != null);
   const supplierToggle = el("supplier-mode-toggle");
   if (supplierToggle) {
     supplierToggle.style.display = canBeSupplier ? "" : "none";
