@@ -9091,7 +9091,7 @@ class WarehouseService:
                 f"SELECT COUNT(*) FROM supplier_catalog WHERE {' AND '.join(filters)}",
                 params,
             ).fetchone()
-            return int(row[0]) if row else 0
+            return int(row["n"]) if row else 0
         finally:
             self._close_connection(connection)
 
@@ -9265,6 +9265,6 @@ class WarehouseService:
                 f"SELECT COUNT(*) FROM supplier_catalog sc WHERE {' AND '.join(filters)}",
                 params,
             ).fetchone()
-            return int(row[0]) if row else 0
+            return int(row["n"]) if row else 0
         finally:
             self._close_connection(connection)
