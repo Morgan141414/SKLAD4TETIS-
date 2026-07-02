@@ -92,6 +92,10 @@ class SupplierCreate(BaseModel):
     contract_expires_on: date | None = None
     payment_terms: str | None = Field(default=None, max_length=500)
     notes: str | None = Field(default=None, max_length=2000)
+    lat: float | None = None
+    lng: float | None = None
+    city: str | None = Field(default=None, max_length=200)
+    delivery_days: int | None = Field(default=None, ge=1, le=365)
 
 
 class SupplierUpdate(SupplierCreate):
@@ -102,9 +106,11 @@ class SupplierApplicationCreate(BaseModel):
     name: str = Field(min_length=1, max_length=240)
     bin: str | None = Field(default=None, max_length=32)
     phone: str | None = Field(default=None, max_length=64)
-    email: str | None = Field(default=None, max_length=254)
+    email: str = Field(min_length=3, max_length=254)
     contact_person: str | None = Field(default=None, max_length=200)
     address: str | None = Field(default=None, max_length=500)
+    city: str | None = Field(default=None, max_length=200)
+    delivery_days: int | None = Field(default=None, ge=1, le=365)
     notes: str | None = Field(default=None, max_length=2000)
 
 
@@ -119,6 +125,8 @@ class WarehouseCreate(BaseModel):
     department: str | None = Field(default=None, max_length=200)
     tetis_org_id: str | None = Field(default=None, max_length=128)
     external_tetis_id: str | None = Field(default=None, max_length=128)
+    mis_clinic_id: str | None = Field(default=None, max_length=128)
+    mis_room_id: str | None = Field(default=None, max_length=128)
     storage_zone: str | None = Field(default=None, max_length=200)
     capacity_limit: Decimal | None = Field(default=None, ge=0)
     storage_conditions: str | None = Field(default=None, max_length=500)
@@ -172,6 +180,8 @@ class ReceiptDocumentCreate(BaseModel):
     supplier_id: int
     warehouse_id: int
     lines: list[ReceiptDocumentLineCreate]
+    external_ref: str | None = None  # номер ЭСФ, накладной, счёта
+    notes: str | None = None          # произвольные заметки к документу
 
 
 class WriteOffCreate(BaseModel):
@@ -326,6 +336,9 @@ class QuarantineReviewUpdate(BaseModel):
     responsible_id: str | None = Field(default=None, max_length=120)
     due_at: datetime | None = None
     decision_reason: str | None = Field(default=None, max_length=1000)
+    commission_members: list[str] | None = None
+    resolution_type: str | None = None  # "approved_for_use" | "return_to_supplier" | "disposal"
+    disposal_quantity: float | None = None
 
 
 class WarehouseLockUpdate(BaseModel):
@@ -376,6 +389,11 @@ class Supplier(Row):
     contract_expires_on: date | None = None
     payment_terms: str | None = None
     notes: str | None = None
+    lat: float | None = None
+    lng: float | None = None
+    city: str | None = None
+    delivery_days: int | None = None
+    portal_access_enabled: bool = False
 
 
 class SupplierApplication(Row):
@@ -386,9 +404,11 @@ class SupplierApplication(Row):
     name: str
     bin: str | None = None
     phone: str | None = None
-    email: str | None = None
+    email: str
     contact_person: str | None = None
     address: str | None = None
+    city: str | None = None
+    delivery_days: int | None = None
     notes: str | None = None
     review_reason: str | None = None
     submitted_at: datetime
@@ -404,6 +424,13 @@ class SupplierApplicationPage(BaseModel):
     offset: int
 
 
+class SupplierApplicationReviewResponse(BaseModel):
+    application: SupplierApplication
+    supplier_id: int | None = None
+    email: str | None = None
+    generated_password: str | None = None
+
+
 class Warehouse(Row):
     id: int
     name: str
@@ -411,6 +438,8 @@ class Warehouse(Row):
     inventory_lock: bool
     tetis_org_id: str | None = None
     external_tetis_id: str | None = None
+    mis_clinic_id: str | None = None
+    mis_room_id: str | None = None
     storage_zone: str | None = None
     capacity_limit: Decimal | None = None
     storage_conditions: str | None = None
@@ -492,7 +521,9 @@ class Product(Row):
     barcode: str | None = None
     description: str | None = None
     certificate_ref: str | None = None
+    image_path: str | None = None
     is_active: bool = True
+    label_needs_reprint: bool = False
 
 
 class ProductBarcodeLabel(BaseModel):
@@ -504,6 +535,8 @@ class ProductBarcodeLabel(BaseModel):
     label_text: str
     zpl: str
     epl: str
+    svg: str = ""
+    label_needs_reprint: bool = False
 
 
 class ProductBarcodeLabelBatchRequest(BaseModel):
@@ -542,6 +575,7 @@ class BatchPriceLabel(BaseModel):
     label_text: str
     zpl: str
     epl: str
+    svg: str = "" 
 
 
 class BatchPriceLabelBatchRequest(BaseModel):
@@ -621,6 +655,9 @@ class QuarantineReview(Row):
     created_at: datetime
     updated_at: datetime
     decided_at: datetime | None
+    commission_members: list[str] | None = None
+    resolution_type: str | None = None
+    disposal_quantity: float | None = None
 
 
 class QuarantineReviewPage(BaseModel):
@@ -975,13 +1012,6 @@ class PurchaseRequest(Row):
     source: str
     created_by: str
     created_at: datetime
-    offer_id: int | None = None
-    offer_status: str | None = None
-    offer_unit_price: Decimal | None = None
-    offer_quantity: Decimal | None = None
-    offer_delivery_date: date | None = None
-    offer_expires_at: date | None = None
-    offer_comment: str | None = None
 
 
 class PurchaseRequestCreate(BaseModel):
@@ -994,82 +1024,6 @@ class PurchaseRequestCreate(BaseModel):
 
 class PurchaseRequestStatusUpdate(BaseModel):
     status: str = Field(pattern="^(ordered|cancelled)$")
-
-
-class SupplierOfferCreate(BaseModel):
-    purchase_request_id: int
-    unit_price: Decimal = Field(ge=0)
-    quantity: Decimal = Field(gt=0)
-    delivery_date: date | None = None
-    expires_at: date | None = None
-    comment: str | None = Field(default=None, max_length=1000)
-
-
-class SupplierOfferReview(BaseModel):
-    status: str = Field(pattern="^(accepted|rejected)$")
-    reason: str | None = Field(default=None, max_length=1000)
-
-
-class SupplierOffer(Row):
-    id: int
-    purchase_request_id: int
-    supplier_id: int
-    actor_id: str
-    status: str
-    unit_price: Decimal
-    quantity: Decimal
-    delivery_date: date | None = None
-    expires_at: date | None = None
-    comment: str | None = None
-    reviewed_by: str | None = None
-    reviewed_at: datetime | None = None
-    review_reason: str | None = None
-    created_at: datetime
-    updated_at: datetime
-    supplier_name: str | None = None
-    product_name: str | None = None
-    sku: str | None = None
-    warehouse_id: int | None = None
-    request_status: str | None = None
-
-
-class SupplierCatalogCreate(BaseModel):
-    type: str = Field(default="product", pattern="^(product|service)$")
-    title: str = Field(min_length=1, max_length=240)
-    description: str | None = Field(default=None, max_length=4000)
-    price: Decimal | None = Field(default=None, ge=0)
-    price_type: str = Field(default="fixed", pattern="^(fixed|hourly|negotiable)$")
-    unit: str | None = Field(default=None, max_length=64)
-    service_category: str | None = Field(default=None, pattern="^(repair|cleaning|logistics|consulting|)$")
-
-
-class SupplierCatalogUpdate(SupplierCatalogCreate):
-    pass
-
-
-class SupplierCatalog(Row):
-    id: int
-    supplier_id: int
-    actor_id: str
-    type: str
-    title: str
-    description: str | None = None
-    price: Decimal | None = None
-    price_type: str
-    unit: str | None = None
-    service_category: str | None = None
-    image_file_id: str | None = None
-    is_active: bool
-    created_at: datetime
-    updated_at: datetime
-    supplier_name: str | None = None
-
-
-class SupplierCatalogPage(BaseModel):
-    items: list[SupplierCatalog]
-    total: int
-    limit: int
-    offset: int
 
 
 class AuditLogEntry(Row):
@@ -1206,3 +1160,195 @@ class InventoryPrintForm(BaseModel):
     count_sheet_csv: str
     reconciliation_csv: str
     lines: list[InventoryPrintLine]
+
+
+
+class LoginRequest(BaseModel):
+    username: str
+    password: str
+
+
+class SupplierLoginRequest(BaseModel):
+    email: str
+    password: str
+
+
+class SupplierPortalAccessResponse(BaseModel):
+    supplier_id: int
+    email: str
+    generated_password: str
+
+
+class TokenResponse(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
+
+
+class UserCreate(BaseModel):
+    username: str
+    full_name: str
+    password: str
+    roles: list[str] = ["warehouse_manager"]
+    warehouse_ids: list[int] = []
+    department: str | None = None
+    supplier_id: int | None = None
+
+
+class UserUpdate(BaseModel):
+    full_name: str | None = None
+    password: str | None = None
+    roles: list[str] | None = None
+    warehouse_ids: list[int] | None = None
+    department: str | None = None
+    supplier_id: int | None = None
+    is_active: bool | None = None
+
+
+class UserOut(BaseModel):
+    id: int
+    username: str
+    full_name: str
+    roles: list[str]
+    warehouse_ids: list[int]
+    department: str | None
+    supplier_id: int | None = None
+    is_active: bool
+    created_at: str
+
+
+class ShipmentCreate(BaseModel):
+    supplier_id: int
+    reference: str | None = None
+    status: str = "in_transit"
+    origin_city: str | None = None
+    origin_lat: float | None = None
+    origin_lng: float | None = None
+    destination_warehouse_id: int | None = None
+    current_city: str | None = None
+    current_lat: float | None = None
+    current_lng: float | None = None
+    estimated_arrival: date | None = None
+    notes: str | None = None
+
+class ShipmentUpdate(BaseModel):
+    status: str | None = None
+    current_city: str | None = None
+    current_lat: float | None = None
+    current_lng: float | None = None
+    estimated_arrival: date | None = None
+    notes: str | None = None
+
+class Shipment(BaseModel):
+    id: int
+    supplier_id: int
+    reference: str | None
+    status: str
+    origin_city: str | None
+    origin_lat: float | None
+    origin_lng: float | None
+    destination_warehouse_id: int | None
+    current_city: str | None
+    current_lat: float | None
+    current_lng: float | None
+    estimated_arrival: date | None
+    notes: str | None
+    created_at: str
+    updated_at: str
+
+class ShipmentPage(BaseModel):
+    items: list[Shipment]
+    total: int
+
+
+class AiRiskAnalysisRequest(BaseModel):
+    purchase_request_ids: list[int] = []
+    warehouse_id: int | None = None
+
+class AiRiskAnalysisResult(BaseModel):
+    analysis: str
+    requests_analyzed: int
+    model: str
+    input_tokens: int
+    output_tokens: int
+
+class AiSinglePurchaseAnalysis(BaseModel):
+    product_id: int
+    quantity: float
+    unit_price: float | None = None
+    supplier_id: int | None = None
+    warehouse_id: int | None = None
+
+class AiSinglePurchaseResult(BaseModel):
+    analysis: str
+    decision: str
+    risk_level: str
+    model: str
+
+class AuctionCreate(BaseModel):
+    title: str = Field(min_length=1, max_length=300)
+    description: str | None = None
+    product_id: int
+    warehouse_id: int
+    quantity: Decimal = Field(gt=0)
+    unit: str = "шт"
+    start_price: Decimal = Field(gt=0)
+    min_price: Decimal = Field(gt=0)
+    step_amount: Decimal = Field(gt=Decimal("0"), default=Decimal("100"))
+    step_interval_seconds: int = Field(gt=0, default=300)
+    starts_at: datetime | None = None
+
+class AuctionOut(BaseModel):
+    id: int
+    title: str
+    description: str | None = None
+    product_id: int
+    product_name: str | None = None
+    warehouse_id: int
+    quantity: Decimal
+    unit: str
+    start_price: Decimal
+    current_price: Decimal
+    min_price: Decimal
+    step_amount: Decimal
+    step_interval_seconds: int
+    status: str
+    winner_supplier_id: int | None = None
+    winner_bid: Decimal | None = None
+    starts_at: str | None = None
+    ends_at: str | None = None
+    next_step_at: str | None = None
+    created_by: str
+    created_at: str
+    bid_count: int = 0
+
+class AuctionBid(BaseModel):
+    id: int
+    auction_id: int
+    supplier_id: int
+    supplier_name: str | None = None
+    bid_amount: Decimal
+    created_at: str
+
+class AuctionBidCreate(BaseModel):
+    supplier_id: int
+    bid_amount: Decimal = Field(gt=0)
+
+class AuctionPage(BaseModel):
+    items: list[AuctionOut]
+    total: int
+
+class SupplierReviewCreate(BaseModel):
+    rating: int = Field(ge=1, le=5)
+    comment: str | None = None
+
+class SupplierReview(BaseModel):
+    id: int
+    supplier_id: int
+    rating: int
+    comment: str | None = None
+    reviewer_id: str | None = None
+    status: str
+    created_at: str
+
+class SupplierReviewModerate(BaseModel):
+    action: str  # "approve" | "reject"

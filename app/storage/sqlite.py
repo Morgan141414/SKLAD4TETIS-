@@ -33,6 +33,26 @@ CREATE TABLE IF NOT EXISTS suppliers (
   notes TEXT
 );
 
+CREATE TABLE IF NOT EXISTS supplier_applications (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  actor_id TEXT NOT NULL,
+  supplier_id INTEGER REFERENCES suppliers(id),
+  status TEXT NOT NULL,
+  name TEXT NOT NULL,
+  bin TEXT,
+  phone TEXT,
+  email TEXT NOT NULL,
+  contact_person TEXT,
+  address TEXT,
+  city TEXT,
+  delivery_days INTEGER,
+  notes TEXT,
+  review_reason TEXT,
+  submitted_at TEXT NOT NULL,
+  reviewed_by TEXT,
+  reviewed_at TEXT
+);
+
 CREATE TABLE IF NOT EXISTS warehouses (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   name TEXT NOT NULL,
@@ -40,6 +60,8 @@ CREATE TABLE IF NOT EXISTS warehouses (
   inventory_lock INTEGER NOT NULL DEFAULT 0,
   tetis_org_id TEXT,
   external_tetis_id TEXT,
+  mis_clinic_id TEXT,
+  mis_room_id TEXT,
   storage_zone TEXT,
   capacity_limit TEXT,
   storage_conditions TEXT,
@@ -235,51 +257,6 @@ CREATE TABLE IF NOT EXISTS supplier_price_history (
   recorded_at TEXT NOT NULL
 );
 
-CREATE TABLE IF NOT EXISTS supplier_applications (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  actor_id TEXT NOT NULL UNIQUE,
-  supplier_id INTEGER REFERENCES suppliers(id),
-  status TEXT NOT NULL,
-  name TEXT NOT NULL,
-  bin TEXT,
-  phone TEXT,
-  email TEXT,
-  contact_person TEXT,
-  address TEXT,
-  notes TEXT,
-  review_reason TEXT,
-  submitted_at TEXT NOT NULL,
-  reviewed_by TEXT,
-  reviewed_at TEXT
-);
-
-CREATE TABLE IF NOT EXISTS supplier_members (
-  supplier_id INTEGER NOT NULL REFERENCES suppliers(id) ON DELETE CASCADE,
-  actor_id TEXT NOT NULL,
-  member_role TEXT NOT NULL DEFAULT 'owner',
-  is_active INTEGER NOT NULL DEFAULT 1,
-  created_at TEXT NOT NULL,
-  PRIMARY KEY(supplier_id, actor_id)
-);
-
-CREATE TABLE IF NOT EXISTS supplier_offers (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  purchase_request_id INTEGER NOT NULL REFERENCES purchase_requests(id) ON DELETE CASCADE,
-  supplier_id INTEGER NOT NULL REFERENCES suppliers(id),
-  actor_id TEXT NOT NULL,
-  status TEXT NOT NULL,
-  unit_price TEXT NOT NULL,
-  quantity TEXT NOT NULL,
-  delivery_date TEXT,
-  expires_at TEXT,
-  comment TEXT,
-  reviewed_by TEXT,
-  reviewed_at TEXT,
-  review_reason TEXT,
-  created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL
-);
-
 CREATE TABLE IF NOT EXISTS audit_log (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   actor_id TEXT NOT NULL,
@@ -288,7 +265,10 @@ CREATE TABLE IF NOT EXISTS audit_log (
   entity_id TEXT NOT NULL,
   warehouse_id INTEGER REFERENCES warehouses(id),
   payload TEXT NOT NULL,
-  created_at TEXT NOT NULL
+  created_at TEXT NOT NULL,
+  request_id TEXT,
+  ip_address TEXT,
+  user_agent TEXT
 );
 
 CREATE TABLE IF NOT EXISTS notifications (
@@ -410,25 +390,77 @@ CREATE INDEX IF NOT EXISTS idx_sensor_readings_warehouse_recorded
 CREATE INDEX IF NOT EXISTS idx_sensor_readings_device_recorded
   ON sensor_readings(device_id, recorded_at DESC, id DESC);
 
-CREATE INDEX IF NOT EXISTS idx_supplier_applications_status_submitted
-  ON supplier_applications(status, submitted_at DESC, id DESC);
+CREATE TABLE IF NOT EXISTS repack_templates (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL,
+  source_product_id INTEGER REFERENCES products(id),
+  target_product_id INTEGER NOT NULL REFERENCES products(id),
+  quantity_factor TEXT NOT NULL DEFAULT '1',
+  loss_factor TEXT NOT NULL DEFAULT '0',
+  target_unit_price TEXT,
+  reason TEXT,
+  created_by TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
 
-CREATE INDEX IF NOT EXISTS idx_supplier_members_actor_active
-  ON supplier_members(actor_id, is_active, supplier_id);
+CREATE TABLE IF NOT EXISTS procedure_consumption_templates (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  mis_clinic_id TEXT NOT NULL,
+  service_code TEXT NOT NULL,
+  name TEXT NOT NULL,
+  created_by TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  UNIQUE (mis_clinic_id, service_code)
+);
 
-CREATE INDEX IF NOT EXISTS idx_supplier_offers_request_status
-  ON supplier_offers(purchase_request_id, status, id);
+CREATE TABLE IF NOT EXISTS procedure_consumption_items (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  template_id INTEGER NOT NULL REFERENCES procedure_consumption_templates(id),
+  product_id INTEGER NOT NULL REFERENCES products(id),
+  quantity TEXT NOT NULL
+);
 
-CREATE INDEX IF NOT EXISTS idx_supplier_offers_supplier_status
-  ON supplier_offers(supplier_id, status, updated_at DESC, id DESC);
+CREATE INDEX IF NOT EXISTS idx_procedure_consumption_items_template
+  ON procedure_consumption_items(template_id);
 
-CREATE UNIQUE INDEX IF NOT EXISTS uq_supplier_offers_active_supplier_request
-  ON supplier_offers(purchase_request_id, supplier_id)
-  WHERE status IN ('submitted', 'accepted');
+CREATE TABLE IF NOT EXISTS mis_processed_events (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  mis_event_id TEXT NOT NULL UNIQUE,
+  created_at TEXT NOT NULL
+);
 
-CREATE UNIQUE INDEX IF NOT EXISTS uq_supplier_offers_one_accepted_request
-  ON supplier_offers(purchase_request_id)
-  WHERE status = 'accepted';
+CREATE TABLE IF NOT EXISTS auctions (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  title TEXT NOT NULL,
+  description TEXT,
+  product_id INTEGER NOT NULL REFERENCES products(id),
+  warehouse_id INTEGER NOT NULL,
+  quantity TEXT NOT NULL,
+  unit TEXT NOT NULL DEFAULT 'шт',
+  start_price TEXT NOT NULL,
+  current_price TEXT NOT NULL,
+  min_price TEXT NOT NULL,
+  step_amount TEXT NOT NULL DEFAULT '100',
+  step_interval_seconds INTEGER NOT NULL DEFAULT 300,
+  status TEXT NOT NULL DEFAULT 'draft',
+  winner_supplier_id INTEGER REFERENCES suppliers(id),
+  winner_bid TEXT,
+  starts_at TEXT,
+  ends_at TEXT,
+  next_step_at TEXT,
+  created_by TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS auction_bids (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  auction_id INTEGER NOT NULL REFERENCES auctions(id),
+  supplier_id INTEGER NOT NULL REFERENCES suppliers(id),
+  bid_amount TEXT NOT NULL,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_auction_bids_auction ON auction_bids(auction_id);
 """
 
 
@@ -481,8 +513,21 @@ class SQLiteDatabase:
             self._ensure_column(connection, "products", "description", "TEXT")
             self._ensure_column(connection, "products", "certificate_ref", "TEXT")
             self._ensure_column(connection, "products", "is_active", "INTEGER NOT NULL DEFAULT 1")
+            self._ensure_column(connection, "suppliers", "lat", "REAL")
+            self._ensure_column(connection, "suppliers", "lng", "REAL")
+            self._ensure_column(connection, "suppliers", "city", "TEXT")
+            self._ensure_column(connection, "warehouses", "controlled_substance_limit", "TEXT")
+            self._ensure_column(connection, "suppliers", "delivery_days", "INTEGER")
+            self._ensure_column(connection, "suppliers", "password_hash", "TEXT")
+            self._ensure_column(connection, "suppliers", "portal_access_enabled", "INTEGER NOT NULL DEFAULT 0")
+            self._ensure_supplier_application_schema(connection)
             self._ensure_column(connection, "batches", "serial_number", "TEXT")
+            self._ensure_column(connection, "products", "label_needs_reprint", "INTEGER NOT NULL DEFAULT 0")
+            self._ensure_column(connection, "products", "last_label_price", "TEXT")
             self._ensure_column(connection, "audit_log", "warehouse_id", "INTEGER REFERENCES warehouses(id)")
+            self._ensure_column(connection, "audit_log", "request_id", "TEXT")
+            self._ensure_column(connection, "audit_log", "ip_address", "TEXT")
+            self._ensure_column(connection, "audit_log", "user_agent", "TEXT")
             self._ensure_column(connection, "notifications", "batch_id", "INTEGER REFERENCES batches(id)")
             self._ensure_column(connection, "notifications", "device_id", "INTEGER REFERENCES sensor_devices(id)")
             self._ensure_column(
@@ -499,6 +544,8 @@ class SQLiteDatabase:
             )
             self._ensure_column(connection, "stock_document_lines", "serial_number", "TEXT")
             self._ensure_column(connection, "stock_documents", "approved_by", "TEXT")
+            self._ensure_column(connection, "stock_documents", "external_ref", "TEXT")
+            self._ensure_column(connection, "stock_documents", "notes", "TEXT")
             self._ensure_column(connection, "stock_documents", "approved_at", "TEXT")
             self._ensure_column(connection, "stock_movements", "second_approver_id", "TEXT")
             self._ensure_column(connection, "stock_movements", "second_approval_note", "TEXT")
@@ -574,9 +621,37 @@ class SQLiteDatabase:
             self._ensure_sensor_schema(connection)
             self._ensure_inventory_metadata_schema(connection)
             self._ensure_supplier_price_history_schema(connection)
-            self._ensure_supplier_onboarding_schema(connection)
-            self._ensure_supplier_offer_schema(connection)
-            self._ensure_supplier_catalog_schema(connection)
+
+    def _ensure_supplier_application_schema(self, connection: sqlite3.Connection) -> None:
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS supplier_applications (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              actor_id TEXT NOT NULL,
+              supplier_id INTEGER REFERENCES suppliers(id),
+              status TEXT NOT NULL,
+              name TEXT NOT NULL,
+              bin TEXT,
+              phone TEXT,
+              email TEXT NOT NULL,
+              contact_person TEXT,
+              address TEXT,
+              city TEXT,
+              delivery_days INTEGER,
+              notes TEXT,
+              review_reason TEXT,
+              submitted_at TEXT NOT NULL,
+              reviewed_by TEXT,
+              reviewed_at TEXT
+            )
+            """
+        )
+        connection.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_supplier_applications_status_submitted
+            ON supplier_applications(status, submitted_at DESC, id DESC)
+            """
+        )
 
     def _ensure_inventory_metadata_schema(self, connection: sqlite3.Connection) -> None:
         connection.execute(
@@ -617,136 +692,6 @@ class SQLiteDatabase:
             """
             CREATE INDEX IF NOT EXISTS idx_supplier_price_history_supplier_product_recorded
               ON supplier_price_history(supplier_id, product_id, recorded_at DESC, id DESC)
-            """
-        )
-
-    def _ensure_supplier_onboarding_schema(self, connection: sqlite3.Connection) -> None:
-        connection.execute(
-            """
-            CREATE TABLE IF NOT EXISTS supplier_applications (
-              id INTEGER PRIMARY KEY AUTOINCREMENT,
-              actor_id TEXT NOT NULL UNIQUE,
-              supplier_id INTEGER REFERENCES suppliers(id),
-              status TEXT NOT NULL,
-              name TEXT NOT NULL,
-              bin TEXT,
-              phone TEXT,
-              email TEXT,
-              contact_person TEXT,
-              address TEXT,
-              notes TEXT,
-              review_reason TEXT,
-              submitted_at TEXT NOT NULL,
-              reviewed_by TEXT,
-              reviewed_at TEXT
-            )
-            """
-        )
-        connection.execute(
-            """
-            CREATE TABLE IF NOT EXISTS supplier_members (
-              supplier_id INTEGER NOT NULL REFERENCES suppliers(id) ON DELETE CASCADE,
-              actor_id TEXT NOT NULL,
-              member_role TEXT NOT NULL DEFAULT 'owner',
-              is_active INTEGER NOT NULL DEFAULT 1,
-              created_at TEXT NOT NULL,
-              PRIMARY KEY(supplier_id, actor_id)
-            )
-            """
-        )
-        connection.execute(
-            """
-            CREATE INDEX IF NOT EXISTS idx_supplier_applications_status_submitted
-              ON supplier_applications(status, submitted_at DESC, id DESC)
-            """
-        )
-        connection.execute(
-            """
-            CREATE INDEX IF NOT EXISTS idx_supplier_members_actor_active
-              ON supplier_members(actor_id, is_active, supplier_id)
-            """
-        )
-
-    def _ensure_supplier_offer_schema(self, connection: sqlite3.Connection) -> None:
-        connection.execute(
-            """
-            CREATE TABLE IF NOT EXISTS supplier_offers (
-              id INTEGER PRIMARY KEY AUTOINCREMENT,
-              purchase_request_id INTEGER NOT NULL REFERENCES purchase_requests(id) ON DELETE CASCADE,
-              supplier_id INTEGER NOT NULL REFERENCES suppliers(id),
-              actor_id TEXT NOT NULL,
-              status TEXT NOT NULL,
-              unit_price TEXT NOT NULL,
-              quantity TEXT NOT NULL,
-              delivery_date TEXT,
-              expires_at TEXT,
-              comment TEXT,
-              reviewed_by TEXT,
-              reviewed_at TEXT,
-              review_reason TEXT,
-              created_at TEXT NOT NULL,
-              updated_at TEXT NOT NULL
-            )
-            """
-        )
-        connection.execute(
-            """
-            CREATE INDEX IF NOT EXISTS idx_supplier_offers_request_status
-              ON supplier_offers(purchase_request_id, status, id)
-            """
-        )
-        connection.execute(
-            """
-            CREATE INDEX IF NOT EXISTS idx_supplier_offers_supplier_status
-              ON supplier_offers(supplier_id, status, updated_at DESC, id DESC)
-            """
-        )
-        connection.execute(
-            """
-            CREATE UNIQUE INDEX IF NOT EXISTS uq_supplier_offers_active_supplier_request
-              ON supplier_offers(purchase_request_id, supplier_id)
-              WHERE status IN ('submitted', 'accepted')
-            """
-        )
-        connection.execute(
-            """
-            CREATE UNIQUE INDEX IF NOT EXISTS uq_supplier_offers_one_accepted_request
-              ON supplier_offers(purchase_request_id)
-              WHERE status = 'accepted'
-            """
-        )
-
-    def _ensure_supplier_catalog_schema(self, connection: sqlite3.Connection) -> None:
-        connection.execute(
-            """
-            CREATE TABLE IF NOT EXISTS supplier_catalog (
-              id INTEGER PRIMARY KEY AUTOINCREMENT,
-              supplier_id INTEGER NOT NULL REFERENCES suppliers(id) ON DELETE CASCADE,
-              actor_id TEXT NOT NULL,
-              type TEXT NOT NULL DEFAULT 'product',
-              title TEXT NOT NULL,
-              description TEXT,
-              price TEXT,
-              price_type TEXT NOT NULL DEFAULT 'fixed',
-              unit TEXT,
-              service_category TEXT,
-              image_file_id TEXT,
-              is_active INTEGER NOT NULL DEFAULT 1,
-              created_at TEXT NOT NULL,
-              updated_at TEXT NOT NULL
-            )
-            """
-        )
-        connection.execute(
-            """
-            CREATE INDEX IF NOT EXISTS idx_supplier_catalog_supplier_active
-              ON supplier_catalog(supplier_id, is_active, created_at DESC, id DESC)
-            """
-        )
-        connection.execute(
-            """
-            CREATE INDEX IF NOT EXISTS idx_supplier_catalog_type_active
-              ON supplier_catalog(type, is_active, service_category, created_at DESC, id DESC)
             """
         )
 
@@ -916,6 +861,9 @@ class SQLiteDatabase:
               ON quarantine_reviews(warehouse_id, status, due_at, id)
             """
         )
+        self._ensure_column(connection, "quarantine_reviews", "commission_members", "TEXT")
+        self._ensure_column(connection, "quarantine_reviews", "resolution_type", "TEXT")
+        self._ensure_column(connection, "quarantine_reviews", "disposal_quantity", "TEXT")
 
     def _ensure_abc_xyz_history_schema(self, connection: sqlite3.Connection) -> None:
         connection.execute(
