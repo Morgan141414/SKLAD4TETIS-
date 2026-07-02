@@ -5,7 +5,7 @@ import math
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from enum import Enum
-from sqlite3 import Connection, Row
+from sqlite3 import Connection, IntegrityError, Row
 from typing import Any
 
 from app.domain.enums import (
@@ -20,7 +20,6 @@ from app.domain.enums import (
 )
 from app.domain.errors import (
     BatchUnavailableError,
-    ConflictError,
     InsufficientStockError,
     InventoryLockedError,
     NotFoundError,
@@ -49,7 +48,11 @@ from app.domain.schemas import (
     SensorReadingCreate,
     SupplierApplicationCreate,
     SupplierApplicationReview,
+    SupplierCatalogCreate,
+    SupplierCatalogUpdate,
     SupplierCreate,
+    SupplierOfferCreate,
+    SupplierOfferReview,
     SupplierUpdate,
     SupplierReturnDocumentCreate,
     SupplierReturnCreate,
@@ -61,7 +64,6 @@ from app.domain.schemas import (
     WriteOffFefoCreate,
     WriteOffDocumentCreate,
 )
-import threading
 from app.storage.base import WarehouseDatabase
 from app.storage.sqlite import decimal_to_db, insert_and_get_id, now_iso
 
@@ -207,9 +209,8 @@ class WarehouseService:
                 """
                 INSERT INTO suppliers(
                   name, bin, phone, address, rating, is_preferred,
-                  contact_person, email, contract_number, contract_expires_on, payment_terms, notes,
-                  lat, lng, city, delivery_days
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                  contact_person, email, contract_number, contract_expires_on, payment_terms, notes
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     data.name,
@@ -224,10 +225,6 @@ class WarehouseService:
                     data.contract_expires_on.isoformat() if data.contract_expires_on else None,
                     data.payment_terms,
                     data.notes,
-                    getattr(data, "lat", None),
-                    getattr(data, "lng", None),
-                    getattr(data, "city", None),
-                    getattr(data, "delivery_days", None),
                 ),
             )
             self._audit(connection, actor_id, AuditAction.CREATE, "supplier", supplier_id, data)
@@ -289,11 +286,7 @@ class WarehouseService:
                     contract_number = ?,
                     contract_expires_on = ?,
                     payment_terms = ?,
-                    notes = ?,
-                    lat = ?,
-                    lng = ?,
-                    city = ?,
-                    delivery_days = ?
+                    notes = ?
                 WHERE id = ?
                 """,
                 (
@@ -309,10 +302,6 @@ class WarehouseService:
                     data.contract_expires_on.isoformat() if data.contract_expires_on else None,
                     data.payment_terms,
                     data.notes,
-                    getattr(data, "lat", None),
-                    getattr(data, "lng", None),
-                    getattr(data, "city", None),
-                    getattr(data, "delivery_days", None),
                     supplier_id,
                 ),
             )
@@ -328,51 +317,91 @@ class WarehouseService:
             return updated
 
     def submit_supplier_application(
-        self, data: SupplierApplicationCreate, actor_id: str = "public"
+        self, data: SupplierApplicationCreate, actor_id: str
     ) -> dict[str, Any]:
         with self.database.transaction() as connection:
             existing = connection.execute(
-                """
-                SELECT id FROM supplier_applications
-                WHERE lower(email) = lower(?)
-                  AND status IN ('pending', 'needs_changes')
-                """,
-                (data.email,),
+                "SELECT * FROM supplier_applications WHERE actor_id = ?",
+                (actor_id,),
             ).fetchone()
-            if existing:
-                raise ValidationError("Active supplier application already exists for this email")
+            if existing and existing["status"] in {"pending", "approved", "suspended"}:
+                raise ValidationError("Supplier application is already active")
             now = now_iso()
-            application_id = insert_and_get_id(
-                connection,
-                """
-                INSERT INTO supplier_applications(
-                  actor_id, supplier_id, status, name, bin, phone, email,
-                  contact_person, address, city, delivery_days, notes,
-                  review_reason, submitted_at, reviewed_by, reviewed_at
-                ) VALUES (?, NULL, 'pending', ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, NULL, NULL)
-                """,
-                (
-                    actor_id,
-                    data.name,
-                    data.bin,
-                    data.phone,
-                    data.email,
-                    data.contact_person,
-                    data.address,
-                    data.city,
-                    data.delivery_days,
-                    data.notes,
-                    now,
-                ),
-            )
+            if existing:
+                application_id = int(existing["id"])
+                connection.execute(
+                    """
+                    UPDATE supplier_applications
+                    SET supplier_id = NULL,
+                        status = 'pending',
+                        name = ?,
+                        bin = ?,
+                        phone = ?,
+                        email = ?,
+                        contact_person = ?,
+                        address = ?,
+                        notes = ?,
+                        review_reason = NULL,
+                        submitted_at = ?,
+                        reviewed_by = NULL,
+                        reviewed_at = NULL
+                    WHERE id = ?
+                    """,
+                    (
+                        data.name,
+                        data.bin,
+                        data.phone,
+                        data.email,
+                        data.contact_person,
+                        data.address,
+                        data.notes,
+                        now,
+                        application_id,
+                    ),
+                )
+                action = AuditAction.UPDATE
+            else:
+                application_id = insert_and_get_id(
+                    connection,
+                    """
+                    INSERT INTO supplier_applications(
+                      actor_id, supplier_id, status, name, bin, phone, email,
+                      contact_person, address, notes, review_reason,
+                      submitted_at, reviewed_by, reviewed_at
+                    ) VALUES (?, NULL, 'pending', ?, ?, ?, ?, ?, ?, ?, NULL, ?, NULL, NULL)
+                    """,
+                    (
+                        actor_id,
+                        data.name,
+                        data.bin,
+                        data.phone,
+                        data.email,
+                        data.contact_person,
+                        data.address,
+                        data.notes,
+                        now,
+                    ),
+                )
+                action = AuditAction.CREATE
             application = self._get_supplier_application(connection, application_id)
-            self._audit(connection, actor_id, AuditAction.CREATE, "supplier_application", application_id, application)
+            self._audit(connection, actor_id, action, "supplier_application", application_id, application)
             return application
 
-    def get_supplier_application(self, application_id: int) -> dict[str, Any]:
+    def get_supplier_application_for_actor(self, actor_id: str) -> dict[str, Any] | None:
         connection = self.database.connect()
         try:
-            return self._get_supplier_application(connection, application_id)
+            row = connection.execute(
+                """
+                SELECT
+                  sa.*,
+                  s.name AS supplier_name
+                FROM supplier_applications sa
+                LEFT JOIN suppliers s ON s.id = sa.supplier_id
+                WHERE sa.actor_id = ?
+                """,
+                (actor_id,),
+            ).fetchone()
+            return dict(row) if row else None
         finally:
             self._close_connection(connection)
 
@@ -390,7 +419,9 @@ class WarehouseService:
         try:
             rows = connection.execute(
                 f"""
-                SELECT sa.*, s.name AS supplier_name
+                SELECT
+                  sa.*,
+                  s.name AS supplier_name
                 FROM supplier_applications sa
                 LEFT JOIN suppliers s ON s.id = sa.supplier_id
                 {where}
@@ -417,1286 +448,25 @@ class WarehouseService:
         finally:
             self._close_connection(connection)
 
-    def get_my_supplier_applications(self, actor_id: str) -> list[dict[str, Any]]:
-        """Return applications submitted by this actor (tetis-actor:{actor_id} or actor_id directly)."""
-        connection = self.database.connect()
-        patterns = [f"tetis-actor:{actor_id}", actor_id]
-        rows = connection.execute(
-            """
-            SELECT id, name, bin, email, phone, contact_person, city, address,
-                   delivery_days, notes, status, actor_id, review_reason,
-                   reviewed_by, reviewed_at, supplier_id, submitted_at
-            FROM supplier_applications
-            WHERE actor_id IN (?, ?)
-            ORDER BY id DESC
-            """,
-            tuple(patterns),
-        ).fetchall()
-        return [dict(r) for r in rows]
-
-    def resubmit_supplier_application(
-        self, application_id: int, data: dict[str, Any], actor_id: str
-    ) -> dict[str, Any]:
-        """Update application fields and reset status to pending (only allowed if needs_changes)."""
-        with self.database.transaction() as connection:
-            app = self._get_supplier_application(connection, application_id)
-            # Verify actor owns this application
-            expected = [f"tetis-actor:{actor_id}", actor_id]
-            if app.get("actor_id") not in expected:
-                raise PermissionError("Cannot edit another actor's application")
-            if app["status"] != "needs_changes":
-                raise ValueError(f"Cannot resubmit application with status '{app['status']}'")
-            update_fields = {k: v for k, v in data.items() if k in (
-                "name", "bin", "email", "phone", "contact_person",
-                "city", "address", "delivery_days", "notes"
-            ) if v is not None}
-            if update_fields:
-                set_clause = ", ".join(f"{k} = ?" for k in update_fields)
-                connection.execute(
-                    f"UPDATE supplier_applications SET {set_clause}, status = 'pending', review_reason = NULL, reviewed_by = NULL, reviewed_at = NULL WHERE id = ?",
-                    (*update_fields.values(), application_id),
-                )
-            else:
-                connection.execute(
-                    "UPDATE supplier_applications SET status = 'pending', review_reason = NULL, reviewed_by = NULL, reviewed_at = NULL WHERE id = ?",
-                    (application_id,),
-                )
-            return self._get_supplier_application(connection, application_id)
-
-    def get_supplier_by_id(self, supplier_id: int) -> dict[str, Any]:
-        """Get a single supplier record by ID."""
-        connection = self.database.connect()
-        row = connection.execute(
-            """
-            SELECT id, name, bin, email, phone, contact_person, city, address,
-                   delivery_days, rating, notes, is_preferred, contract_number,
-                   contract_expires_on, payment_terms, lat, lng,
-                   bank_details, website, inn, is_verified, verified_at, legal_name, verification_comment
-            FROM suppliers WHERE id = ?
-            """,
-            (supplier_id,),
-        ).fetchone()
-        if row is None:
-            raise ValueError(f"Supplier {supplier_id} not found")
-        return dict(row)
-
-    def update_supplier_self(
-        self, supplier_id: int, data: dict[str, Any], actor_id: str
-    ) -> dict[str, Any]:
-        """Update supplier's own profile — only contact fields, not name/rating/contract."""
-        allowed = {"email", "phone", "contact_person", "city", "address", "delivery_days", "notes", "bank_details", "website", "inn"}
-        updates = {k: v for k, v in data.items() if k in allowed and v is not None}
-        if not updates:
-            return self.get_supplier_by_id(supplier_id)
-        with self.database.transaction() as connection:
-            set_clause = ", ".join(f"{k} = ?" for k in updates)
-            connection.execute(
-                f"UPDATE suppliers SET {set_clause} WHERE id = ?",
-                (*updates.values(), supplier_id),
-            )
-            row = connection.execute(
-                """
-                SELECT id, name, bin, email, phone, contact_person, city, address,
-                       delivery_days, rating, notes, is_preferred, contract_number,
-                       contract_expires_on, payment_terms, lat, lng,
-                       bank_details, website, inn
-                FROM suppliers WHERE id = ?
-                """,
-                (supplier_id,),
-            ).fetchone()
-            return dict(row) if row else {}
-
-    def add_supplier_verification_doc(
-        self, supplier_id: int, doc_type: str, file_url: str,
-        original_name: str | None, actor_id: str
-    ) -> dict:
-        with self.database.transaction() as conn:
-            doc_id = insert_and_get_id(
-                conn,
-                """INSERT INTO supplier_verification_docs
-                   (supplier_id, doc_type, file_url, original_name, uploaded_by)
-                   VALUES (?, ?, ?, ?, ?)""",
-                (supplier_id, doc_type, file_url, original_name, actor_id),
-            )
-            row = conn.execute(
-                "SELECT * FROM supplier_verification_docs WHERE id = ?", (doc_id,)
-            ).fetchone()
-            return dict(row) if row else {}
-
-    def list_supplier_verification_docs(self, supplier_id: int) -> list[dict]:
-        connection = self.database.connect()
-        try:
-            rows = connection.execute(
-                """SELECT id, supplier_id, doc_type, file_url, original_name, uploaded_at, uploaded_by
-                   FROM supplier_verification_docs
-                   WHERE supplier_id = ?
-                   ORDER BY uploaded_at""",
-                (supplier_id,)
-            ).fetchall()
-            return [dict(r) for r in rows]
-        finally:
-            self._close_connection(connection)
-
-    def delete_supplier_verification_doc(self, doc_id: int, supplier_id: int) -> None:
-        with self.database.transaction() as conn:
-            row = conn.execute(
-                "SELECT id FROM supplier_verification_docs WHERE id = ? AND supplier_id = ?",
-                (doc_id, supplier_id)
-            ).fetchone()
-            if row is None:
-                raise NotFoundError(f"Document {doc_id} not found")
-            conn.execute("DELETE FROM supplier_verification_docs WHERE id = ?", (doc_id,))
-
-    def set_supplier_verified(
-        self, supplier_id: int, is_verified: bool, comment: str | None, actor_id: str
-    ) -> dict:
-        with self.database.transaction() as conn:
-            if is_verified:
-                conn.execute(
-                    """UPDATE suppliers SET is_verified = TRUE, verified_at = NOW(),
-                       verification_comment = ? WHERE id = ?""",
-                    (comment, supplier_id),
-                )
-            else:
-                conn.execute(
-                    """UPDATE suppliers SET is_verified = FALSE, verified_at = NULL,
-                       verification_comment = ? WHERE id = ?""",
-                    (comment, supplier_id),
-                )
-            row = conn.execute(
-                """SELECT id, name, bin, email, phone, city, is_verified, verified_at,
-                          legal_name, verification_comment
-                   FROM suppliers WHERE id = ?""",
-                (supplier_id,)
-            ).fetchone()
-            return dict(row) if row else {}
-
-    def create_purchase_order(
-        self, inquiry_id: int, actor_id: str, buyer_data: dict
-    ) -> dict:
-        """Create or return existing PO for an inquiry."""
-        with self.database.transaction() as conn:
-            inq = conn.execute(
-                """SELECT mi.*, ci.product_name, ci.unit, s.name AS supplier_name,
-                          s.bin AS supplier_bin, s.address AS supplier_address,
-                          s.phone AS supplier_phone, s.email AS supplier_email,
-                          s.city AS supplier_city
-                   FROM marketplace_inquiries mi
-                   JOIN supplier_catalog_items ci ON ci.id = mi.catalog_item_id
-                   JOIN suppliers s ON s.id = mi.supplier_id
-                   WHERE mi.id = ? AND mi.actor_id = ?""",
-                (inquiry_id, actor_id)
-            ).fetchone()
-            if inq is None:
-                raise PermissionError("Inquiry not found or not yours")
-            # Return existing PO if already created
-            existing = conn.execute(
-                "SELECT * FROM purchase_orders WHERE inquiry_id = ?", (inquiry_id,)
-            ).fetchone()
-            if existing:
-                return dict(existing)
-            # Generate PO number: PO-YYYY-NNNNNN
-            from datetime import datetime as _dt
-            year = _dt.now().year
-            seq = conn.execute("SELECT nextval('purchase_order_seq') AS n").fetchone()["n"]
-            po_number = f"PO-{year}-{seq:06d}"
-            po_id = insert_and_get_id(
-                conn,
-                """INSERT INTO purchase_orders
-                   (po_number, inquiry_id, buyer_name, buyer_bin, buyer_address,
-                    buyer_contact, delivery_address, payment_terms, notes, status)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'draft')""",
-                (
-                    po_number,
-                    inquiry_id,
-                    buyer_data.get("buyer_name"),
-                    buyer_data.get("buyer_bin"),
-                    buyer_data.get("buyer_address"),
-                    buyer_data.get("buyer_contact"),
-                    buyer_data.get("delivery_address"),
-                    buyer_data.get("payment_terms", "По договорённости"),
-                    buyer_data.get("notes"),
-                ),
-            )
-            # Also mark inquiry as ordered if pending/responded
-            if inq["status"] in ("pending", "responded"):
-                conn.execute(
-                    "UPDATE marketplace_inquiries SET status = 'ordered' WHERE id = ?",
-                    (inquiry_id,)
-                )
-            row = conn.execute("SELECT * FROM purchase_orders WHERE id = ?", (po_id,)).fetchone()
-            return dict(row) if row else {}
-
-    def get_purchase_order(self, inquiry_id: int, actor_id: str) -> dict:
-        connection = self.database.connect()
-        try:
-            inq = connection.execute(
-                """SELECT mi.*, ci.product_name, ci.unit, ci.description AS item_description,
-                          ci.image_url,
-                          s.name AS supplier_name, s.bin AS supplier_bin,
-                          s.address AS supplier_address, s.phone AS supplier_phone,
-                          s.email AS supplier_email, s.city AS supplier_city,
-                          s.bank_details AS supplier_bank_details,
-                          s.inn AS supplier_inn, s.is_verified AS supplier_verified,
-                          w.name AS warehouse_name
-                   FROM marketplace_inquiries mi
-                   JOIN supplier_catalog_items ci ON ci.id = mi.catalog_item_id
-                   JOIN suppliers s ON s.id = mi.supplier_id
-                   LEFT JOIN warehouses w ON w.id = mi.warehouse_id
-                   WHERE mi.id = ? AND mi.actor_id = ?""",
-                (inquiry_id, actor_id)
-            ).fetchone()
-            if inq is None:
-                raise PermissionError("Inquiry not found or not yours")
-            po = connection.execute(
-                "SELECT * FROM purchase_orders WHERE inquiry_id = ?", (inquiry_id,)
-            ).fetchone()
-            result = {"inquiry": dict(inq), "po": dict(po) if po else None}
-            return result
-        finally:
-            self._close_connection(connection)
-
-    def list_catalog_categories(self, parent_id: int | None = None) -> list[dict]:
-        """Return all categories optionally filtered by parent."""
-        connection = self.database.connect()
-        try:
-            if parent_id is not None:
-                rows = connection.execute(
-                    "SELECT id, parent_id, name, slug, icon, sort_order FROM catalog_categories WHERE parent_id = ? ORDER BY sort_order, name",
-                    (parent_id,)
-                ).fetchall()
-            else:
-                rows = connection.execute(
-                    "SELECT id, parent_id, name, slug, icon, sort_order FROM catalog_categories ORDER BY sort_order, name"
-                ).fetchall()
-            return [dict(r) for r in rows]
-        finally:
-            self._close_connection(connection)
-
-    def create_catalog_category(self, data: dict, actor_id: str) -> dict:
-        import re
-        name = (data.get("name") or "").strip()
-        if not name:
-            raise ValidationError("Category name is required")
-        slug = data.get("slug") or re.sub(r"[^a-z0-9-]", "-", name.lower().strip())
-        with self.database.transaction() as conn:
-            cat_id = insert_and_get_id(
-                conn,
-                "INSERT INTO catalog_categories (parent_id, name, slug, icon, sort_order) VALUES (?, ?, ?, ?, ?)",
-                (data.get("parent_id"), name, slug, data.get("icon"), data.get("sort_order", 0)),
-            )
-            row = conn.execute("SELECT * FROM catalog_categories WHERE id = ?", (cat_id,)).fetchone()
-            return dict(row) if row else {}
-
-    def get_price_tiers(self, catalog_item_id: int) -> list[dict]:
-        """Get volume pricing tiers for a catalog item."""
-        connection = self.database.connect()
-        try:
-            rows = connection.execute(
-                """SELECT id, catalog_item_id, min_quantity, unit_price, label, created_at
-                   FROM catalog_item_price_tiers
-                   WHERE catalog_item_id = ?
-                   ORDER BY min_quantity""",
-                (catalog_item_id,)
-            ).fetchall()
-            return [dict(r) for r in rows]
-        finally:
-            self._close_connection(connection)
-
-    def set_price_tiers(self, catalog_item_id: int, supplier_id: int, tiers: list[dict]) -> list[dict]:
-        """Replace all price tiers for a catalog item."""
-        with self.database.transaction() as conn:
-            # Verify ownership
-            item = conn.execute(
-                "SELECT id FROM supplier_catalog_items WHERE id = ? AND supplier_id = ?",
-                (catalog_item_id, supplier_id)
-            ).fetchone()
-            if item is None:
-                raise PermissionError("Catalog item not found or not yours")
-            # Validate tiers
-            for t in tiers:
-                if float(t.get("min_quantity", 0)) <= 0:
-                    raise ValidationError("min_quantity must be > 0")
-                if float(t.get("unit_price", 0)) <= 0:
-                    raise ValidationError("unit_price must be > 0")
-            # Replace
-            conn.execute(
-                "DELETE FROM catalog_item_price_tiers WHERE catalog_item_id = ?",
-                (catalog_item_id,)
-            )
-            for t in tiers:
-                conn.execute(
-                    """INSERT INTO catalog_item_price_tiers (catalog_item_id, min_quantity, unit_price, label)
-                       VALUES (?, ?, ?, ?)""",
-                    (catalog_item_id, float(t["min_quantity"]), float(t["unit_price"]), t.get("label"))
-                )
-            rows = conn.execute(
-                "SELECT * FROM catalog_item_price_tiers WHERE catalog_item_id = ? ORDER BY min_quantity",
-                (catalog_item_id,)
-            ).fetchall()
-            return [dict(r) for r in rows]
-
-    def resolve_price_for_quantity(self, catalog_item_id: int, quantity: float) -> float | None:
-        """Return best (lowest) unit price for a given quantity using tier pricing."""
-        connection = self.database.connect()
-        try:
-            item = connection.execute(
-                "SELECT unit_price FROM supplier_catalog_items WHERE id = ?",
-                (catalog_item_id,)
-            ).fetchone()
-            if item is None:
-                return None
-            base_price = float(item["unit_price"]) if item["unit_price"] else None
-            tiers = connection.execute(
-                """SELECT unit_price FROM catalog_item_price_tiers
-                   WHERE catalog_item_id = ? AND min_quantity <= ?
-                   ORDER BY min_quantity DESC LIMIT 1""",
-                (catalog_item_id, quantity)
-            ).fetchone()
-            if tiers:
-                tier_price = float(tiers["unit_price"])
-                return tier_price if (base_price is None or tier_price < base_price) else base_price
-            return base_price
-        finally:
-            self._close_connection(connection)
-
-    # ── Supplier catalog (marketplace) ──────────────────────────────────────
-
-    def list_supplier_catalog(
-        self,
-        supplier_id: int | None = None,
-        category: str | None = None,
-        search: str | None = None,
-        min_price: float | None = None,
-        max_price: float | None = None,
-        active_only: bool = True,
-        sort: str | None = None,
-        limit: int = 100,
-        offset: int = 0,
-    ) -> dict[str, Any]:
-        where = []
-        params: list[Any] = []
-        if active_only:
-            where.append("ci.is_active = TRUE")
-        if supplier_id is not None:
-            where.append("ci.supplier_id = ?")
-            params.append(supplier_id)
-        if category:
-            where.append("ci.category = ?")
-            params.append(category)
-        if search:
-            # Use trigram similarity if available, fallback to ILIKE
-            where.append("((ci.product_name || ' ' || COALESCE(ci.sku,'') || ' ' || COALESCE(ci.description,'') || ' ' || COALESCE(ci.category,'')) ILIKE ?)")
-            params.extend([f"%{search}%"])
-        if min_price is not None:
-            where.append("ci.unit_price >= ?")
-            params.append(min_price)
-        if max_price is not None:
-            where.append("ci.unit_price <= ?")
-            params.append(max_price)
-        where_clause = f"WHERE {' AND '.join(where)}" if where else ""
-        _sort_map = {
-            "price_asc": "ci.unit_price ASC",
-            "price_desc": "ci.unit_price DESC",
-            "delivery_asc": "COALESCE(ci.delivery_days, s.delivery_days, 999) ASC",
-            "name_asc": "ci.product_name ASC",
-        }
-        order_clause = _sort_map.get(sort or "", "ci.updated_at DESC")
-        connection = self.database.connect()
-        try:
-            total_row = connection.execute(
-                f"SELECT COUNT(*) AS n FROM supplier_catalog_items ci JOIN suppliers s ON s.id = ci.supplier_id {where_clause}", tuple(params)
-            ).fetchone()
-            total = total_row["n"] if total_row else 0
-            rows = connection.execute(
-                f"""
-                SELECT ci.*, s.name AS supplier_name, s.city AS supplier_city,
-                       s.rating AS supplier_rating, s.phone AS supplier_phone,
-                       s.email AS supplier_email, s.delivery_days AS supplier_delivery_days,
-                       s.is_verified AS supplier_is_verified,
-                       p.name AS linked_product_name,
-                       r.avg_rating, r.review_count
-                FROM supplier_catalog_items ci
-                JOIN suppliers s ON s.id = ci.supplier_id
-                LEFT JOIN products p ON p.id = ci.product_id
-                LEFT JOIN (
-                    SELECT catalog_item_id, ROUND(AVG(rating), 1) AS avg_rating, COUNT(*) AS review_count
-                    FROM catalog_item_reviews WHERE status = 'approved' GROUP BY catalog_item_id
-                ) r ON r.catalog_item_id = ci.id
-                {where_clause}
-                ORDER BY {order_clause}
-                LIMIT ? OFFSET ?
-                """,
-                tuple(params) + (limit, offset),
-            ).fetchall()
-            return {"items": [dict(r) for r in rows], "total": total}
-        finally:
-            self._close_connection(connection)
-
-    def get_catalog_item(self, item_id: int) -> dict[str, Any] | None:
-        connection = self.database.connect()
-        try:
-            row = connection.execute(
-                """
-                SELECT ci.*, s.name AS supplier_name, s.city AS supplier_city,
-                       s.rating AS supplier_rating, s.phone AS supplier_phone,
-                       s.email AS supplier_email, s.delivery_days AS supplier_delivery_days,
-                       s.is_verified AS supplier_is_verified,
-                       r.avg_rating, r.review_count
-                FROM supplier_catalog_items ci
-                JOIN suppliers s ON s.id = ci.supplier_id
-                LEFT JOIN (
-                    SELECT catalog_item_id, ROUND(AVG(rating), 1) AS avg_rating, COUNT(*) AS review_count
-                    FROM catalog_item_reviews WHERE status = 'approved' GROUP BY catalog_item_id
-                ) r ON r.catalog_item_id = ci.id
-                WHERE ci.id = ?
-                """,
-                (item_id,),
-            ).fetchone()
-            return dict(row) if row else None
-        finally:
-            self._close_connection(connection)
-
-    # ── Catalog item reviews (product-level ratings, like Kaspi/Amazon) ─────
-
-    def create_catalog_item_review(
-        self, catalog_item_id: int, rating: int, comment: str | None, reviewer_id: str
-    ) -> dict[str, Any]:
-        if not 1 <= rating <= 5:
-            raise ValidationError("Rating must be between 1 and 5")
-        with self.database.transaction() as connection:
-            self._require(connection, "supplier_catalog_items", catalog_item_id)
-            row = connection.execute(
-                """INSERT INTO catalog_item_reviews (catalog_item_id, rating, comment, reviewer_id, status)
-                   VALUES (?, ?, ?, ?, 'approved')
-                   RETURNING *""",
-                (catalog_item_id, rating, comment, reviewer_id),
-            ).fetchone()
-            return dict(row)
-
-    def list_catalog_item_reviews(self, catalog_item_id: int, status: str = "approved") -> list[dict[str, Any]]:
-        connection = self.database.connect()
-        try:
-            rows = connection.execute(
-                "SELECT * FROM catalog_item_reviews WHERE catalog_item_id = ? AND status = ? ORDER BY created_at DESC",
-                (catalog_item_id, status),
-            ).fetchall()
-            return [dict(r) for r in rows]
-        finally:
-            self._close_connection(connection)
-
-    def moderate_catalog_item_review(self, review_id: int, action: str) -> dict[str, Any]:
-        if action not in ("approve", "reject"):
-            raise ValidationError("action must be approve or reject")
-        with self.database.transaction() as connection:
-            row = connection.execute("SELECT * FROM catalog_item_reviews WHERE id = ?", (review_id,)).fetchone()
-            if not row:
-                raise NotFoundError(f"catalog_item_reviews#{review_id} not found")
-            new_status = "approved" if action == "approve" else "rejected"
-            connection.execute("UPDATE catalog_item_reviews SET status = ? WHERE id = ?", (new_status, review_id))
-            updated = connection.execute("SELECT * FROM catalog_item_reviews WHERE id = ?", (review_id,)).fetchone()
-            return dict(updated)
-
-    def create_catalog_item(self, supplier_id: int, data: dict[str, Any]) -> dict[str, Any]:
-        with self.database.transaction() as conn:
-            row_id = insert_and_get_id(
-                conn,
-                """INSERT INTO supplier_catalog_items
-                   (supplier_id, product_id, product_name, sku, unit, unit_price,
-                    min_order_qty, stock_qty, delivery_days, category, description, is_active,
-                    valid_until)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                (
-                    supplier_id,
-                    data.get("product_id"),
-                    data["product_name"],
-                    data.get("sku"),
-                    data.get("unit", "шт"),
-                    data["unit_price"],
-                    data.get("min_order_qty", 1),
-                    data.get("stock_qty"),
-                    data.get("delivery_days"),
-                    data.get("category"),
-                    data.get("description"),
-                    data.get("is_active", True),
-                    data.get("valid_until"),
-                ),
-            )
-            row = conn.execute("SELECT * FROM supplier_catalog_items WHERE id = ?", (row_id,)).fetchone()
-            return dict(row) if row else {}
-
-    def update_catalog_item(self, item_id: int, supplier_id: int, data: dict[str, Any]) -> dict[str, Any] | None:
-        allowed = {
-            "product_name", "sku", "unit", "unit_price", "min_order_qty",
-            "stock_qty", "delivery_days", "category", "description", "is_active", "product_id",
-            "valid_until",
-        }
-        updates = {k: v for k, v in data.items() if k in allowed}
-        if not updates:
-            return self.get_catalog_item(item_id)
-        with self.database.transaction() as conn:
-            row = conn.execute(
-                "SELECT id, supplier_id FROM supplier_catalog_items WHERE id = ?", (item_id,)
-            ).fetchone()
-            if row is None or row["supplier_id"] != supplier_id:
-                return None
-            updates["updated_at"] = now_iso()
-            set_clause = ", ".join(f"{k} = ?" for k in updates)
-            conn.execute(
-                f"UPDATE supplier_catalog_items SET {set_clause} WHERE id = ?",
-                (*updates.values(), item_id),
-            )
-            updated = conn.execute("SELECT * FROM supplier_catalog_items WHERE id = ?", (item_id,)).fetchone()
-            return dict(updated) if updated else None
-
-    def delete_catalog_item(self, item_id: int, supplier_id: int) -> bool:
-        with self.database.transaction() as conn:
-            row = conn.execute(
-                "SELECT id, supplier_id FROM supplier_catalog_items WHERE id = ?", (item_id,)
-            ).fetchone()
-            if row is None or row["supplier_id"] != supplier_id:
-                return False
-            conn.execute("DELETE FROM supplier_catalog_items WHERE id = ?", (item_id,))
-            return True
-
-    def list_suppliers_directory(
-        self,
-        city: str | None = None,
-        category: str | None = None,
-        search: str | None = None,
-        limit: int = 50,
-        offset: int = 0,
-    ) -> dict[str, Any]:
-        """Return all suppliers that are active in the marketplace (portal-enabled or have catalog items)."""
-        where = ["(s.portal_access_enabled = TRUE OR EXISTS (SELECT 1 FROM supplier_catalog_items ci2 WHERE ci2.supplier_id = s.id AND ci2.is_active = TRUE))"]
-        params: list[Any] = []
-        if city:
-            where.append("s.city ILIKE ?")
-            params.append(f"%{city}%")
-        if search:
-            where.append("(s.name ILIKE ? OR s.contact_person ILIKE ?)")
-            params.extend([f"%{search}%", f"%{search}%"])
-        if category:
-            where.append("EXISTS (SELECT 1 FROM supplier_catalog_items ci WHERE ci.supplier_id = s.id AND ci.category = ? AND ci.is_active = TRUE)")
-            params.append(category)
-        where_clause = f"WHERE {' AND '.join(where)}"
-        connection = self.database.connect()
-        try:
-            total_row = connection.execute(f"SELECT COUNT(*) AS n FROM suppliers s {where_clause}", tuple(params)).fetchone()
-            total = total_row["n"] if total_row else 0
-            rows = connection.execute(
-                f"""
-                SELECT s.id, s.name, s.city, s.address, s.phone, s.email,
-                       s.contact_person, s.delivery_days, s.rating, s.notes,
-                       s.is_preferred, s.payment_terms, s.is_verified,
-                       COUNT(ci.id) FILTER (WHERE ci.is_active) AS catalog_items_count,
-                       MIN(ci.unit_price) AS min_price,
-                       MAX(ci.unit_price) AS max_price,
-                       array_agg(DISTINCT ci.category) FILTER (WHERE ci.category IS NOT NULL AND ci.is_active) AS categories
-                FROM suppliers s
-                LEFT JOIN supplier_catalog_items ci ON ci.supplier_id = s.id
-                {where_clause}
-                GROUP BY s.id
-                ORDER BY s.is_preferred DESC, s.rating DESC NULLS LAST, catalog_items_count DESC, s.id
-                LIMIT ? OFFSET ?
-                """,
-                tuple(params) + (limit, offset),
-            ).fetchall()
-            return {"items": [dict(r) for r in rows], "total": total}
-        finally:
-            self._close_connection(connection)
-
-    def get_supplier_stats(self, supplier_id: int) -> dict[str, Any]:
-        """Return dashboard stats for a supplier."""
-        connection = self.database.connect()
-        try:
-            catalog_row = connection.execute(
-                "SELECT COUNT(*) AS total, COUNT(*) FILTER (WHERE is_active) AS active FROM supplier_catalog_items WHERE supplier_id = ?",
-                (supplier_id,)
-            ).fetchone()
-            inquiry_row = connection.execute(
-                "SELECT COUNT(*) AS total, COUNT(*) FILTER (WHERE status = 'pending') AS pending FROM marketplace_inquiries WHERE supplier_id = ?",
-                (supplier_id,)
-            ).fetchone()
-            auction_row = connection.execute(
-                "SELECT COUNT(*) AS won FROM auctions WHERE winner_supplier_id = ?",
-                (supplier_id,)
-            ).fetchone()
-            review_row = connection.execute(
-                "SELECT COUNT(*) AS total, AVG(rating) AS avg FROM supplier_reviews WHERE supplier_id = ? AND status = 'approved'",
-                (supplier_id,)
-            ).fetchone()
-            shipment_row = connection.execute(
-                "SELECT COUNT(*) AS active FROM shipments WHERE supplier_id = ? AND status IN ('in_transit','delayed')",
-                (supplier_id,)
-            ).fetchone()
-            return {
-                "catalog_total": catalog_row["total"] if catalog_row else 0,
-                "catalog_active": catalog_row["active"] if catalog_row else 0,
-                "inquiries_total": inquiry_row["total"] if inquiry_row else 0,
-                "inquiries_pending": inquiry_row["pending"] if inquiry_row else 0,
-                "auctions_won": auction_row["won"] if auction_row else 0,
-                "reviews_total": review_row["total"] if review_row else 0,
-                "reviews_avg": float(review_row["avg"]) if review_row and review_row["avg"] else None,
-                "shipments_active": shipment_row["active"] if shipment_row else 0,
-            }
-        finally:
-            self._close_connection(connection)
-
-    def get_supplier_profile(self, supplier_id: int) -> dict[str, Any] | None:
-        """Public storefront view of a supplier: profile, rating, catalog and reviews."""
-        connection = self.database.connect()
-        try:
-            supplier = connection.execute(
-                """SELECT id, name, legal_name, city, address, phone, email, contact_person,
-                          delivery_days, rating, is_preferred, is_verified, verified_at, payment_terms
-                   FROM suppliers WHERE id = ?""",
-                (supplier_id,),
-            ).fetchone()
-            if supplier is None:
-                return None
-            stats = connection.execute(
-                """SELECT COUNT(*) FILTER (WHERE is_active) AS catalog_items_count,
-                          MIN(unit_price) FILTER (WHERE is_active) AS min_price,
-                          MAX(unit_price) FILTER (WHERE is_active) AS max_price
-                   FROM supplier_catalog_items WHERE supplier_id = ?""",
-                (supplier_id,),
-            ).fetchone()
-            review_stats = connection.execute(
-                "SELECT COUNT(*) AS total, ROUND(AVG(rating), 1) AS avg FROM supplier_reviews WHERE supplier_id = ? AND status = 'approved'",
-                (supplier_id,),
-            ).fetchone()
-            catalog_items = connection.execute(
-                """SELECT id, product_name, sku, unit, unit_price, stock_qty, image_url, category
-                   FROM supplier_catalog_items WHERE supplier_id = ? AND is_active = TRUE
-                   ORDER BY updated_at DESC LIMIT 24""",
-                (supplier_id,),
-            ).fetchall()
-            reviews = connection.execute(
-                """SELECT id, rating, comment, reviewer_id, created_at FROM supplier_reviews
-                   WHERE supplier_id = ? AND status = 'approved' ORDER BY created_at DESC LIMIT 10""",
-                (supplier_id,),
-            ).fetchall()
-            result = dict(supplier)
-            result["catalog_items_count"] = stats["catalog_items_count"] if stats else 0
-            result["min_price"] = stats["min_price"] if stats else None
-            result["max_price"] = stats["max_price"] if stats else None
-            result["reviews_count"] = review_stats["total"] if review_stats else 0
-            result["reviews_avg"] = float(review_stats["avg"]) if review_stats and review_stats["avg"] is not None else None
-            result["catalog_items"] = [dict(r) for r in catalog_items]
-            result["reviews"] = [dict(r) for r in reviews]
-            return result
-        finally:
-            self._close_connection(connection)
-
-    # ── Marketplace cart (Kaspi/Amazon-style checkout) ──────────────────────
-
-    def get_cart(self, actor_id: str) -> dict[str, Any]:
-        connection = self.database.connect()
-        try:
-            rows = connection.execute(
-                """SELECT cc.id, cc.catalog_item_id, cc.quantity, cc.created_at,
-                          ci.product_name, ci.sku, ci.unit, ci.unit_price, ci.min_order_qty,
-                          ci.image_url, ci.is_active, ci.supplier_id,
-                          s.name AS supplier_name, s.city AS supplier_city
-                   FROM marketplace_cart_items cc
-                   JOIN supplier_catalog_items ci ON ci.id = cc.catalog_item_id
-                   JOIN suppliers s ON s.id = ci.supplier_id
-                   WHERE cc.actor_id = ?
-                   ORDER BY cc.created_at DESC""",
-                (actor_id,),
-            ).fetchall()
-            items = [dict(r) for r in rows]
-            total_amount = sum(float(i["unit_price"]) * float(i["quantity"]) for i in items if i["unit_price"] is not None)
-            return {"items": items, "total_items": len(items), "total_amount": total_amount}
-        finally:
-            self._close_connection(connection)
-
-    def add_to_cart(self, actor_id: str, catalog_item_id: int, quantity: float) -> dict[str, Any]:
-        if quantity <= 0:
-            raise ValidationError("quantity must be > 0")
-        with self.database.transaction() as conn:
-            self._require_active(conn, "supplier_catalog_items", catalog_item_id)
-            existing = conn.execute(
-                "SELECT id, quantity FROM marketplace_cart_items WHERE actor_id = ? AND catalog_item_id = ?",
-                (actor_id, catalog_item_id),
-            ).fetchone()
-            if existing:
-                conn.execute(
-                    "UPDATE marketplace_cart_items SET quantity = ?, updated_at = NOW() WHERE id = ?",
-                    (float(existing["quantity"]) + quantity, existing["id"]),
-                )
-            else:
-                insert_and_get_id(
-                    conn,
-                    "INSERT INTO marketplace_cart_items (actor_id, catalog_item_id, quantity) VALUES (?, ?, ?)",
-                    (actor_id, catalog_item_id, quantity),
-                )
-        return self.get_cart(actor_id)
-
-    def update_cart_item(self, actor_id: str, cart_item_id: int, quantity: float) -> dict[str, Any]:
-        if quantity <= 0:
-            raise ValidationError("quantity must be > 0")
-        with self.database.transaction() as conn:
-            row = conn.execute(
-                "SELECT id FROM marketplace_cart_items WHERE id = ? AND actor_id = ?",
-                (cart_item_id, actor_id),
-            ).fetchone()
-            if row is None:
-                raise NotFoundError(f"cart item {cart_item_id} not found")
-            conn.execute(
-                "UPDATE marketplace_cart_items SET quantity = ?, updated_at = NOW() WHERE id = ?",
-                (quantity, cart_item_id),
-            )
-        return self.get_cart(actor_id)
-
-    def remove_from_cart(self, actor_id: str, cart_item_id: int) -> dict[str, Any]:
-        with self.database.transaction() as conn:
-            conn.execute(
-                "DELETE FROM marketplace_cart_items WHERE id = ? AND actor_id = ?",
-                (cart_item_id, actor_id),
-            )
-        return self.get_cart(actor_id)
-
-    def checkout_cart(self, actor_id: str, warehouse_id: int | None, notes: str | None) -> list[dict[str, Any]]:
-        """Create one marketplace inquiry per cart item (grouped per supplier offer) and clear the cart."""
-        cart = self.get_cart(actor_id)
-        if not cart["items"]:
-            raise ValidationError("Cart is empty")
-        created: list[dict[str, Any]] = []
-        errors: list[str] = []
-        for entry in cart["items"]:
-            try:
-                inquiry = self.create_marketplace_inquiry(
-                    catalog_item_id=entry["catalog_item_id"],
-                    actor_id=actor_id,
-                    quantity=float(entry["quantity"]),
-                    notes=notes,
-                    warehouse_id=warehouse_id,
-                )
-                created.append(inquiry)
-                with self.database.transaction() as conn:
-                    conn.execute("DELETE FROM marketplace_cart_items WHERE id = ?", (entry["id"],))
-            except Exception as error:  # noqa: BLE001 - collect per-item failures, keep checkout going
-                errors.append(f"{entry['product_name']}: {error}")
-        if not created and errors:
-            raise ValidationError("; ".join(errors))
-        return created
-
-    def create_marketplace_inquiry(
-        self, catalog_item_id: int, actor_id: str, quantity: float,
-        notes: str | None, warehouse_id: int | None,
-        purchase_request_id: int | None = None,
-    ) -> dict[str, Any]:
-        connection = self.database.connect()
-        try:
-            item = connection.execute(
-                "SELECT * FROM supplier_catalog_items WHERE id = ? AND is_active = TRUE",
-                (catalog_item_id,)
-            ).fetchone()
-            if item is None:
-                raise ValueError(f"Catalog item {catalog_item_id} not found or inactive")
-            # Duplicate guard — warn if open inquiry already exists for this actor+supplier+product
-            existing = connection.execute(
-                """SELECT id FROM marketplace_inquiries
-                   WHERE catalog_item_id = ? AND actor_id = ? AND status IN ('pending','responded')
-                   LIMIT 1""",
-                (catalog_item_id, actor_id),
-            ).fetchone()
-        finally:
-            self._close_connection(connection)
-        if existing:
-            raise ValidationError(f"Уже есть открытый запрос #{existing['id']} на этот товар у этого поставщика")
-        with self.database.transaction() as conn:
-            row_id = insert_and_get_id(
-                conn,
-                """INSERT INTO marketplace_inquiries
-                   (catalog_item_id, supplier_id, warehouse_id, actor_id, quantity, unit_price, notes, purchase_request_id)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-                (catalog_item_id, item["supplier_id"], warehouse_id, actor_id, quantity, item["unit_price"], notes, purchase_request_id),
-            )
-            # Auto-link purchase request status if provided
-            if purchase_request_id:
-                conn.execute(
-                    "UPDATE purchase_requests SET status = 'ordered' WHERE id = ? AND status = 'draft'",
-                    (purchase_request_id,),
-                )
-            row = conn.execute("SELECT * FROM marketplace_inquiries WHERE id = ?", (row_id,)).fetchone()
-            result = dict(row) if row else {}
-            # Seed initial buyer message
-            if notes:
-                conn.execute(
-                    "INSERT INTO inquiry_messages (inquiry_id, actor_id, role, body) VALUES (?, ?, 'buyer', ?)"
-,                    (row_id, actor_id, notes),
-                )
-        # Fire-and-forget email to supplier (outside transaction)
-        try:
-            supplier = conn.execute("SELECT name, email FROM suppliers WHERE id = ?", (item["supplier_id"],)).fetchone() if False else None
-        except Exception:
-            supplier = None
-        try:
-            from app.core.config import get_settings
-            from app.services.email_notifier import notify_new_inquiry
-            import threading
-            _settings = get_settings()
-            if _settings.smtp_host:
-                _conn2 = self.database.connect()
-                try:
-                    _sup = _conn2.execute("SELECT name, email FROM suppliers WHERE id = ?", (item["supplier_id"],)).fetchone()
-                finally:
-                    self._close_connection(_conn2)
-                if _sup and _sup["email"]:
-                    threading.Thread(
-                        target=notify_new_inquiry,
-                        args=(_settings, _sup["email"], _sup["name"],
-                              item["product_name"], quantity, item["unit"],
-                              notes, row_id),
-                        daemon=True,
-                    ).start()
-        except Exception as _email_exc:
-            import logging; logging.getLogger(__name__).warning("Email error: %s", _email_exc)
-        return result
-
-    def list_marketplace_inquiries(
-        self,
-        supplier_id: int | None = None,
-        actor_id: str | None = None,
-        status: str | None = None,
-        limit: int = 50,
-        offset: int = 0,
-    ) -> dict[str, Any]:
-        where = []
-        params: list[Any] = []
-        if supplier_id is not None:
-            where.append("mi.supplier_id = ?")
-            params.append(supplier_id)
-        if actor_id is not None:
-            where.append("mi.actor_id = ?")
-            params.append(actor_id)
-        if status:
-            where.append("mi.status = ?")
-            params.append(status)
-        where_clause = f"WHERE {' AND '.join(where)}" if where else ""
-        connection = self.database.connect()
-        try:
-            total_row = connection.execute(
-                f"SELECT COUNT(*) AS n FROM marketplace_inquiries mi {where_clause}", tuple(params)
-            ).fetchone()
-            total = total_row["n"] if total_row else 0
-            rows = connection.execute(
-                f"""
-                SELECT mi.*, ci.product_name, ci.unit, ci.sku,
-                       s.name AS supplier_name, s.phone AS supplier_phone, s.email AS supplier_email,
-                       w.name AS warehouse_name
-                FROM marketplace_inquiries mi
-                JOIN supplier_catalog_items ci ON ci.id = mi.catalog_item_id
-                JOIN suppliers s ON s.id = mi.supplier_id
-                LEFT JOIN warehouses w ON w.id = mi.warehouse_id
-                {where_clause}
-                ORDER BY mi.created_at DESC
-                LIMIT ? OFFSET ?
-                """,
-                tuple(params) + (limit, offset),
-            ).fetchall()
-            items = [dict(r) for r in rows]
-            ids = [i["id"] for i in items]
-            if ids:
-                placeholders = ", ".join(["?"] * len(ids))
-                po_rows = connection.execute(
-                    f"""SELECT inquiry_id, id, po_number, status, created_at, sent_at, accepted_at
-                        FROM purchase_orders WHERE inquiry_id IN ({placeholders})
-                        ORDER BY created_at DESC""",
-                    tuple(ids),
-                ).fetchall()
-                po_by_inquiry: dict[int, dict] = {}
-                for po in po_rows:
-                    po_by_inquiry.setdefault(po["inquiry_id"], dict(po))
-                refs = [f"INQ-{i}" for i in ids]
-                ref_placeholders = ", ".join(["?"] * len(refs))
-                sh_rows = connection.execute(
-                    f"""SELECT reference, id, status, current_city, estimated_arrival, updated_at
-                        FROM shipments WHERE reference IN ({ref_placeholders})
-                        ORDER BY created_at DESC""",
-                    tuple(refs),
-                ).fetchall()
-                sh_by_ref: dict[str, dict] = {}
-                for sh in sh_rows:
-                    sh_by_ref.setdefault(sh["reference"], dict(sh))
-                for item in items:
-                    item["purchase_order"] = po_by_inquiry.get(item["id"])
-                    item["shipment"] = sh_by_ref.get(f"INQ-{item['id']}")
-            return {"items": items, "total": total}
-        finally:
-            self._close_connection(connection)
-
-    def respond_to_inquiry(
-        self, inquiry_id: int, supplier_id: int, response_text: str
-    ) -> dict[str, Any]:
-        with self.database.transaction() as conn:
-            row = conn.execute(
-                "SELECT id, supplier_id FROM marketplace_inquiries WHERE id = ?", (inquiry_id,)
-            ).fetchone()
-            if row is None or row["supplier_id"] != supplier_id:
-                raise PermissionError("Inquiry not found or not yours")
-            conn.execute(
-                "UPDATE marketplace_inquiries SET status = 'responded', supplier_response = ?, responded_at = NOW() WHERE id = ?",
-                (response_text, inquiry_id),
-            )
-            # Record supplier reply as chat message
-            supplier_actor = f"supplier-actor:{supplier_id}"
-            conn.execute(
-                "INSERT INTO inquiry_messages (inquiry_id, actor_id, role, body) VALUES (?, ?, 'supplier', ?)"
-,                (inquiry_id, supplier_actor, response_text),
-            )
-            updated = conn.execute(
-                """SELECT mi.*, ci.product_name, ci.unit, s.name AS supplier_name
-                   FROM marketplace_inquiries mi
-                   JOIN supplier_catalog_items ci ON ci.id = mi.catalog_item_id
-                   JOIN suppliers s ON s.id = mi.supplier_id
-                   WHERE mi.id = ?""",
-                (inquiry_id,)
-            ).fetchone()
-            result2 = dict(updated) if updated else {}
-        # Notify buyer by email if we have their email in sklad_users
-        try:
-            from app.core.config import get_settings
-            from app.services.email_notifier import notify_inquiry_response
-            import threading
-            _settings = get_settings()
-            if _settings.smtp_host and result2:
-                _actor_id = result2.get("actor_id", "")
-                # actor_id format: "tetis-actor:{sub}" → sklad_users.username = "tetis:{sub}"
-                _tetis_id = _actor_id.removeprefix("tetis-actor:")
-                _conn3 = self.database.connect()
-                try:
-                    _buyer = _conn3.execute(
-                        "SELECT email FROM sklad_users WHERE username = ?",
-                        (f"tetis:{_tetis_id}",)
-                    ).fetchone()
-                finally:
-                    self._close_connection(_conn3)
-                if _buyer and _buyer["email"]:
-                    threading.Thread(
-                        target=notify_inquiry_response,
-                        args=(_settings, _buyer["email"],
-                              result2.get("supplier_name", ""),
-                              result2.get("product_name", ""),
-                              response_text, inquiry_id),
-                        daemon=True,
-                    ).start()
-        except Exception as _email_exc2:
-            import logging; logging.getLogger(__name__).warning("Email error: %s", _email_exc2)
-        return result2
-
-    def list_inquiry_messages(
-        self, inquiry_id: int, actor_id: str
-    ) -> list[dict]:
-        """Return all messages for an inquiry. Caller must be the buyer or the supplier."""
-        connection = self.database.connect()
-        try:
-            inq = connection.execute(
-                "SELECT actor_id, supplier_id FROM marketplace_inquiries WHERE id = ?",
-                (inquiry_id,)
-            ).fetchone()
-            if inq is None:
-                raise NotFoundError(f"Inquiry {inquiry_id} not found")
-            # Verify access: buyer (actor_id match) or supplier
-            supplier_actor = f"supplier-actor:{inq['supplier_id']}"
-            if actor_id != inq["actor_id"] and actor_id != supplier_actor:
-                raise PermissionError("Access denied to inquiry messages")
-            rows = connection.execute(
-                """SELECT id, actor_id, role, body, created_at
-                   FROM inquiry_messages
-                   WHERE inquiry_id = ?
-                   ORDER BY created_at, id""",
-                (inquiry_id,)
-            ).fetchall()
-            return [dict(r) for r in rows]
-        finally:
-            self._close_connection(connection)
-
-    def add_inquiry_message(
-        self, inquiry_id: int, actor_id: str, body: str
-    ) -> dict:
-        """Buyer or supplier sends a follow-up message on an existing inquiry."""
-        body = (body or "").strip()
-        if not body:
-            raise ValidationError("Message body cannot be empty")
-        with self.database.transaction() as conn:
-            inq = conn.execute(
-                "SELECT actor_id, supplier_id, status FROM marketplace_inquiries WHERE id = ?",
-                (inquiry_id,)
-            ).fetchone()
-            if inq is None:
-                raise NotFoundError(f"Inquiry {inquiry_id} not found")
-            if inq["status"] in ("cancelled", "closed"):
-                raise ValidationError("Cannot add message to a closed/cancelled inquiry")
-            supplier_actor = f"supplier-actor:{inq['supplier_id']}"
-            if actor_id == inq["actor_id"]:
-                role = "buyer"
-            elif actor_id == supplier_actor:
-                role = "supplier"
-            else:
-                raise PermissionError("Access denied")
-            msg_id = insert_and_get_id(
-                conn,
-                "INSERT INTO inquiry_messages (inquiry_id, actor_id, role, body) VALUES (?, ?, ?, ?)",
-                (inquiry_id, actor_id, role, body),
-            )
-            # Touch inquiry updated_at / status if supplier is replying
-            if role == "supplier" and inq["status"] == "pending":
-                conn.execute(
-                    "UPDATE marketplace_inquiries SET status = 'responded', responded_at = NOW() WHERE id = ?",
-                    (inquiry_id,)
-                )
-            row = conn.execute(
-                "SELECT id, inquiry_id, actor_id, role, body, created_at FROM inquiry_messages WHERE id = ?",
-                (msg_id,)
-            ).fetchone()
-            return dict(row) if row else {}
-
-    def update_inquiry_status(
-        self, inquiry_id: int, actor_id: str, new_status: str
-    ) -> dict[str, Any]:
-        """Buyer-side status update — mark inquiry as ordered or closed."""
-        if new_status not in ("ordered", "closed"):
-            raise ValueError(f"Invalid status: {new_status}")
-        with self.database.transaction() as conn:
-            row = conn.execute(
-                "SELECT id, actor_id FROM marketplace_inquiries WHERE id = ?", (inquiry_id,)
-            ).fetchone()
-            if row is None or row["actor_id"] != actor_id:
-                raise PermissionError("Inquiry not found or not yours")
-            conn.execute(
-                "UPDATE marketplace_inquiries SET status = ? WHERE id = ?",
-                (new_status, inquiry_id),
-            )
-            updated = conn.execute(
-                """SELECT mi.*, ci.product_name, ci.unit, s.name AS supplier_name,
-                          s.phone AS supplier_phone, s.email AS supplier_email
-                   FROM marketplace_inquiries mi
-                   JOIN supplier_catalog_items ci ON ci.id = mi.catalog_item_id
-                   JOIN suppliers s ON s.id = mi.supplier_id
-                   WHERE mi.id = ?""",
-                (inquiry_id,)
-            ).fetchone()
-            return dict(updated) if updated else {}
-
-    def create_shipment_from_inquiry(
-        self, inquiry_id: int, supplier_id: int, data: dict[str, Any]
-    ) -> dict[str, Any]:
-        """Supplier creates a shipment record from an accepted inquiry."""
-        with self.database.transaction() as conn:
-            inq = conn.execute(
-                "SELECT * FROM marketplace_inquiries WHERE id = ? AND supplier_id = ?",
-                (inquiry_id, supplier_id),
-            ).fetchone()
-            if inq is None:
-                raise PermissionError("Inquiry not found or not yours")
-            # Build shipment fields
-            warehouse_id = inq["warehouse_id"] or data.get("destination_warehouse_id")
-            reference = data.get("reference") or f"INQ-{inquiry_id}"
-            notes = data.get("notes") or inq["notes"]
-            sid = insert_and_get_id(
-                conn,
-                """INSERT INTO shipments (supplier_id, reference, status, origin_city,
-                   destination_warehouse_id, estimated_arrival, notes)
-                   VALUES (?, ?, 'planned', ?, ?, ?, ?)""",
-                (
-                    supplier_id,
-                    reference,
-                    data.get("origin_city"),
-                    warehouse_id,
-                    data.get("estimated_arrival"),
-                    notes,
-                ),
-            )
-            conn.execute(
-                "UPDATE marketplace_inquiries SET status = 'ordered' WHERE id = ?",
-                (inquiry_id,),
-            )
-            shipment = conn.execute("SELECT * FROM shipments WHERE id = ?", (sid,)).fetchone()
-            return dict(shipment) if shipment else {}
-
-    def create_bulk_inquiry(
-        self,
-        product_name: str,
-        actor_id: str,
-        quantity: float,
-        notes: str | None,
-        warehouse_id: int | None,
-    ) -> dict[str, Any]:
-        """Send inquiry to all suppliers that have matching catalog items."""
-        connection = self.database.connect()
-        try:
-            items = connection.execute(
-                """SELECT ci.*, s.name AS supplier_name FROM supplier_catalog_items ci
-                   JOIN suppliers s ON s.id = ci.supplier_id
-                   WHERE ci.is_active = TRUE AND ci.product_name ILIKE ?
-                   ORDER BY ci.unit_price ASC""",
-                (f"%{product_name}%",),
-            ).fetchall()
-        finally:
-            self._close_connection(connection)
-
-        if not items:
-            return {"items": [], "total": 0}
-
-        # One inquiry per supplier (pick cheapest item per supplier)
-        seen_suppliers: set[int] = set()
-        created = []
-        with self.database.transaction() as conn:
-            for item in items:
-                sid = item["supplier_id"]
-                if sid in seen_suppliers:
-                    continue
-                seen_suppliers.add(sid)
-                row_id = insert_and_get_id(
-                    conn,
-                    """INSERT INTO marketplace_inquiries
-                       (catalog_item_id, supplier_id, warehouse_id, actor_id, quantity, unit_price, notes)
-                       VALUES (?, ?, ?, ?, ?, ?, ?)""",
-                    (item["id"], sid, warehouse_id, actor_id, quantity, item["unit_price"], notes),
-                )
-                row = conn.execute("SELECT * FROM marketplace_inquiries WHERE id = ?", (row_id,)).fetchone()
-                if row:
-                    created.append({**dict(row), "supplier_name": item["supplier_name"]})
-
-        return {"items": created, "total": len(created)}
-
-    def import_catalog_csv(
-        self, supplier_id: int, rows: list[dict[str, Any]]
-    ) -> dict[str, Any]:
-        """Bulk-insert catalog items from parsed CSV rows."""
-        allowed_fields = {"product_name", "sku", "unit", "unit_price", "min_order_qty",
-                          "stock_qty", "delivery_days", "category", "description"}
-        inserted = 0
-        skipped = 0
-        errors: list[str] = []
-        with self.database.transaction() as conn:
-            for i, row in enumerate(rows, 1):
-                try:
-                    product_name = str(row.get("product_name") or "").strip()
-                    unit_price_raw = row.get("unit_price")
-                    if not product_name or unit_price_raw is None:
-                        skipped += 1
-                        errors.append(f"Строка {i}: пропущена (нет названия или цены)")
-                        continue
-                    unit_price = float(str(unit_price_raw).replace(",", "."))
-                    unit = str(row.get("unit") or "шт").strip() or "шт"
-                    min_order_qty = float(str(row.get("min_order_qty") or 1).replace(",", ".") or 1)
-                    stock_qty_raw = row.get("stock_qty")
-                    stock_qty = float(str(stock_qty_raw).replace(",", ".")) if stock_qty_raw not in (None, "") else None
-                    delivery_days_raw = row.get("delivery_days")
-                    delivery_days = int(float(str(delivery_days_raw).replace(",", "."))) if delivery_days_raw not in (None, "") else None
-                    insert_and_get_id(
-                        conn,
-                        """INSERT INTO supplier_catalog_items
-                           (supplier_id, product_name, sku, unit, unit_price, min_order_qty,
-                            stock_qty, delivery_days, category, description, is_active)
-                           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, TRUE)""",
-                        (
-                            supplier_id,
-                            product_name,
-                            str(row.get("sku") or "").strip() or None,
-                            unit,
-                            unit_price,
-                            min_order_qty,
-                            stock_qty,
-                            delivery_days,
-                            str(row.get("category") or "").strip() or None,
-                            str(row.get("description") or "").strip() or None,
-                        ),
-                    )
-                    inserted += 1
-                except Exception as exc:
-                    skipped += 1
-                    errors.append(f"Строка {i}: {exc}")
-        return {"inserted": inserted, "skipped": skipped, "errors": errors}
-
-    def get_catalog_item_inquiry_stats(self, supplier_id: int) -> list[dict[str, Any]]:
-        """Return inquiry counts per catalog item for a supplier."""
-        connection = self.database.connect()
-        try:
-            rows = connection.execute(
-                """SELECT ci.id, ci.product_name, ci.unit_price, ci.unit, ci.is_active,
-                          COUNT(mi.id) AS inquiries_total,
-                          COUNT(mi.id) FILTER (WHERE mi.status = 'pending') AS inquiries_pending,
-                          COUNT(mi.id) FILTER (WHERE mi.status IN ('ordered')) AS inquiries_ordered
-                   FROM supplier_catalog_items ci
-                   LEFT JOIN marketplace_inquiries mi ON mi.catalog_item_id = ci.id
-                   WHERE ci.supplier_id = ?
-                   GROUP BY ci.id
-                   ORDER BY inquiries_total DESC, ci.id""",
-                (supplier_id,),
-            ).fetchall()
-            return [dict(r) for r in rows]
-        finally:
-            self._close_connection(connection)
-
-    # ────────────────────────────────────────────────────────────────────────
-
     def review_supplier_application(
-        self,
-        application_id: int,
-        data: SupplierApplicationReview,
-        reviewer_id: str,
-        password_hash: str | None = None,
+        self, application_id: int, data: SupplierApplicationReview, reviewer_id: str
     ) -> dict[str, Any]:
         with self.database.transaction() as connection:
             application = self._get_supplier_application(connection, application_id)
             supplier_id = data.supplier_id or application.get("supplier_id")
             if data.status == "approved":
-                if supplier_id is None:
-                    matched = None
-                    if application.get("bin"):
-                        matched = connection.execute(
-                            "SELECT id FROM suppliers WHERE bin = ? ORDER BY id LIMIT 1",
-                            (application["bin"],),
-                        ).fetchone()
-                    if matched is None:
-                        matched = connection.execute(
-                            "SELECT id FROM suppliers WHERE lower(email) = lower(?) ORDER BY id LIMIT 1",
-                            (application["email"],),
-                        ).fetchone()
-                    supplier_id = int(matched["id"]) if matched else None
-                if supplier_id is None:
-                    supplier_id = insert_and_get_id(
-                        connection,
-                        """
-                        INSERT INTO suppliers(
-                          name, bin, phone, address, rating, is_preferred,
-                          contact_person, email, contract_number, contract_expires_on,
-                          payment_terms, notes, lat, lng, city, delivery_days
-                        ) VALUES (?, ?, ?, ?, NULL, ?, ?, ?, NULL, NULL, NULL, ?, NULL, NULL, ?, ?)
-                        """,
-                        (
-                            application["name"],
-                            application.get("bin"),
-                            application.get("phone"),
-                            application.get("address"),
-                            0,
-                            application.get("contact_person"),
-                            application.get("email"),
-                            application.get("notes"),
-                            application.get("city"),
-                            application.get("delivery_days"),
-                        ),
-                    )
-                else:
+                if supplier_id is not None:
                     self._require(connection, "suppliers", supplier_id)
                     connection.execute(
                         """
                         UPDATE suppliers
                         SET name = ?,
-                            bin = COALESCE(?, bin),
-                            phone = COALESCE(?, phone),
-                            address = COALESCE(?, address),
-                            contact_person = COALESCE(?, contact_person),
-                            email = COALESCE(?, email),
-                            notes = COALESCE(?, notes),
-                            city = COALESCE(?, city),
-                            delivery_days = COALESCE(?, delivery_days)
+                            bin = ?,
+                            phone = ?,
+                            address = ?,
+                            contact_person = ?,
+                            email = ?,
+                            notes = COALESCE(?, notes)
                         WHERE id = ?
                         """,
                         (
@@ -1707,19 +477,36 @@ class WarehouseService:
                             application.get("contact_person"),
                             application.get("email"),
                             application.get("notes"),
-                            application.get("city"),
-                            application.get("delivery_days"),
                             supplier_id,
                         ),
                     )
-                if password_hash:
-                    connection.execute(
-                        "UPDATE suppliers SET password_hash = ?, portal_access_enabled = TRUE WHERE id = ?",
-                        (password_hash, supplier_id),
+                else:
+                    supplier_id = insert_and_get_id(
+                        connection,
+                        """
+                        INSERT INTO suppliers(
+                          name, bin, phone, address, rating, is_preferred,
+                          contact_person, email, contract_number, contract_expires_on, payment_terms, notes
+                        ) VALUES (?, ?, ?, ?, NULL, 0, ?, ?, NULL, NULL, NULL, ?)
+                        """,
+                        (
+                            application["name"],
+                            application.get("bin"),
+                            application.get("phone"),
+                            application.get("address"),
+                            application.get("contact_person"),
+                            application.get("email"),
+                            application.get("notes"),
+                        ),
                     )
-                requester = application.get("actor_id") or ""
-                if requester.startswith("tetis-actor:"):
-                    self._link_requester_to_supplier(connection, requester.removeprefix("tetis-actor:"), supplier_id)
+                connection.execute(
+                    """
+                    INSERT INTO supplier_members(supplier_id, actor_id, member_role, is_active, created_at)
+                    VALUES (?, ?, 'owner', 1, ?)
+                    ON CONFLICT(supplier_id, actor_id) DO UPDATE SET is_active = 1
+                    """,
+                    (supplier_id, application["actor_id"], now_iso()),
+                )
             now = now_iso()
             connection.execute(
                 """
@@ -1751,37 +538,6 @@ class WarehouseService:
             )
             return updated
 
-    def _link_requester_to_supplier(self, connection, requester_actor_id: str, supplier_id: int) -> None:
-        """Auto-link the tetis user who submitted an approved supplier application
-        to that supplier, so they can switch into supplier mode without an admin
-        having to manually type a supplier ID into the Users screen."""
-        import secrets
-        if requester_actor_id.isdigit():
-            row = connection.execute(
-                "SELECT id FROM sklad_users WHERE id = ?", (int(requester_actor_id),)
-            ).fetchone()
-            if row:
-                connection.execute(
-                    "UPDATE sklad_users SET supplier_id = ? WHERE id = ?",
-                    (supplier_id, row["id"]),
-                )
-                return
-        username = f"tetis:{requester_actor_id}"
-        existing = connection.execute(
-            "SELECT id FROM sklad_users WHERE username = ?", (username,)
-        ).fetchone()
-        if existing:
-            connection.execute(
-                "UPDATE sklad_users SET supplier_id = ? WHERE id = ?",
-                (supplier_id, existing["id"]),
-            )
-            return
-        connection.execute(
-            "INSERT INTO sklad_users (username, full_name, password_hash, roles, warehouse_ids, supplier_id) "
-            "VALUES (?, ?, ?, ?, ?, ?)",
-            (username, "Поставщик", secrets.token_hex(32), "warehouse_manager", "[]", supplier_id),
-        )
-
     def create_warehouse(self, data: WarehouseCreate, actor_id: str = "system") -> dict[str, Any]:
         with self.database.transaction() as connection:
             warehouse_id = insert_and_get_id(
@@ -1789,17 +545,14 @@ class WarehouseService:
                 """
                 INSERT INTO warehouses(
                   name, department, tetis_org_id, external_tetis_id,
-                  mis_clinic_id, mis_room_id,
                   storage_zone, capacity_limit, storage_conditions, responsible_person
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     data.name,
                     data.department,
                     data.tetis_org_id,
                     data.external_tetis_id,
-                    data.mis_clinic_id,
-                    data.mis_room_id,
                     data.storage_zone,
                     self._optional_decimal_to_db(data.capacity_limit),
                     data.storage_conditions,
@@ -2104,8 +857,6 @@ class WarehouseService:
                     department = ?,
                     tetis_org_id = ?,
                     external_tetis_id = ?,
-                    mis_clinic_id = ?,
-                    mis_room_id = ?,
                     storage_zone = ?,
                     capacity_limit = ?,
                     storage_conditions = ?,
@@ -2117,8 +868,6 @@ class WarehouseService:
                     data.department,
                     data.tetis_org_id,
                     data.external_tetis_id,
-                    data.mis_clinic_id,
-                    data.mis_room_id,
                     data.storage_zone,
                     self._optional_decimal_to_db(data.capacity_limit),
                     data.storage_conditions,
@@ -2161,11 +910,6 @@ class WarehouseService:
     def create_product(self, data: ProductCreate, actor_id: str = "system") -> dict[str, Any]:
         with self.database.transaction() as connection:
             self._require_active(connection, "categories", data.category_id)
-            existing_sku = connection.execute(
-                "SELECT id FROM products WHERE sku = ?", [data.sku]
-            ).fetchone()
-            if existing_sku:
-                raise ConflictError(f"Товар с кодом «{data.sku}» уже существует")
             unit = self._normalize_product_unit(data.unit)
             product_id = insert_and_get_id(
                 connection,
@@ -2220,17 +964,6 @@ class WarehouseService:
         finally:
             self._close_connection(connection)
 
-    def get_product_by_barcode(self, barcode: str) -> "dict[str, Any] | None":
-        connection = self.database.connect()
-        try:
-            row = connection.execute(
-                "SELECT * FROM products WHERE is_active = 1 AND barcode = ?",
-                [barcode.strip()],
-            ).fetchone()
-            return dict(row) if row else None
-        finally:
-            self._close_connection(connection)
-
     def get_product_barcode_label(self, product_id: int, symbology: str = "code128") -> dict[str, Any]:
         connection = self.database.connect()
         try:
@@ -2252,58 +985,6 @@ class WarehouseService:
                 "labels": labels,
                 "zpl": "\n".join(label["zpl"] for label in labels),
                 "epl": "\n".join(label["epl"] for label in labels),
-            }
-        finally:
-            self._close_connection(connection)
-
-    def get_batch_receipt_print_form(self, batch_id: int) -> dict[str, Any]:
-        connection = self.database.connect()
-        try:
-            row = connection.execute(
-                """
-                SELECT
-                  b.id AS batch_id,
-                  b.lot,
-                  b.serial_number,
-                  b.expires_on,
-                  b.unit_price,
-                  b.received_at,
-                  p.name AS product_name,
-                  p.sku,
-                  p.unit,
-                  p.barcode,
-                  s.name AS supplier_name,
-                  w.name AS warehouse_name,
-                  sb.quantity
-                FROM batches b
-                JOIN products p ON p.id = b.product_id
-                JOIN suppliers s ON s.id = b.supplier_id
-                LEFT JOIN stock_balances sb ON sb.batch_id = b.id
-                LEFT JOIN warehouses w ON w.id = sb.warehouse_id
-                WHERE b.id = ?
-                ORDER BY sb.quantity DESC NULLS LAST
-                LIMIT 1
-                """,
-                (batch_id,),
-            ).fetchone()
-            if row is None:
-                raise NotFoundError(f"batches#{batch_id} not found")
-            item = dict(row)
-            return {
-                "document_type": "receipt",
-                "batch_id": batch_id,
-                "product_name": item["product_name"],
-                "sku": item.get("sku"),
-                "lot": item["lot"],
-                "serial_number": item.get("serial_number"),
-                "expires_on": item.get("expires_on"),
-                "unit_price": str(item["unit_price"]),
-                "quantity": str(item["quantity"]) if item.get("quantity") is not None else "0",
-                "unit": item.get("unit"),
-                "warehouse_name": item["warehouse_name"] if item.get("warehouse_name") else "—",
-                "supplier_name": item["supplier_name"],
-                "received_at": str(item["received_at"]),
-                "barcode": item.get("barcode"),
             }
         finally:
             self._close_connection(connection)
@@ -2339,11 +1020,6 @@ class WarehouseService:
         with self.database.transaction() as connection:
             before = self._get_by_id(connection, "products", product_id)
             self._require_active(connection, "categories", data.category_id)
-            existing_sku = connection.execute(
-                "SELECT id FROM products WHERE sku = ? AND id != ?", [data.sku, product_id]
-            ).fetchone()
-            if existing_sku:
-                raise ConflictError(f"Товар с кодом «{data.sku}» уже существует")
             unit = self._normalize_product_unit(data.unit)
             connection.execute(
                 """
@@ -2377,51 +1053,6 @@ class WarehouseService:
                 {"before": before, "after": updated},
             )
             return updated
-
-
-    def update_product_certificate_ref(
-        self, product_id: int, certificate_ref: str | None, actor_id: str = "system"
-    ) -> dict:
-        """Update only the certificate_ref field of a product."""
-        with self.database.transaction() as connection:
-            before = self._get_by_id(connection, "products", product_id)
-            connection.execute(
-                "UPDATE products SET certificate_ref = ? WHERE id = ?",
-                (certificate_ref, product_id),
-            )
-            updated = self._get_by_id(connection, "products", product_id)
-            self._audit(
-                connection,
-                actor_id,
-                AuditAction.UPDATE,
-                "product",
-                product_id,
-                {"before": {"certificate_ref": before.get("certificate_ref")},
-                 "after": {"certificate_ref": updated.get("certificate_ref")}},
-            )
-        return dict(updated)
-
-    def update_product_image_ref(
-        self, product_id: int, image_path: str | None, actor_id: str = "system"
-    ) -> dict:
-        """Update only the image_path field of a product."""
-        with self.database.transaction() as connection:
-            before = self._get_by_id(connection, "products", product_id)
-            connection.execute(
-                "UPDATE products SET image_path = ? WHERE id = ?",
-                (image_path, product_id),
-            )
-            updated = self._get_by_id(connection, "products", product_id)
-            self._audit(
-                connection,
-                actor_id,
-                AuditAction.UPDATE,
-                "product",
-                product_id,
-                {"before": {"image_path": before.get("image_path")},
-                 "after": {"image_path": updated.get("image_path")}},
-            )
-        return dict(updated)
 
     def delete_product(self, product_id: int, actor_id: str = "system") -> dict[str, Any]:
         with self.database.transaction() as connection:
@@ -2537,8 +1168,6 @@ class WarehouseService:
                 data.warehouse_id,
                 actor_id,
                 supplier_id=data.supplier_id,
-                external_ref=getattr(data, "external_ref", None),
-                notes=getattr(data, "notes", None),
             )
             for line in data.lines:
                 self._require(connection, "products", line.product_id)
@@ -3107,46 +1736,6 @@ class WarehouseService:
         finally:
             self._close_connection(connection)
 
-    def unblock_batch(self, batch_id: int, reason: str = "", actor_id: str = "system") -> dict:
-        with self.database.transaction() as connection:
-            batch = dict(self._require(connection, "batches", batch_id))
-            if batch["status"] != "blocked":
-                from app.domain.errors import ValidationError as VE
-                raise VE(f"Batch {batch_id} is not blocked (status={batch['status']})")
-            connection.execute(
-                "UPDATE batches SET status = ? WHERE id = ?",
-                ("active", batch_id),
-            )
-            payload = {"reason": reason, "prev_status": "blocked"}
-            # Audit in all warehouses that hold this batch
-            balances = self._batch_balances(connection, batch_id)
-            warehouse_ids = list({b["warehouse_id"] for b in balances})
-            for wid in warehouse_ids:
-                self._audit(connection, actor_id, "unblock", "batch", batch_id, payload, warehouse_id=wid)
-            return self._get_batch(connection, batch_id)
-
-    def get_recall_stats(self) -> dict:
-        with self.database.transaction() as connection:
-            total = (connection.execute("SELECT COUNT(*) AS c FROM batch_recalls").fetchone() or {}).get("c", 0)
-            blocked = (connection.execute("SELECT COUNT(*) AS c FROM batches WHERE status = 'blocked'").fetchone() or {}).get("c", 0)
-            by_source = connection.execute(
-                "SELECT source, COUNT(*) AS cnt FROM batch_recalls GROUP BY source ORDER BY cnt DESC"
-            ).fetchall() or []
-            recent = connection.execute(
-                "SELECT br.id, br.batch_id, br.reason, br.source, br.reference, br.created_by, br.created_at, "
-                "p.name AS product_name, b.lot, b.serial_number, b.status AS batch_status "
-                "FROM batch_recalls br "
-                "JOIN batches b ON b.id = br.batch_id "
-                "JOIN products p ON p.id = br.product_id "
-                "ORDER BY br.created_at DESC LIMIT 5"
-            ).fetchall() or []
-        return {
-            "total_recalls": int(total),
-            "blocked_batches": int(blocked),
-            "by_source": [dict(r) for r in by_source],
-            "recent": [dict(r) for r in recent],
-        }
-
     def list_quarantine_reviews(
         self,
         warehouse_id: int | None = None,
@@ -3251,9 +1840,6 @@ class WarehouseService:
                 QuarantineReviewStatus.REJECTED,
             } else None
             decided_at = now if decided_by else None
-            commission_json = json.dumps(data.commission_members) if data.commission_members else None
-            resolution_type = data.resolution_type
-            disposal_quantity = data.disposal_quantity
             connection.execute(
                 """
                 UPDATE quarantine_reviews
@@ -3263,10 +1849,7 @@ class WarehouseService:
                     decision_reason = ?,
                     decided_by = ?,
                     updated_at = ?,
-                    decided_at = ?,
-                    commission_members = ?,
-                    resolution_type = ?,
-                    disposal_quantity = ?
+                    decided_at = ?
                 WHERE id = ?
                 """,
                 (
@@ -3277,43 +1860,24 @@ class WarehouseService:
                     decided_by,
                     now,
                     decided_at,
-                    commission_json,
-                    resolution_type,
-                    disposal_quantity,
                     review_id,
                 ),
             )
             if data.status == QuarantineReviewStatus.APPROVED:
-                new_batch_status = BatchStatus.AVAILABLE
+                connection.execute(
+                    "UPDATE batches SET status = ? WHERE id = ?",
+                    (BatchStatus.AVAILABLE, before["batch_id"]),
+                )
             elif data.status == QuarantineReviewStatus.REJECTED:
-                new_batch_status = BatchStatus.BLOCKED
+                connection.execute(
+                    "UPDATE batches SET status = ? WHERE id = ?",
+                    (BatchStatus.BLOCKED, before["batch_id"]),
+                )
             else:
-                new_batch_status = BatchStatus.QUARANTINE
-            connection.execute(
-                "UPDATE batches SET status = ? WHERE id = ?",
-                (new_batch_status, before["batch_id"]),
-            )
-            # Auto-disposal: when rejected with resolution_type=disposal, write off the stock
-            if (
-                data.status == QuarantineReviewStatus.REJECTED
-                and resolution_type == "disposal"
-                and disposal_quantity and disposal_quantity > 0
-            ):
-                try:
-                    self._apply_writeoff_line(
-                        connection,
-                        batch_id=before["batch_id"],
-                        warehouse_id=before["warehouse_id"],
-                        quantity=Decimal(str(disposal_quantity)),
-                        reason=f"Утилизация по результатам карантинной проверки #{review_id}: {data.decision_reason or ''}",
-                        patient_id=None,
-                        doctor_id=None,
-                        medical_record_no=None,
-                        second_approver_id=None,
-                        second_approval_note=None,
-                    )
-                except Exception:
-                    logger.exception("Failed to auto-dispose quarantine batch %s", before["batch_id"])
+                connection.execute(
+                    "UPDATE batches SET status = ? WHERE id = ?",
+                    (BatchStatus.QUARANTINE, before["batch_id"]),
+                )
             updated = self._get_quarantine_review(connection, review_id)
             self._audit(
                 connection,
@@ -3349,121 +1913,77 @@ class WarehouseService:
                 data,
                 warehouse_id=data.warehouse_id,
             )
-            batch_row = connection.execute(
-                "SELECT product_id FROM batches WHERE id = ?", (data.batch_id,)
-            ).fetchone()
-            if batch_row:
-                self._check_and_create_reorder_requests(
-                    connection, data.warehouse_id, [int(batch_row["product_id"])]
-                )
             return self._get_by_id(connection, "stock_movements", movement_id)
 
     def write_off_fefo(
         self, data: WriteOffFefoCreate, actor_id: str = "system"
     ) -> dict[str, Any]:
         with self.database.transaction() as connection:
-            return self._write_off_fefo_within(
+            self._ensure_warehouse_open(connection, data.warehouse_id)
+            self._require(connection, "products", data.product_id)
+            self._require_controlled_writeoff_metadata(
                 connection,
-                actor_id=actor_id,
                 product_id=data.product_id,
-                warehouse_id=data.warehouse_id,
-                quantity=data.quantity,
-                reason=data.reason,
                 patient_id=data.patient_id,
                 doctor_id=data.doctor_id,
                 medical_record_no=data.medical_record_no,
                 second_approver_id=data.second_approver_id,
-                second_approval_note=data.second_approval_note,
             )
-
-    def _write_off_fefo_within(
-        self,
-        connection: Connection,
-        *,
-        actor_id: str,
-        product_id: int,
-        warehouse_id: int,
-        quantity: Decimal,
-        reason: str,
-        patient_id: str | None = None,
-        doctor_id: str | None = None,
-        medical_record_no: str | None = None,
-        second_approver_id: str | None = None,
-        second_approval_note: str | None = None,
-    ) -> dict[str, Any]:
-        self._ensure_warehouse_open(connection, warehouse_id)
-        self._require(connection, "products", product_id)
-        self._require_controlled_writeoff_metadata(
-            connection,
-            product_id=product_id,
-            patient_id=patient_id,
-            doctor_id=doctor_id,
-            medical_record_no=medical_record_no,
-            second_approver_id=second_approver_id,
-        )
-        rows = connection.execute(
-            """
-            SELECT
-              sb.batch_id,
-              sb.quantity,
-              sb.reserved_quantity
-            FROM stock_balances sb
-            JOIN batches b ON b.id = sb.batch_id
-            WHERE b.product_id = ?
-              AND sb.warehouse_id = ?
-              AND b.status = ?
-              AND CAST(sb.quantity AS REAL) - CAST(sb.reserved_quantity AS REAL) > 0
-            ORDER BY b.expires_on IS NULL, b.expires_on, sb.batch_id
-            """,
-            (product_id, warehouse_id, BatchStatus.AVAILABLE),
-        ).fetchall()
-        remaining = quantity
-        movement_ids: list[int] = []
-        for row in rows:
-            if remaining <= 0:
-                break
-            free = Decimal(row["quantity"]) - Decimal(row["reserved_quantity"])
-            line_quantity = min(free, remaining)
-            movement_ids.append(
-                self._apply_writeoff_line(
-                    connection,
-                    batch_id=row["batch_id"],
-                    warehouse_id=warehouse_id,
-                    quantity=line_quantity,
-                    reason=reason,
-                    patient_id=patient_id,
-                    doctor_id=doctor_id,
-                    medical_record_no=medical_record_no,
-                    second_approver_id=second_approver_id,
-                    second_approval_note=second_approval_note,
+            rows = connection.execute(
+                """
+                SELECT
+                  sb.batch_id,
+                  sb.quantity,
+                  sb.reserved_quantity
+                FROM stock_balances sb
+                JOIN batches b ON b.id = sb.batch_id
+                WHERE b.product_id = ?
+                  AND sb.warehouse_id = ?
+                  AND b.status = ?
+                  AND CAST(sb.quantity AS REAL) - CAST(sb.reserved_quantity AS REAL) > 0
+                ORDER BY b.expires_on IS NULL, b.expires_on, sb.batch_id
+                """,
+                (data.product_id, data.warehouse_id, BatchStatus.AVAILABLE),
+            ).fetchall()
+            remaining = data.quantity
+            movement_ids: list[int] = []
+            for row in rows:
+                if remaining <= 0:
+                    break
+                free = Decimal(row["quantity"]) - Decimal(row["reserved_quantity"])
+                quantity = min(free, remaining)
+                movement_ids.append(
+                    self._apply_writeoff_line(
+                        connection,
+                        batch_id=row["batch_id"],
+                        warehouse_id=data.warehouse_id,
+                        quantity=quantity,
+                        reason=data.reason,
+                        patient_id=data.patient_id,
+                        doctor_id=data.doctor_id,
+                        medical_record_no=data.medical_record_no,
+                        second_approver_id=data.second_approver_id,
+                        second_approval_note=data.second_approval_note,
+                    )
                 )
+                remaining -= quantity
+            if remaining > 0:
+                raise InsufficientStockError("Not enough FEFO stock for write-off")
+            self._audit(
+                connection,
+                actor_id,
+                AuditAction.WRITE_OFF,
+                "product",
+                data.product_id,
+                {"request": data, "movement_ids": movement_ids},
+                warehouse_id=data.warehouse_id,
             )
-            remaining -= line_quantity
-        if remaining > 0:
-            raise InsufficientStockError("Not enough FEFO stock for write-off")
-        self._audit(
-            connection,
-            actor_id,
-            AuditAction.WRITE_OFF,
-            "product",
-            product_id,
-            {
-                "request": {
-                    "product_id": product_id,
-                    "warehouse_id": warehouse_id,
-                    "quantity": decimal_to_db(quantity),
-                    "reason": reason,
-                },
+            return {
+                "product_id": data.product_id,
+                "warehouse_id": data.warehouse_id,
+                "quantity": decimal_to_db(data.quantity),
                 "movement_ids": movement_ids,
-            },
-            warehouse_id=warehouse_id,
-        )
-        return {
-            "product_id": product_id,
-            "warehouse_id": warehouse_id,
-            "quantity": decimal_to_db(quantity),
-            "movement_ids": movement_ids,
-        }
+            }
 
     def transfer(self, data: TransferCreate, actor_id: str = "system") -> dict[str, Any]:
         if data.source_warehouse_id == data.target_warehouse_id:
@@ -4274,9 +2794,6 @@ class WarehouseService:
                         abc_class, xyz_class, recommended_order
                     ),
                     "movement_count": product_stats["movement_count"],
-                    "suggested_reorder_point": self._report_decimal(
-                        self._xyz_suggested_reorder_point(xyz_class, product_stats["quantity"], analysis_days)
-                    ),
                 }
             )
         return {
@@ -4286,29 +2803,6 @@ class WarehouseService:
             "generated_at": generated_at.isoformat(),
         }
 
-
-    def apply_xyz_reorder_suggestions(
-        self, analysis_days=90, warehouse_id=None, actor_id="system"
-    ):
-        """Update product reorder_points based on XYZ-analysis suggestions."""
-        analysis = self.abc_xyz_analysis(analysis_days=analysis_days, warehouse_id=warehouse_id)
-        updated = []
-        with self.database.transaction() as connection:
-            for item in analysis["items"]:
-                suggested = Decimal(str(item["suggested_reorder_point"] or 0))
-                current = Decimal(str(item["reorder_point"] or 0))
-                if suggested <= 0 or suggested == current:
-                    continue
-                connection.execute(
-                    "UPDATE products SET reorder_point = ? WHERE id = ?",
-                    (decimal_to_db(suggested), item["product_id"]),
-                )
-                self._audit(
-                    connection, actor_id, AuditAction.UPDATE, "product", item["product_id"],
-                    {"reorder_point": {"from": str(current), "to": str(suggested), "source": "xyz_suggestion"}},
-                )
-                updated.append({"product_id": item["product_id"], "product_name": item["product_name"], "old_reorder_point": str(current), "new_reorder_point": str(suggested), "xyz_class": item["xyz_class"]})
-        return {"updated": len(updated), "items": updated}
     def save_abc_xyz_analysis_snapshot(
         self,
         analysis_days: int = 90,
@@ -4493,16 +2987,6 @@ class WarehouseService:
         if coefficient <= Decimal("1.00"):
             return "Y"
         return "Z"
-
-    def _xyz_suggested_reorder_point(
-        self, xyz_class: str, total_consumption: Decimal, analysis_days: int
-    ) -> Decimal:
-        """Suggest reorder point based on XYZ class: X=7d, Y=14d, Z=21d buffer."""
-        if analysis_days <= 0 or total_consumption <= 0:
-            return Decimal("0")
-        daily = total_consumption / Decimal(str(analysis_days))
-        buffer_days = {"X": 7, "Y": 14, "Z": 21}.get(xyz_class, 14)
-        return (daily * Decimal(str(buffer_days))).quantize(Decimal("0.001"))
 
     def _abc_xyz_recommendation(
         self, abc_class: str, xyz_class: str, recommended_order: Decimal
@@ -4890,8 +3374,329 @@ class WarehouseService:
                 {"before": before, "after": updated},
                 warehouse_id=updated["warehouse_id"],
             )
-            if data.status == "ordered":
-                self._fire_accounting_webhook(updated)
+            return updated
+
+    def get_active_supplier_ids_for_actor(self, actor_id: str) -> list[int]:
+        connection = self.database.connect()
+        try:
+            return self._active_supplier_ids_for_actor(connection, actor_id)
+        finally:
+            self._close_connection(connection)
+
+    def list_supplier_purchase_requests(
+        self,
+        actor_id: str,
+        status: str | None = "draft",
+        limit: int = 100,
+        offset: int = 0,
+    ) -> list[dict[str, Any]]:
+        safe_limit = max(1, min(limit, 500))
+        safe_offset = max(0, offset)
+        connection = self.database.connect()
+        try:
+            supplier_ids = self._require_active_supplier_ids(connection, actor_id)
+            params: tuple[Any, ...] = tuple(supplier_ids)
+            supplier_placeholders = ", ".join("?" for _ in supplier_ids)
+            status_filter = ""
+            if status is not None:
+                status_filter = " AND pr.status = ?"
+                params = (*params, status)
+            rows = connection.execute(
+                f"""
+                SELECT
+                  pr.*,
+                  p.name AS product_name,
+                  p.sku,
+                  so.id AS offer_id,
+                  so.status AS offer_status,
+                  so.unit_price AS offer_unit_price,
+                  so.quantity AS offer_quantity,
+                  so.delivery_date AS offer_delivery_date,
+                  so.expires_at AS offer_expires_at,
+                  so.comment AS offer_comment
+                FROM purchase_requests pr
+                JOIN products p ON p.id = pr.product_id
+                LEFT JOIN supplier_offers so
+                  ON so.purchase_request_id = pr.id
+                 AND so.supplier_id IN ({supplier_placeholders})
+                 AND so.status IN ('submitted', 'accepted', 'rejected', 'withdrawn')
+                WHERE 1 = 1
+                  {status_filter}
+                ORDER BY pr.created_at DESC, pr.id DESC
+                LIMIT ? OFFSET ?
+                """,
+                (*params, safe_limit, safe_offset),
+            ).fetchall()
+            return [dict(row) for row in rows]
+        finally:
+            self._close_connection(connection)
+
+    def create_supplier_offer(
+        self,
+        request_id: int,
+        data: SupplierOfferCreate,
+        actor_id: str,
+        supplier_id: int | None = None,
+    ) -> dict[str, Any]:
+        if data.purchase_request_id != request_id:
+            raise ValidationError("Offer request id must match path request id")
+        with self.database.transaction() as connection:
+            resolved_supplier_id = self._require_supplier_membership(connection, actor_id, supplier_id)
+            request = self._get_purchase_request(connection, request_id)
+            if request["status"] != "draft":
+                raise ValidationError("Offers can only be submitted for draft purchase requests")
+            existing = connection.execute(
+                """
+                SELECT id FROM supplier_offers
+                WHERE purchase_request_id = ?
+                  AND supplier_id = ?
+                  AND status IN ('submitted', 'accepted')
+                """,
+                (request_id, resolved_supplier_id),
+            ).fetchone()
+            if existing:
+                raise ValidationError("Supplier already has an active offer for this request")
+            now = now_iso()
+            try:
+                offer_id = insert_and_get_id(
+                    connection,
+                    """
+                    INSERT INTO supplier_offers(
+                      purchase_request_id, supplier_id, actor_id, status,
+                      unit_price, quantity, delivery_date, expires_at, comment,
+                      reviewed_by, reviewed_at, review_reason, created_at, updated_at
+                    ) VALUES (?, ?, ?, 'submitted', ?, ?, ?, ?, ?, NULL, NULL, NULL, ?, ?)
+                    """,
+                    (
+                        request_id,
+                        resolved_supplier_id,
+                        actor_id,
+                        decimal_to_db(data.unit_price),
+                        decimal_to_db(data.quantity),
+                        data.delivery_date.isoformat() if data.delivery_date else None,
+                        data.expires_at.isoformat() if data.expires_at else None,
+                        data.comment,
+                        now,
+                        now,
+                    ),
+                )
+            except IntegrityError as error:
+                raise ValidationError("Supplier already has an active offer for this request") from error
+            offer = self._get_supplier_offer(connection, offer_id)
+            self._audit(
+                connection,
+                actor_id,
+                AuditAction.CREATE,
+                "supplier_offer",
+                offer_id,
+                offer,
+                warehouse_id=offer["warehouse_id"],
+            )
+            return offer
+
+    def list_supplier_offers(
+        self,
+        actor_id: str,
+        status: str | None = None,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> list[dict[str, Any]]:
+        safe_limit = max(1, min(limit, 500))
+        safe_offset = max(0, offset)
+        connection = self.database.connect()
+        try:
+            supplier_ids = self._require_active_supplier_ids(connection, actor_id)
+            params: tuple[Any, ...] = tuple(supplier_ids)
+            filters = [f"so.supplier_id IN ({', '.join('?' for _ in supplier_ids)})"]
+            if status is not None:
+                filters.append("so.status = ?")
+                params = (*params, status)
+            rows = connection.execute(
+                f"""
+                {self._supplier_offer_select_sql()}
+                WHERE {" AND ".join(filters)}
+                ORDER BY so.updated_at DESC, so.id DESC
+                LIMIT ? OFFSET ?
+                """,
+                (*params, safe_limit, safe_offset),
+            ).fetchall()
+            return [dict(row) for row in rows]
+        finally:
+            self._close_connection(connection)
+
+    def withdraw_supplier_offer(
+        self, offer_id: int, actor_id: str, reason: str | None = None
+    ) -> dict[str, Any]:
+        with self.database.transaction() as connection:
+            offer = self._get_supplier_offer(connection, offer_id)
+            self._require_supplier_membership(connection, actor_id, offer["supplier_id"])
+            if offer["status"] != "submitted":
+                raise ValidationError("Only submitted offers can be withdrawn")
+            now = now_iso()
+            connection.execute(
+                """
+                UPDATE supplier_offers
+                SET status = 'withdrawn',
+                    review_reason = ?,
+                    updated_at = ?
+                WHERE id = ?
+                """,
+                (reason, now, offer_id),
+            )
+            updated = self._get_supplier_offer(connection, offer_id)
+            self._audit(
+                connection,
+                actor_id,
+                AuditAction.UPDATE,
+                "supplier_offer",
+                offer_id,
+                {"before": offer, "after": updated},
+                warehouse_id=updated["warehouse_id"],
+            )
+            return updated
+
+    def list_purchase_request_offers(
+        self,
+        request_id: int,
+        status: str | None = None,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> list[dict[str, Any]]:
+        safe_limit = max(1, min(limit, 500))
+        safe_offset = max(0, offset)
+        connection = self.database.connect()
+        try:
+            self._get_purchase_request(connection, request_id)
+            params: tuple[Any, ...] = (request_id,)
+            filters = ["so.purchase_request_id = ?"]
+            if status is not None:
+                filters.append("so.status = ?")
+                params = (*params, status)
+            rows = connection.execute(
+                f"""
+                {self._supplier_offer_select_sql()}
+                WHERE {" AND ".join(filters)}
+                ORDER BY so.unit_price ASC, so.created_at ASC, so.id ASC
+                LIMIT ? OFFSET ?
+                """,
+                (*params, safe_limit, safe_offset),
+            ).fetchall()
+            return [dict(row) for row in rows]
+        finally:
+            self._close_connection(connection)
+
+    def list_supplier_offers_for_admin(
+        self,
+        warehouse_id: int | None = None,
+        status: str | None = None,
+        supplier_id: int | None = None,
+        product_id: int | None = None,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> list[dict[str, Any]]:
+        safe_limit = max(1, min(limit, 500))
+        safe_offset = max(0, offset)
+        params: tuple[Any, ...] = ()
+        filters: list[str] = []
+        if warehouse_id is not None:
+            filters.append("pr.warehouse_id = ?")
+            params = (*params, warehouse_id)
+        if status is not None:
+            filters.append("so.status = ?")
+            params = (*params, status)
+        if supplier_id is not None:
+            filters.append("so.supplier_id = ?")
+            params = (*params, supplier_id)
+        if product_id is not None:
+            filters.append("pr.product_id = ?")
+            params = (*params, product_id)
+        where = f"WHERE {' AND '.join(filters)}" if filters else ""
+        connection = self.database.connect()
+        try:
+            rows = connection.execute(
+                f"""
+                {self._supplier_offer_select_sql()}
+                {where}
+                ORDER BY so.updated_at DESC, so.id DESC
+                LIMIT ? OFFSET ?
+                """,
+                (*params, safe_limit, safe_offset),
+            ).fetchall()
+            return [dict(row) for row in rows]
+        finally:
+            self._close_connection(connection)
+
+    def get_supplier_offer(self, offer_id: int) -> dict[str, Any]:
+        connection = self.database.connect()
+        try:
+            return self._get_supplier_offer(connection, offer_id)
+        finally:
+            self._close_connection(connection)
+
+    def review_supplier_offer(
+        self, offer_id: int, data: SupplierOfferReview, reviewer_id: str
+    ) -> dict[str, Any]:
+        with self.database.transaction() as connection:
+            offer = self._get_supplier_offer(connection, offer_id)
+            if offer["status"] != "submitted":
+                raise ValidationError("Only submitted offers can be reviewed")
+            now = now_iso()
+            if data.status == "accepted":
+                connection.execute(
+                    """
+                    UPDATE supplier_offers
+                    SET status = 'rejected',
+                        reviewed_by = ?,
+                        reviewed_at = ?,
+                        review_reason = COALESCE(review_reason, 'Выбрано другое предложение'),
+                        updated_at = ?
+                    WHERE purchase_request_id = ?
+                      AND id <> ?
+                      AND status = 'submitted'
+                    """,
+                    (reviewer_id, now, now, offer["purchase_request_id"], offer_id),
+                )
+                connection.execute(
+                    """
+                    UPDATE purchase_requests
+                    SET status = 'ordered'
+                    WHERE id = ?
+                      AND status = 'draft'
+                    """,
+                    (offer["purchase_request_id"],),
+                )
+            connection.execute(
+                """
+                UPDATE supplier_offers
+                SET status = ?,
+                    reviewed_by = ?,
+                    reviewed_at = ?,
+                    review_reason = ?,
+                    updated_at = ?
+                WHERE id = ?
+                """,
+                (data.status, reviewer_id, now, data.reason, now, offer_id),
+            )
+            updated = self._get_supplier_offer(connection, offer_id)
+            self._audit(
+                connection,
+                reviewer_id,
+                AuditAction.UPDATE,
+                "supplier_offer",
+                offer_id,
+                {"before": offer, "after": updated},
+                warehouse_id=updated["warehouse_id"],
+            )
+            if data.status == "accepted":
+                self._audit(
+                    connection,
+                    reviewer_id,
+                    AuditAction.UPDATE,
+                    "purchase_request",
+                    offer["purchase_request_id"],
+                    {"accepted_offer_id": offer_id, "supplier_id": offer["supplier_id"]},
+                    warehouse_id=updated["warehouse_id"],
+                )
             return updated
 
     def list_batches(
@@ -5652,110 +4457,6 @@ class WarehouseService:
                 notifications.append(self._get_by_id(connection, "notifications", notification_id))
             return notifications
 
-
-
-    def list_controlled_limits(self, warehouse_id):
-        connection = self.database.connect()
-        try:
-            rows = connection.execute(
-                "SELECT cl.*, p.name AS product_name, p.sku FROM controlled_substance_limits cl JOIN products p ON p.id = cl.product_id WHERE cl.warehouse_id = ? ORDER BY p.name",
-                (warehouse_id,),
-            ).fetchall()
-            return [dict(r) for r in rows]
-        finally:
-            self._close_connection(connection)
-
-    def upsert_controlled_limit(self, warehouse_id, product_id, max_quantity, unit=None):
-        with self.database.transaction() as connection:
-            self._require(connection, "warehouses", warehouse_id)
-            self._require(connection, "products", product_id)
-            existing = connection.execute(
-                "SELECT id FROM controlled_substance_limits WHERE warehouse_id = ? AND product_id = ?",
-                (warehouse_id, product_id),
-            ).fetchone()
-            if existing:
-                connection.execute(
-                    "UPDATE controlled_substance_limits SET max_quantity = ?, unit = ?, updated_at = ? WHERE id = ?",
-                    (decimal_to_db(Decimal(str(max_quantity))), unit, now_iso(), existing["id"]),
-                )
-                return self._get_by_id(connection, "controlled_substance_limits", existing["id"])
-            else:
-                new_id = insert_and_get_id(
-                    connection,
-                    "INSERT INTO controlled_substance_limits(warehouse_id, product_id, max_quantity, unit, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
-                    (warehouse_id, product_id, decimal_to_db(Decimal(str(max_quantity))), unit, now_iso(), now_iso()),
-                )
-                return self._get_by_id(connection, "controlled_substance_limits", new_id)
-
-    def delete_controlled_limit(self, limit_id):
-        with self.database.transaction() as connection:
-            self._require(connection, "controlled_substance_limits", limit_id)
-            connection.execute("DELETE FROM controlled_substance_limits WHERE id = ?", (limit_id,))
-
-    def check_controlled_limit_violations(self, warehouse_id):
-        connection = self.database.connect()
-        try:
-            rows = connection.execute(
-                """
-                SELECT cl.product_id, cl.max_quantity, cl.unit, p.name AS product_name,
-                       COALESCE(SUM(CAST(sb.quantity AS REAL)), 0) AS current_quantity
-                FROM controlled_substance_limits cl
-                JOIN products p ON p.id = cl.product_id
-                LEFT JOIN batches b ON b.product_id = cl.product_id
-                LEFT JOIN stock_balances sb ON sb.batch_id = b.id AND sb.warehouse_id = cl.warehouse_id
-                WHERE cl.warehouse_id = ?
-                GROUP BY cl.product_id, cl.max_quantity, cl.unit, p.name
-                HAVING COALESCE(SUM(CAST(sb.quantity AS REAL)), 0) > CAST(cl.max_quantity AS REAL)
-                """,
-                (warehouse_id,),
-            ).fetchall()
-            return [dict(r) for r in rows]
-        finally:
-            self._close_connection(connection)
-    def generate_controlled_inventory_reminder(
-        self, warehouse_id=None
-    ):
-        """Create monthly ПКУ inventory reminder notifications."""
-        with self.database.transaction() as connection:
-            params = ()
-            wf = ""
-            if warehouse_id is not None:
-                self._require(connection, "warehouses", warehouse_id)
-                wf = " AND sb.warehouse_id = ?"
-                params = (warehouse_id,)
-            rows = connection.execute(
-                f"""
-                SELECT DISTINCT p.id AS product_id, p.name AS product_name, sb.warehouse_id
-                FROM products p
-                JOIN batches b ON b.product_id = p.id
-                JOIN stock_balances sb ON sb.batch_id = b.id
-                WHERE p.is_controlled = 1
-                  AND CAST(sb.quantity AS REAL) > 0
-                  {wf}
-                ORDER BY p.name, sb.warehouse_id
-                """,
-                params,
-            ).fetchall()
-            notif_type = "low_stock"
-            notifications = []
-            for row in rows:
-                existing = connection.execute(
-                    "SELECT id FROM notifications WHERE notification_type = ? AND product_id = ? AND warehouse_id = ? AND title LIKE ? AND is_read = 0",
-                    (notif_type, row["product_id"], row["warehouse_id"], "% ПКУ %"),
-                ).fetchone()
-                if existing:
-                    notifications.append(self._get_by_id(connection, "notifications", existing["id"]))
-                    continue
-                notif_id = insert_and_get_id(
-                    connection,
-                    "INSERT INTO notifications(notification_type, warehouse_id, product_id, title, message, is_read, created_at) VALUES (?, ?, ?, ?, ?, 0, ?)",
-                    (notif_type, row["warehouse_id"], row["product_id"],
-                     f"Плановая ПКУ инвентаризация: {row[product_name]}",
-                     f"Требуется провести ежемесячную инвентаризацию ПКУ по товару {row[product_name]}.",
-                     now_iso()),
-                )
-                notifications.append(self._get_by_id(connection, "notifications", notif_id))
-            return notifications
     def generate_quarantine_notifications(
         self, days: int = 3, warehouse_id: int | None = None
     ) -> list[dict[str, Any]]:
@@ -5829,126 +4530,6 @@ class WarehouseService:
                         message,
                         now_iso(),
                     ),
-                )
-                notifications.append(self._get_by_id(connection, "notifications", notification_id))
-            return notifications
-
-    def generate_quarantine_review_overdue_notifications(
-        self, days: int = 7
-    ) -> list[dict[str, Any]]:
-        """Notify when a quarantine review has been stuck in in_review for more than `days` days."""
-        if days < 1:
-            raise ValidationError("Overdue days must be at least 1")
-        cutoff = (datetime.now(UTC) - timedelta(days=days)).isoformat()
-        with self.database.transaction() as connection:
-            rows = connection.execute(
-                """
-                SELECT
-                  qr.id AS review_id,
-                  qr.batch_id,
-                  p.name AS product_name,
-                  qr.responsible_id,
-                  qr.updated_at AS started_at,
-                  b.lot,
-                  qr.warehouse_id
-                FROM quarantine_reviews qr
-                JOIN batches b ON b.id = qr.batch_id
-                JOIN products p ON p.id = b.product_id
-                WHERE qr.status = 'in_review'
-                  AND qr.updated_at <= ?
-                ORDER BY qr.updated_at, qr.id
-                """,
-                (cutoff,),
-            ).fetchall()
-            notifications: list[dict[str, Any]] = []
-            for row in rows:
-                existing = connection.execute(
-                    """
-                    SELECT id FROM notifications
-                    WHERE notification_type = 'quarantine'
-                      AND batch_id = ?
-                      AND is_read = 0
-                      AND title LIKE '%проверка%просрочена%'
-                    """,
-                    (row["batch_id"],),
-                ).fetchone()
-                if existing:
-                    notifications.append(self._get_by_id(connection, "notifications", existing["id"]))
-                    continue
-                started = self._datetime_from_db(row["started_at"])
-                age = max(0, (datetime.now(UTC) - started).days)
-                title = f"Карантинная проверка просрочена: {row['product_name']}"
-                message = (
-                    f"Проверка #{row['review_id']} по партии {row['lot']} находится в статусе"
-                    f" «На проверке» уже {age} дн. Ответственный: {row['responsible_id'] or '—'}."
-                )
-                wh = row["warehouse_id"] or 0
-                notification_id = insert_and_get_id(
-                    connection,
-                    """
-                    INSERT INTO notifications(
-                      notification_type, batch_id, warehouse_id, title, message, created_at
-                    ) VALUES ('quarantine', ?, ?, ?, ?, ?)
-                    """,
-                    (row["batch_id"], wh, title, message, now_iso()),
-                )
-                notifications.append(self._get_by_id(connection, "notifications", notification_id))
-            return notifications
-
-
-    def generate_supplier_contract_expiry_notifications(
-        self, days: int = 30
-    ) -> "list[dict[str, Any]]":
-        """Notify when a supplier contract expires within the next `days` days."""
-        if days < 0:
-            raise ValidationError("Expiry window cannot be negative")
-        today = datetime.now(UTC).date()
-        cutoff = (today + timedelta(days=days)).isoformat()
-        today_str = today.isoformat()
-        with self.database.transaction() as connection:
-            rows = connection.execute(
-                """
-                SELECT id, name, contract_expires_on
-                FROM suppliers
-                WHERE contract_expires_on IS NOT NULL
-                  AND contract_expires_on >= ?
-                  AND contract_expires_on <= ?
-                ORDER BY contract_expires_on, id
-                """,
-                (today_str, cutoff),
-            ).fetchall()
-            notifications: list[dict[str, Any]] = []
-            for row in rows:
-                existing = connection.execute(
-                    """
-                    SELECT id FROM notifications
-                    WHERE notification_type = 'supplier_contract_expiry'
-                      AND title LIKE ?
-                      AND is_read = 0
-                    """,
-                    (f"%{row['name']}%",),
-                ).fetchone()
-                if existing:
-                    notifications.append(self._get_by_id(connection, "notifications", existing["id"]))
-                    continue
-                expires = row["contract_expires_on"]
-                try:
-                    from datetime import date as _date
-                    exp_date = _date.fromisoformat(str(expires))
-                    days_left = max(0, (exp_date - today).days)
-                except Exception:
-                    days_left = days
-                title = f"Истекает договор поставщика: {row['name']}"
-                message = (
-                    f"Договор с поставщиком «{row['name']}» истекает {expires} "
-                    f"(через {days_left} дн.). Свяжитесь с поставщиком для продления."
-                )
-                notification_id = insert_and_get_id(
-                    connection,
-                    """INSERT INTO notifications(
-                      notification_type, title, message, created_at
-                    ) VALUES ('supplier_contract_expiry', ?, ?, ?)""",
-                    (title, message, now_iso()),
                 )
                 notifications.append(self._get_by_id(connection, "notifications", notification_id))
             return notifications
@@ -6060,51 +4641,6 @@ class WarehouseService:
         if row is None:
             raise RuntimeError("Sensor warning notification conflict was not recoverable")
         return int(row["id"])
-
-    def get_stats_summary(self) -> "dict[str, Any]":
-        connection = self.database.connect()
-        try:
-            def scalar(sql: str, default: int = 0) -> int:
-                try:
-                    row = connection.execute(sql).fetchone()
-                except Exception:
-                    return default
-                if row is None:
-                    return default
-                row_dict = dict(row) if hasattr(row, "keys") else {}
-                val = list(row_dict.values())[0] if row_dict else (row[0] if row else default)
-                try:
-                    return int(float(val or 0))
-                except (TypeError, ValueError):
-                    return default
-
-            return {
-                "products": scalar("SELECT COUNT(*) FROM products WHERE is_active = 1"),
-                "batches": scalar("SELECT COUNT(*) FROM batches"),
-                "batches_available": scalar("SELECT COUNT(*) FROM batches WHERE status = 'available'"),
-                "batches_quarantine": scalar("SELECT COUNT(*) FROM batches WHERE status = 'quarantine'"),
-                "warehouses": scalar("SELECT COUNT(*) FROM warehouses"),
-                "total_free_quantity": scalar("SELECT COALESCE(SUM(CAST(quantity AS REAL) - CAST(reserved_quantity AS REAL)), 0) FROM stock_balances"),
-                "unread_notifications": scalar("SELECT COUNT(*) FROM notifications WHERE is_read = 0"),
-                "pending_writeoffs": scalar("SELECT COUNT(*) FROM pending_controlled_writeoffs WHERE status = 'pending'"),
-                "active_inventory_sessions": scalar("SELECT COUNT(*) FROM inventory_sessions WHERE status = 'in_progress'"),
-            }
-        finally:
-            self._close_connection(connection)
-
-    def create_grafana_alert_notification(
-        self,
-        title: str,
-        message: str,
-        severity: str = "warning",
-    ) -> "dict[str, Any]":
-        with self.database.transaction() as connection:
-            notification_id = insert_and_get_id(
-                connection,
-                "INSERT INTO notifications(notification_type, title, message, created_at) VALUES ('grafana_alert', ?, ?, ?)",
-                (title[:255], message[:1000], now_iso()),
-            )
-            return self._get_by_id(connection, "notifications", notification_id)
 
     def list_notifications(
         self,
@@ -6252,29 +4788,7 @@ class WarehouseService:
         warehouse_id: int,
         actor_id: str,
         supplier_id: int | None = None,
-        external_ref: str | None = None,
-        notes: str | None = None,
     ) -> int:
-        if external_ref is not None or notes is not None:
-            return insert_and_get_id(
-                connection,
-                """
-                INSERT INTO stock_documents(
-                  document_type, status, warehouse_id, supplier_id, created_by, created_at,
-                  external_ref, notes
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    document_type,
-                    StockDocumentStatus.DRAFT,
-                    warehouse_id,
-                    supplier_id,
-                    actor_id,
-                    now_iso(),
-                    external_ref,
-                    notes,
-                ),
-            )
         return insert_and_get_id(
             connection,
             """
@@ -6291,305 +4805,6 @@ class WarehouseService:
                 now_iso(),
             ),
         )
-
-
-    # ── ПКУ pending (двойная подпись) ──────────────────────────────────────────
-
-    def create_pending_controlled_writeoff(
-        self,
-        batch_id: int,
-        warehouse_id: int,
-        quantity: "Decimal",
-        reason: str | None,
-        patient_id: str,
-        doctor_id: str,
-        medical_record_no: str,
-        requested_by: str,
-    ) -> dict:
-        """
-        Шаг 1: врач/медсестра подаёт заявку на списание ПКУ.
-        Фактического движения нет — ждёт подтверждения second_approver.
-        """
-        with self.database.transaction() as connection:
-            self._ensure_batch_available(connection, batch_id)
-            # Validate it's a controlled product
-            self._require_controlled_writeoff_metadata(
-                connection,
-                batch_id=batch_id,
-                patient_id=patient_id,
-                doctor_id=doctor_id,
-                medical_record_no=medical_record_no,
-                second_approver_id="__pending__",  # bypass: will be filled on confirm
-            )
-            balance = self._balance_for_update(connection, batch_id, warehouse_id)
-            free = Decimal(str(balance["quantity"])) - Decimal(str(balance["reserved_quantity"]))
-            if free < quantity:
-                raise InsufficientStockError("Insufficient free stock for controlled write-off")
-
-            # Reserve the quantity while pending
-            connection.execute(
-                """
-                UPDATE stock_balances
-                SET reserved_quantity = reserved_quantity + ?
-                WHERE batch_id = ? AND warehouse_id = ?
-                """,
-                (decimal_to_db(quantity), batch_id, warehouse_id),
-            )
-
-            row_id = insert_and_get_id(
-                connection,
-                """
-                INSERT INTO pending_controlled_writeoffs(
-                    batch_id, warehouse_id, quantity, reason,
-                    patient_id, doctor_id, medical_record_no,
-                    requested_by, requested_at, status
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')
-                """,
-                (
-                    batch_id,
-                    warehouse_id,
-                    decimal_to_db(quantity),
-                    reason,
-                    patient_id,
-                    doctor_id,
-                    medical_record_no,
-                    requested_by,
-                    now_iso(),
-                ),
-            )
-            self._audit(
-                connection,
-                requested_by,
-                AuditAction.UPDATE,
-                "batch",
-                batch_id,
-                {
-                    "action": "pending_controlled_writeoff_created",
-                    "pending_id": row_id,
-                    "quantity": str(quantity),
-                    "patient_id": patient_id,
-                    "doctor_id": doctor_id,
-                    "medical_record_no": medical_record_no,
-                },
-                warehouse_id=warehouse_id,
-            )
-            # Notify warehouse managers that a new ПКУ request needs approval
-            try:
-                batch_row = connection.execute(
-                    "SELECT b.id, p.name AS product_name FROM batches b JOIN products p ON p.id = b.product_id WHERE b.id = ?",
-                    (batch_id,),
-                ).fetchone()
-                pname = batch_row["product_name"] if batch_row else f"партия #{batch_id}"
-                insert_and_get_id(
-                    connection,
-                    """
-                    INSERT INTO notifications(
-                        notification_type, product_id, batch_id, warehouse_id,
-                        title, message, is_read, created_at
-                    ) VALUES ('pku_pending', ?, ?, ?, ?, ?, 0, ?)
-                    """,
-                    (
-                        batch_row["id"] if batch_row else batch_id,
-                        batch_id,
-                        warehouse_id,
-                        f"Заявка на списание ПКУ: {pname}",
-                        f"Пациент: {patient_id} | Врач: {doctor_id} | ИБ: {medical_record_no} | Запросил: {requested_by} | Кол-во: {quantity}. Требуется подтверждение второго подписанта.",
-                        now_iso(),
-                    ),
-                )
-            except Exception:
-                pass  # notification failure must not break the writeoff workflow
-        return self.get_pending_controlled_writeoff(row_id)
-
-    def confirm_pending_controlled_writeoff(
-        self,
-        pending_id: int,
-        second_approver_id: str,
-        note: str | None,
-        actor_id: str,
-    ) -> dict:
-        """
-        Шаг 2: второй подписант (старшая медсестра) подтверждает заявку.
-        Выполняет фактическое движение.
-        """
-        with self.database.transaction() as connection:
-            pending = self._get_pending_writeoff(connection, pending_id)
-            if pending["status"] != "pending":
-                raise ValidationError(f"Cannot confirm writeoff in status '{pending['status']}'")
-            if second_approver_id.strip() == pending["doctor_id"].strip():
-                raise ValidationError("Second approver must be different from the doctor")
-            if second_approver_id.strip() == pending["requested_by"].strip():
-                raise ValidationError("Second approver must be different from the requester")
-
-            quantity = Decimal(str(pending["quantity"]))
-            batch_id = pending["batch_id"]
-            warehouse_id = pending["warehouse_id"]
-
-            # Release the reservation
-            connection.execute(
-                """
-                UPDATE stock_balances
-                SET reserved_quantity = GREATEST(0, reserved_quantity - ?)
-                WHERE batch_id = ? AND warehouse_id = ?
-                """,
-                (decimal_to_db(quantity), batch_id, warehouse_id),
-            )
-
-            # Perform the actual write-off
-            movement_id = self._apply_writeoff_line(
-                connection,
-                batch_id=batch_id,
-                warehouse_id=warehouse_id,
-                quantity=quantity,
-                reason=pending.get("reason"),
-                patient_id=pending["patient_id"],
-                doctor_id=pending["doctor_id"],
-                medical_record_no=pending["medical_record_no"],
-                second_approver_id=second_approver_id,
-                second_approval_note=note,
-            )
-
-            connection.execute(
-                """
-                UPDATE pending_controlled_writeoffs
-                SET status = 'confirmed',
-                    second_approver_id = ?,
-                    second_approval_note = ?,
-                    second_approved_at = ?,
-                    writeoff_movement_id = ?
-                WHERE id = ?
-                """,
-                (second_approver_id, note, now_iso(), movement_id, pending_id),
-            )
-            self._audit(
-                connection,
-                actor_id,
-                AuditAction.WRITE_OFF,
-                "batch",
-                batch_id,
-                {
-                    "action": "pending_controlled_writeoff_confirmed",
-                    "pending_id": pending_id,
-                    "second_approver_id": second_approver_id,
-                    "movement_id": movement_id,
-                },
-                warehouse_id=warehouse_id,
-            )
-            # Auto-create reorder if needed
-            self._check_and_create_reorder_requests(connection, warehouse_id, [int(batch_id)])
-        return self.get_pending_controlled_writeoff(pending_id)
-
-    def reject_pending_controlled_writeoff(
-        self,
-        pending_id: int,
-        rejected_reason: str,
-        actor_id: str,
-    ) -> dict:
-        """Второй подписант отклоняет заявку — снимает резерв."""
-        with self.database.transaction() as connection:
-            pending = self._get_pending_writeoff(connection, pending_id)
-            if pending["status"] != "pending":
-                raise ValidationError(f"Cannot reject writeoff in status '{pending['status']}'")
-
-            quantity = Decimal(str(pending["quantity"]))
-
-            # Release reservation
-            connection.execute(
-                """
-                UPDATE stock_balances
-                SET reserved_quantity = GREATEST(0, reserved_quantity - ?)
-                WHERE batch_id = ? AND warehouse_id = ?
-                """,
-                (decimal_to_db(quantity), pending["batch_id"], pending["warehouse_id"]),
-            )
-            connection.execute(
-                """
-                UPDATE pending_controlled_writeoffs
-                SET status = 'rejected', rejected_reason = ?
-                WHERE id = ?
-                """,
-                (rejected_reason, pending_id),
-            )
-            self._audit(
-                connection,
-                actor_id,
-                AuditAction.UPDATE,
-                "batch",
-                pending["batch_id"],
-                {"action": "pending_controlled_writeoff_rejected", "pending_id": pending_id, "reason": rejected_reason},
-                warehouse_id=pending["warehouse_id"],
-            )
-        return self.get_pending_controlled_writeoff(pending_id)
-
-    def list_pending_controlled_writeoffs(
-        self,
-        warehouse_id: int | None = None,
-        status: str | None = None,
-        limit: int = 50,
-        offset: int = 0,
-    ) -> list[dict]:
-        connection = self.database.connect()
-        try:
-            wheres = []
-            params: list = []
-            if warehouse_id is not None:
-                wheres.append("p.warehouse_id = ?")
-                params.append(warehouse_id)
-            if status:
-                wheres.append("p.status = ?")
-                params.append(status)
-            where_sql = ("WHERE " + " AND ".join(wheres)) if wheres else ""
-            rows = connection.execute(
-                f"""
-                SELECT p.*,
-                       pr.name AS product_name, pr.sku,
-                       b.lot, b.unit_price,
-                       w.name AS warehouse_name
-                FROM pending_controlled_writeoffs p
-                JOIN batches b ON b.id = p.batch_id
-                JOIN products pr ON pr.id = b.product_id
-                JOIN warehouses w ON w.id = p.warehouse_id
-                {where_sql}
-                ORDER BY p.requested_at DESC
-                LIMIT ? OFFSET ?
-                """,
-                params + [limit, offset],
-            ).fetchall()
-            return [dict(r) for r in rows]
-        finally:
-            self._close_connection(connection)
-
-    def get_pending_controlled_writeoff(self, pending_id: int) -> dict:
-        connection = self.database.connect()
-        try:
-            row = connection.execute(
-                """
-                SELECT p.*,
-                       pr.name AS product_name, pr.sku,
-                       b.lot, b.unit_price,
-                       w.name AS warehouse_name
-                FROM pending_controlled_writeoffs p
-                JOIN batches b ON b.id = p.batch_id
-                JOIN products pr ON pr.id = b.product_id
-                JOIN warehouses w ON w.id = p.warehouse_id
-                WHERE p.id = ?
-                """,
-                (pending_id,),
-            ).fetchone()
-            if row is None:
-                raise NotFoundError(f"pending_controlled_writeoff#{pending_id} not found")
-            return dict(row)
-        finally:
-            self._close_connection(connection)
-
-    def _get_pending_writeoff(self, connection: "Connection", pending_id: int) -> "Row":
-        row = connection.execute(
-            "SELECT * FROM pending_controlled_writeoffs WHERE id = ?",
-            (pending_id,),
-        ).fetchone()
-        if row is None:
-            raise NotFoundError(f"pending_controlled_writeoff#{pending_id} not found")
-        return row
 
     def _apply_receipt_line(
         self,
@@ -6644,23 +4859,6 @@ class WarehouseService:
             unit_price=unit_price,
             source="receipt",
         )
-        # Auto-flag product label for reprint when price differs from last receipt
-        last_price_row = connection.execute(
-            """
-            SELECT unit_price FROM batches
-            WHERE product_id = ? AND id != ?
-            ORDER BY id DESC LIMIT 1
-            """,
-            (product_id, batch_id),
-        ).fetchone()
-        if last_price_row is not None:
-            last_price = Decimal(str(last_price_row["unit_price"]))
-            if last_price != unit_price:
-                connection.execute(
-                    "UPDATE products SET label_needs_reprint = 1 WHERE id = ?",
-                    (product_id,),
-                )
-
         if quarantine:
             self._ensure_quarantine_review(
                 connection,
@@ -7316,21 +5514,16 @@ class WarehouseService:
         payload: Any,
         warehouse_id: int | None = None,
     ) -> None:
-        from app.core.request_context import get_request_id, get_ip_address, get_user_agent
         if hasattr(payload, "model_dump"):
             payload = payload.model_dump(mode="json")
         payload = self._json_payload(payload)
         if warehouse_id is None:
             warehouse_id = self._audit_warehouse_id(payload)
-        request_id = get_request_id() or None
-        ip_address = get_ip_address() or None
-        user_agent = get_user_agent() or None
         connection.execute(
             """
             INSERT INTO audit_log(
-              actor_id, action, entity_type, entity_id, warehouse_id, payload, created_at,
-              request_id, ip_address, user_agent
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+              actor_id, action, entity_type, entity_id, warehouse_id, payload, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 actor_id,
@@ -7340,9 +5533,6 @@ class WarehouseService:
                 warehouse_id,
                 json.dumps(payload),
                 now_iso(),
-                request_id,
-                ip_address,
-                user_agent,
             ),
         )
 
@@ -7485,8 +5675,6 @@ class WarehouseService:
             "label_text": label_text,
             "zpl": self._product_label_zpl(product["name"], product["sku"], barcode, normalized_symbology),
             "epl": self._product_label_epl(product["name"], product["sku"], barcode, normalized_symbology),
-            "svg": self._generate_svg_barcode(barcode, normalized_symbology),
-            "label_needs_reprint": bool(product.get("label_needs_reprint", False)),
         }
 
     def _build_batch_price_label(
@@ -7537,7 +5725,6 @@ class WarehouseService:
             "epl": self._price_label_epl(
                 item["name"], item["sku"], item["lot"], item.get("serial_number"), item["expires_on"], unit_price, barcode, normalized_symbology
             ),
-            "svg": self._generate_svg_barcode(barcode, normalized_symbology),
         }
 
     def _record_supplier_price_history(
@@ -7566,204 +5753,6 @@ class WarehouseService:
                 now_iso(),
             ),
         )
-
-
-    def mark_product_reprinted(self, product_id: int) -> dict:
-        with self.database.transaction() as connection:
-            row = self._require(connection, "products", product_id)
-            connection.execute(
-                "UPDATE products SET label_needs_reprint = ? WHERE id = ?",
-                (False, product_id),
-            )
-            return dict(row)
-
-    def create_supplier_review(self, supplier_id: int, rating: int, comment: str | None, reviewer_id: str) -> dict:
-        if not 1 <= rating <= 5:
-            raise ValidationError("Rating must be between 1 and 5")
-        with self.database.transaction() as connection:
-            self._require(connection, "suppliers", supplier_id)
-            row = connection.execute(
-                """INSERT INTO supplier_reviews(supplier_id, rating, comment, reviewer_id, status, created_at)
-                   VALUES (?, ?, ?, ?, 'pending', ?)
-                   RETURNING *""",
-                (supplier_id, rating, comment, reviewer_id, now_iso()),
-            ).fetchone()
-            return dict(row)
-
-    def list_supplier_reviews(self, supplier_id: int, status: str | None = None) -> list[dict]:
-        connection = self.database.connect()
-        try:
-            q = "SELECT * FROM supplier_reviews WHERE supplier_id = ?"
-            params: list = [supplier_id]
-            if status:
-                q += " AND status = ?"
-                params.append(status)
-            q += " ORDER BY created_at DESC"
-            rows = connection.execute(q, params).fetchall()
-            return [dict(r) for r in rows]
-        finally:
-            self._close_connection(connection)
-
-    def moderate_supplier_review(self, review_id: int, action: str) -> dict:
-        if action not in ("approve", "reject"):
-            raise ValidationError("action must be approve or reject")
-        with self.database.transaction() as connection:
-            row = connection.execute(
-                "SELECT * FROM supplier_reviews WHERE id = ?", (review_id,)
-            ).fetchone()
-            if not row:
-                raise NotFoundError(f"supplier_reviews#{review_id} not found")
-            new_status = "approved" if action == "approve" else "rejected"
-            connection.execute(
-                "UPDATE supplier_reviews SET status = ? WHERE id = ?",
-                (new_status, review_id),
-            )
-            # Recompute average rating from approved reviews
-            if action == "approve":
-                avg_row = connection.execute(
-                    "SELECT ROUND(AVG(rating)) AS avg_rating FROM supplier_reviews WHERE supplier_id = ? AND status = 'approved'",
-                    (row["supplier_id"],),
-                ).fetchone()
-                if avg_row and avg_row["avg_rating"] is not None:
-                    new_rating = int(avg_row["avg_rating"])
-                    connection.execute(
-                        "UPDATE suppliers SET rating = ? WHERE id = ?",
-                        (new_rating, row["supplier_id"]),
-                    )
-            updated = connection.execute(
-                "SELECT * FROM supplier_reviews WHERE id = ?", (review_id,)
-            ).fetchone()
-            return dict(updated)
-
-    def reply_to_review(self, review_id: int, supplier_id: int, reply_text: str) -> dict:
-        if not reply_text or not reply_text.strip():
-            raise ValidationError("reply_text cannot be empty")
-        with self.database.transaction() as connection:
-            row = connection.execute(
-                "SELECT * FROM supplier_reviews WHERE id = ? AND supplier_id = ?",
-                (review_id, supplier_id),
-            ).fetchone()
-            if not row:
-                raise NotFoundError(f"supplier_reviews#{review_id} not found for this supplier")
-            if row["status"] != "approved":
-                raise ValidationError("Can only reply to approved reviews")
-            connection.execute(
-                "UPDATE supplier_reviews SET supplier_reply = ?, replied_at = ? WHERE id = ?",
-                (reply_text.strip(), now_iso(), review_id),
-            )
-            updated = connection.execute(
-                "SELECT * FROM supplier_reviews WHERE id = ?", (review_id,)
-            ).fetchone()
-            return dict(updated)
-
-    def list_supplier_orders(
-        self,
-        supplier_id: int,
-        status: str | None = None,
-        limit: int = 50,
-        offset: int = 0,
-    ) -> dict[str, Any]:
-        """Completed/ordered inquiries for supplier — their order history."""
-        connection = self.database.connect()
-        try:
-            where = ["mi.supplier_id = ?"]
-            params: list = [supplier_id]
-            if status:
-                where.append("mi.status = ?")
-                params.append(status)
-            else:
-                where.append("mi.status IN ('ordered', 'closed')")
-            where_clause = "WHERE " + " AND ".join(where)
-            total_row = connection.execute(
-                f"SELECT COUNT(*) AS n FROM marketplace_inquiries mi {where_clause}", params
-            ).fetchone()
-            rows = connection.execute(
-                f"""SELECT mi.*, ci.product_name, ci.sku, ci.unit,
-                           s.name AS supplier_name,
-                           w.name AS warehouse_name,
-                           COALESCE(mi.quantity * mi.unit_price, 0) AS total_amount
-                    FROM marketplace_inquiries mi
-                    JOIN supplier_catalog_items ci ON ci.id = mi.catalog_item_id
-                    JOIN suppliers s ON s.id = mi.supplier_id
-                    LEFT JOIN warehouses w ON w.id = mi.warehouse_id
-                    {where_clause}
-                    ORDER BY mi.created_at DESC
-                    LIMIT ? OFFSET ?""",
-                params + [limit, offset],
-            ).fetchall()
-            items = [dict(r) for r in rows]
-            return {"items": items, "total": total_row["n"] if total_row else 0}
-        finally:
-            self._close_connection(connection)
-
-    def bulk_update_catalog_prices(
-        self,
-        supplier_id: int,
-        item_ids: list[int] | None,
-        percent_change: float,
-    ) -> dict[str, Any]:
-        """Apply a percentage price change to selected (or all) catalog items."""
-        if not -99 < percent_change < 1000:
-            raise ValidationError("percent_change must be between -99 and 1000")
-        multiplier = 1 + percent_change / 100
-        with self.database.transaction() as connection:
-            if item_ids:
-                placeholders = ",".join("?" * len(item_ids))
-                connection.execute(
-                    f"""UPDATE supplier_catalog_items
-                        SET unit_price = ROUND(unit_price * ?, 2), updated_at = ?
-                        WHERE supplier_id = ? AND id IN ({placeholders})""",
-                    [multiplier, now_iso(), supplier_id] + list(item_ids),
-                )
-                updated_count = len(item_ids)
-            else:
-                result = connection.execute(
-                    """UPDATE supplier_catalog_items
-                       SET unit_price = ROUND(unit_price * ?, 2), updated_at = ?
-                       WHERE supplier_id = ?""",
-                    (multiplier, now_iso(), supplier_id),
-                )
-                updated_count = result.rowcount if hasattr(result, "rowcount") else 0
-            updated_rows = connection.execute(
-                "SELECT id, product_name, unit_price FROM supplier_catalog_items WHERE supplier_id = ? ORDER BY updated_at DESC",
-                (supplier_id,),
-            ).fetchall()
-            return {"updated": updated_count, "items": [dict(r) for r in updated_rows]}
-
-    def compare_catalog_items(self, item_ids: list[int]) -> list[dict[str, Any]]:
-        """Fetch multiple catalog items with supplier info for side-by-side comparison."""
-        if not item_ids or len(item_ids) > 6:
-            raise ValidationError("Provide 1–6 item IDs to compare")
-        connection = self.database.connect()
-        try:
-            placeholders = ",".join("?" * len(item_ids))
-            rows = connection.execute(
-                f"""SELECT ci.*, s.name AS supplier_name, s.city AS supplier_city,
-                           s.rating AS supplier_rating, s.delivery_days AS supplier_delivery_days,
-                           s.is_preferred AS supplier_is_preferred
-                    FROM supplier_catalog_items ci
-                    JOIN suppliers s ON s.id = ci.supplier_id
-                    WHERE ci.id IN ({placeholders}) AND ci.is_active = TRUE
-                    ORDER BY ci.unit_price ASC""",
-                item_ids,
-            ).fetchall()
-            return [dict(r) for r in rows]
-        finally:
-            self._close_connection(connection)
-
-    def _generate_svg_barcode(self, barcode_value: str, symbology: str) -> str:
-        try:
-            import barcode as bc
-            import io
-            from barcode.writer import SVGWriter
-            bc_class = bc.get_barcode_class("code128" if symbology == "CODE128" else "ean13")
-            writer = SVGWriter()
-            code = bc_class(barcode_value, writer=writer)
-            buf = io.BytesIO()
-            code.write(buf)
-            return buf.getvalue().decode("utf-8")
-        except Exception:
-            return ""
 
     def _normalize_label_symbology(self, symbology: str) -> str:
         value = str(symbology or "code128").strip().lower().replace("-", "")
@@ -7953,6 +5942,64 @@ class WarehouseService:
         ).fetchone()
         if row is None:
             raise NotFoundError(f"purchase_requests#{request_id} not found")
+        return dict(row)
+
+    def _active_supplier_ids_for_actor(self, connection: Connection, actor_id: str) -> list[int]:
+        rows = connection.execute(
+            """
+            SELECT supplier_id
+            FROM supplier_members
+            WHERE actor_id = ?
+              AND is_active = ?
+            ORDER BY supplier_id
+            """,
+            (actor_id, 1),
+        ).fetchall()
+        return [int(row["supplier_id"]) for row in rows]
+
+    def _require_active_supplier_ids(self, connection: Connection, actor_id: str) -> list[int]:
+        supplier_ids = self._active_supplier_ids_for_actor(connection, actor_id)
+        if not supplier_ids:
+            raise ValidationError("Approved supplier profile is required")
+        return supplier_ids
+
+    def _require_supplier_membership(
+        self, connection: Connection, actor_id: str, supplier_id: int | None = None
+    ) -> int:
+        supplier_ids = self._require_active_supplier_ids(connection, actor_id)
+        if supplier_id is None:
+            if len(supplier_ids) != 1:
+                raise ValidationError("Supplier id is required for multi-supplier account")
+            return supplier_ids[0]
+        if supplier_id not in supplier_ids:
+            raise ValidationError("Supplier membership is required")
+        return supplier_id
+
+    def _supplier_offer_select_sql(self) -> str:
+        return """
+            SELECT
+              so.*,
+              s.name AS supplier_name,
+              pr.warehouse_id,
+              pr.status AS request_status,
+              p.name AS product_name,
+              p.sku
+            FROM supplier_offers so
+            JOIN suppliers s ON s.id = so.supplier_id
+            JOIN purchase_requests pr ON pr.id = so.purchase_request_id
+            JOIN products p ON p.id = pr.product_id
+        """
+
+    def _get_supplier_offer(self, connection: Connection, offer_id: int) -> dict[str, Any]:
+        row = connection.execute(
+            f"""
+            {self._supplier_offer_select_sql()}
+            WHERE so.id = ?
+            """,
+            (offer_id,),
+        ).fetchone()
+        if row is None:
+            raise NotFoundError(f"supplier_offers#{offer_id} not found")
         return dict(row)
 
     def _get_supplier_application(
@@ -8403,642 +6450,227 @@ class WarehouseService:
             "expires_on": self._date_from_db(row["expires_on"]) if row["expires_on"] else None,
         }
 
-    # === USERS ===
+    # ── Supplier catalog ────────────────────────────────────────────────────
 
-    def get_user_by_username(self, username: str):
-        import json as _json
-        connection = self.database.connect()
-        try:
-            row = connection.execute(
-                "SELECT * FROM sklad_users WHERE username = ? AND is_active = TRUE",
-                (username,)
-            ).fetchone()
-        finally:
-            self._close_connection(connection)
-        if row is None:
-            return None
-        return dict(row)
+    def _catalog_select_sql(self) -> str:
+        return """
+            SELECT sc.*, s.name AS supplier_name
+            FROM supplier_catalog sc
+            JOIN suppliers s ON s.id = sc.supplier_id
+        """
 
-    def get_supplier_by_email(self, email: str):
-        """Look up a supplier by login email. Only returns suppliers with
-        portal access already granted (password_hash set + enabled)."""
-        connection = self.database.connect()
-        try:
-            row = connection.execute(
-                "SELECT * FROM suppliers WHERE email = ? AND portal_access_enabled = TRUE "
-                "AND password_hash IS NOT NULL",
-                (email,)
-            ).fetchone()
-        finally:
-            self._close_connection(connection)
-        if row is None:
-            return None
-        return dict(row)
-
-    def set_supplier_portal_access(
-        self, supplier_id: int, password_hash: str, actor_id: str = "system"
-    ) -> dict[str, Any]:
-        """Grant (or rotate) a supplier's portal login. Called by staff only —
-        the plaintext password is generated by the route handler and never
-        persisted anywhere except this hash."""
-        with self.database.transaction() as connection:
-            before = self._get_by_id(connection, "suppliers", supplier_id)
-            if not before.get("email"):
-                raise ValidationError("У поставщика не указан email — это логин для портала")
-            connection.execute(
-                "UPDATE suppliers SET password_hash = ?, portal_access_enabled = TRUE WHERE id = ?",
-                (password_hash, supplier_id),
-            )
-            updated = self._get_by_id(connection, "suppliers", supplier_id)
-            self._audit(
-                connection,
-                actor_id,
-                AuditAction.UPDATE,
-                "supplier",
-                supplier_id,
-                {"before": {"portal_access_enabled": before.get("portal_access_enabled")},
-                 "after": {"portal_access_enabled": True}},
-            )
-        return dict(updated)
-
-    def revoke_supplier_portal_access(self, supplier_id: int, actor_id: str = "system") -> dict[str, Any]:
-        with self.database.transaction() as connection:
-            before = self._get_by_id(connection, "suppliers", supplier_id)
-            connection.execute(
-                "UPDATE suppliers SET password_hash = NULL, portal_access_enabled = FALSE WHERE id = ?",
-                (supplier_id,),
-            )
-            updated = self._get_by_id(connection, "suppliers", supplier_id)
-            self._audit(
-                connection,
-                actor_id,
-                AuditAction.UPDATE,
-                "supplier",
-                supplier_id,
-                {"before": {"portal_access_enabled": before.get("portal_access_enabled")},
-                 "after": {"portal_access_enabled": False}},
-            )
-        return dict(updated)
-
-    def list_users(self):
-        import json as _json
-        connection = self.database.connect()
-        try:
-            rows = connection.execute(
-                "SELECT id, username, full_name, roles, warehouse_ids, department, supplier_id, is_active, created_at FROM sklad_users ORDER BY id"
-            ).fetchall()
-        finally:
-            self._close_connection(connection)
-        return [dict(r) for r in rows]
-
-    def create_user(self, username: str, full_name: str, password_hash: str, roles, warehouse_ids, department, supplier_id=None):
-        import json as _json
-        roles_str = ",".join(roles)
-        wh_json = _json.dumps(warehouse_ids)
-        with self.database.transaction() as connection:
-            user_id = insert_and_get_id(
-                connection,
-                "INSERT INTO sklad_users (username, full_name, password_hash, roles, warehouse_ids, department, supplier_id) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                (username, full_name, password_hash, roles_str, wh_json, department, supplier_id)
-            )
-            row = connection.execute(
-                "SELECT id, username, full_name, roles, warehouse_ids, department, supplier_id, is_active, created_at FROM sklad_users WHERE id = ?",
-                (user_id,)
-            ).fetchone()
-        return dict(row)
-
-    def update_user(self, user_id: int, updates: dict):
-        import json as _json
-        fields = []
-        params = []
-        if "full_name" in updates:
-            fields.append("full_name = ?")
-            params.append(updates["full_name"])
-        if "password_hash" in updates:
-            fields.append("password_hash = ?")
-            params.append(updates["password_hash"])
-        if "roles" in updates:
-            fields.append("roles = ?")
-            params.append(",".join(updates["roles"]))
-        if "warehouse_ids" in updates:
-            fields.append("warehouse_ids = ?")
-            params.append(_json.dumps(updates["warehouse_ids"]))
-        if "department" in updates:
-            fields.append("department = ?")
-            params.append(updates["department"])
-        if "supplier_id" in updates:
-            fields.append("supplier_id = ?")
-            params.append(updates["supplier_id"])
-        if "is_active" in updates:
-            fields.append("is_active = ?")
-            params.append(updates["is_active"])
-        if not fields:
-            return self.get_user_by_id(user_id)
-        params.append(user_id)
-        with self.database.transaction() as connection:
-            connection.execute(
-                f"UPDATE sklad_users SET {', '.join(fields)} WHERE id = ?",
-                tuple(params)
-            )
-            row = connection.execute(
-                "SELECT id, username, full_name, roles, warehouse_ids, department, supplier_id, is_active, created_at FROM sklad_users WHERE id = ?",
-                (user_id,)
-            ).fetchone()
-        return dict(row) if row else None
-
-    def get_user_by_id(self, user_id: int):
-        connection = self.database.connect()
-        try:
-            row = connection.execute(
-                "SELECT id, username, full_name, roles, warehouse_ids, department, supplier_id, is_active, created_at FROM sklad_users WHERE id = ?",
-                (user_id,)
-            ).fetchone()
-        finally:
-            self._close_connection(connection)
-        return dict(row) if row else None
-
-    # === SUPPLIER MAP / SHIPMENTS ===
-
-    def list_suppliers_with_geo(self) -> list:
-        connection = self.database.connect()
-        try:
-            rows = connection.execute(
-                "SELECT id, name, city, lat, lng, rating, delivery_days, is_preferred, phone, address FROM suppliers WHERE lat IS NOT NULL AND lng IS NOT NULL ORDER BY name"
-            ).fetchall()
-            return [dict(r) for r in rows]
-        finally:
-            self._close_connection(connection)
-
-    def create_shipment(self, data: dict) -> dict:
-        fields = ["supplier_id", "reference", "status", "origin_city", "origin_lat", "origin_lng",
-                  "destination_warehouse_id", "current_city", "current_lat", "current_lng", "estimated_arrival", "notes"]
-        values = [data.get(f) for f in fields]
-        placeholders = ", ".join("?" * len(fields))
-        col_names = ", ".join(fields)
-        with self.database.transaction() as conn:
-            sid = insert_and_get_id(
-                conn,
-                f"INSERT INTO shipments ({col_names}) VALUES ({placeholders})",
-                tuple(values)
-            )
-            row = conn.execute("SELECT * FROM shipments WHERE id = ?", (sid,)).fetchone()
-        return dict(row)
-
-    def list_shipments(self, supplier_id=None, status=None, limit=50, offset=0) -> dict:
-        where = []
-        params = []
-        if supplier_id is not None:
-            where.append("supplier_id = ?")
-            params.append(supplier_id)
-        if status:
-            where.append("status = ?")
-            params.append(status)
-        where_clause = f"WHERE {' AND '.join(where)}" if where else ""
-        connection = self.database.connect()
-        try:
-            total_row = connection.execute(f"SELECT COUNT(*) AS n FROM shipments {where_clause}", tuple(params)).fetchone()
-            total = total_row["n"] if total_row else 0
-            rows = connection.execute(
-                f"SELECT * FROM shipments {where_clause} ORDER BY created_at DESC LIMIT ? OFFSET ?",
-                tuple(params) + (limit, offset)
-            ).fetchall()
-            return {"items": [dict(r) for r in rows], "total": total}
-        finally:
-            self._close_connection(connection)
-
-    def get_shipment(self, shipment_id: int) -> dict | None:
-        connection = self.database.connect()
-        try:
-            row = connection.execute("SELECT * FROM shipments WHERE id = ?", (shipment_id,)).fetchone()
-            return dict(row) if row else None
-        finally:
-            self._close_connection(connection)
-
-    def update_shipment(self, shipment_id: int, updates: dict):
-        fields = []
-        params = []
-        for key in ["status", "current_city", "current_lat", "current_lng", "estimated_arrival", "notes"]:
-            if key in updates:
-                fields.append(f"{key} = ?")
-                params.append(updates[key])
-        if not fields:
-            return None
-        fields.append("updated_at = ?")
-        params.append(now_iso())
-        params.append(shipment_id)
-        with self.database.transaction() as conn:
-            conn.execute(f"UPDATE shipments SET {", ".join(fields)} WHERE id = ?", tuple(params))
-            row = conn.execute("SELECT * FROM shipments WHERE id = ?", (shipment_id,)).fetchone()
-        return dict(row) if row else None
-
-    # === REPACK TEMPLATES ===
-
-    def create_repack_template(self, data: dict, actor_id: str) -> dict:
-        with self.database.transaction() as conn:
-            if data.get("target_product_id"):
-                self._require(conn, "products", data["target_product_id"])
-            if data.get("source_product_id"):
-                self._require(conn, "products", data["source_product_id"])
-            tpl_id = insert_and_get_id(
-                conn,
-                "INSERT INTO repack_templates"
-                " (name, source_product_id, target_product_id, quantity_factor,"
-                "  loss_factor, target_unit_price, reason, created_by, created_at)"
-                " VALUES (?,?,?,?,?,?,?,?,?)",
-                (
-                    data["name"],
-                    data.get("source_product_id"),
-                    data["target_product_id"],
-                    str(data.get("quantity_factor", "1")),
-                    str(data.get("loss_factor", "0")),
-                    str(data["target_unit_price"]) if data.get("target_unit_price") else None,
-                    data.get("reason"),
-                    actor_id,
-                    now_iso(),
-                ),
-            )
-            row = conn.execute("SELECT * FROM repack_templates WHERE id=?", (tpl_id,)).fetchone()
-        return dict(row)
-
-    def list_repack_templates(self, source_product_id: int | None = None) -> list[dict]:
-        where = "WHERE rt.source_product_id = ?" if source_product_id else ""
-        params: tuple = (source_product_id,) if source_product_id else ()
-        with self.database.transaction() as conn:
-            rows = conn.execute(
-                f"SELECT rt.*,"
-                f" sp.name AS source_product_name, tp.name AS target_product_name"
-                f" FROM repack_templates rt"
-                f" LEFT JOIN products sp ON sp.id = rt.source_product_id"
-                f" LEFT JOIN products tp ON tp.id = rt.target_product_id"
-                f" {where} ORDER BY rt.name, rt.id",
-                params,
-            ).fetchall()
-        return [dict(r) for r in rows]
-
-    def delete_repack_template(self, template_id: int, actor_id: str) -> None:
-        with self.database.transaction() as conn:
-            row = conn.execute("SELECT id FROM repack_templates WHERE id=?", (template_id,)).fetchone()
-            if not row:
-                raise ValueError(f"Repack template {template_id} not found")
-            conn.execute("DELETE FROM repack_templates WHERE id=?", (template_id,))
-            self._audit(conn, "repack_template.deleted", actor_id=actor_id,
-                        payload={"template_id": template_id})
-
-    def count_mis_mapped_warehouses(self) -> int:
-        with self.database.transaction() as conn:
-            row = conn.execute(
-                "SELECT COUNT(*) AS c FROM warehouses"
-                " WHERE mis_clinic_id IS NOT NULL AND mis_room_id IS NOT NULL"
-            ).fetchone()
-            return int(row["c"])
-
-    def list_warehouse_ids_by_mis_clinic(self, mis_clinic_id: str) -> list[int]:
-        """All sklad warehouses mapped to a given MIS clinic (any room), for SSO scoping."""
-        connection = self.database.connect()
-        try:
-            rows = connection.execute(
-                "SELECT id FROM warehouses WHERE mis_clinic_id = ?", (mis_clinic_id,)
-            ).fetchall()
-            return [row["id"] for row in rows]
-        finally:
-            self._close_connection(connection)
-
-    # === MIS PROCEDURE CONSUMPTION TEMPLATES ===
-
-    def create_procedure_consumption_template(self, data: dict, actor_id: str) -> dict:
-        items = data.get("items") or []
-        if not items:
-            raise ValidationError("Template must contain at least one item")
-        with self.database.transaction() as conn:
-            for item in items:
-                self._require(conn, "products", item["product_id"])
-            tpl_id = insert_and_get_id(
-                conn,
-                "INSERT INTO procedure_consumption_templates"
-                " (mis_clinic_id, service_code, name, created_by, created_at)"
-                " VALUES (?,?,?,?,?)",
-                (
-                    data["mis_clinic_id"],
-                    data["service_code"],
-                    data["name"],
-                    actor_id,
-                    now_iso(),
-                ),
-            )
-            for item in items:
-                conn.execute(
-                    "INSERT INTO procedure_consumption_items (template_id, product_id, quantity)"
-                    " VALUES (?,?,?)",
-                    (tpl_id, item["product_id"], str(item["quantity"])),
-                )
-            self._audit(
-                conn, actor_id, AuditAction.CREATE, "procedure_consumption_template", tpl_id, data
-            )
-            return self._get_procedure_consumption_template(conn, tpl_id)
-
-    def _get_procedure_consumption_template(self, conn: Connection, template_id: int) -> dict:
-        row = conn.execute(
-            "SELECT * FROM procedure_consumption_templates WHERE id=?", (template_id,)
+    def _get_catalog_item(self, connection: Connection, item_id: int) -> dict[str, Any]:
+        row = connection.execute(
+            f"{self._catalog_select_sql()} WHERE sc.id = ?",
+            (item_id,),
         ).fetchone()
-        if not row:
-            raise NotFoundError(f"Procedure consumption template {template_id} not found")
-        tpl = dict(row)
-        tpl["created_at"] = str(tpl["created_at"])
-        item_rows = conn.execute(
-            "SELECT pci.id, pci.product_id, pci.quantity, p.name AS product_name"
-            " FROM procedure_consumption_items pci"
-            " JOIN products p ON p.id = pci.product_id"
-            " WHERE pci.template_id=? ORDER BY pci.id",
-            (template_id,),
-        ).fetchall()
-        items = [dict(r) for r in item_rows]
-        for item in items:
-            item["quantity"] = str(item["quantity"])
-        tpl["items"] = items
-        return tpl
+        if row is None:
+            raise NotFoundError(f"supplier_catalog#{item_id} not found")
+        return dict(row)
 
-    def list_procedure_consumption_templates(self, mis_clinic_id: str | None = None) -> list[dict]:
-        where = "WHERE mis_clinic_id = ?" if mis_clinic_id else ""
-        params: tuple = (mis_clinic_id,) if mis_clinic_id else ()
-        with self.database.transaction() as conn:
-            rows = conn.execute(
-                f"SELECT id FROM procedure_consumption_templates {where}"
-                f" ORDER BY mis_clinic_id, service_code",
-                params,
-            ).fetchall()
-            return [self._get_procedure_consumption_template(conn, row["id"]) for row in rows]
-
-    def delete_procedure_consumption_template(self, template_id: int, actor_id: str) -> None:
-        with self.database.transaction() as conn:
-            row = conn.execute(
-                "SELECT id FROM procedure_consumption_templates WHERE id=?", (template_id,)
-            ).fetchone()
-            if not row:
-                raise ValueError(f"Procedure consumption template {template_id} not found")
-            conn.execute("DELETE FROM procedure_consumption_items WHERE template_id=?", (template_id,))
-            conn.execute("DELETE FROM procedure_consumption_templates WHERE id=?", (template_id,))
-            self._audit(
-                conn,
-                actor_id,
-                AuditAction.DELETE,
-                "procedure_consumption_template",
-                template_id,
-                {"template_id": template_id},
+    def create_catalog_item(
+        self, data: SupplierCatalogCreate, actor_id: str
+    ) -> dict[str, Any]:
+        with self.database.transaction() as connection:
+            supplier_id = self._require_supplier_membership(connection, actor_id)
+            now = now_iso()
+            item_id = insert_and_get_id(
+                connection,
+                """
+                INSERT INTO supplier_catalog
+                  (supplier_id, actor_id, type, title, description, price,
+                   price_type, unit, service_category, is_active, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
+                """,
+                (
+                    supplier_id,
+                    actor_id,
+                    data.type,
+                    data.title,
+                    data.description,
+                    decimal_to_db(data.price) if data.price is not None else None,
+                    data.price_type,
+                    data.unit,
+                    data.service_category or None,
+                    now,
+                    now,
+                ),
             )
+            return self._get_catalog_item(connection, item_id)
 
-    # === MIS PROCEDURE EVENTS ===
+    def update_catalog_item(
+        self, item_id: int, data: SupplierCatalogUpdate, actor_id: str
+    ) -> dict[str, Any]:
+        with self.database.transaction() as connection:
+            item = self._get_catalog_item(connection, item_id)
+            self._require_supplier_membership(connection, actor_id, item["supplier_id"])
+            now = now_iso()
+            connection.execute(
+                """
+                UPDATE supplier_catalog
+                SET type = ?, title = ?, description = ?, price = ?,
+                    price_type = ?, unit = ?, service_category = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                (
+                    data.type,
+                    data.title,
+                    data.description,
+                    decimal_to_db(data.price) if data.price is not None else None,
+                    data.price_type,
+                    data.unit,
+                    data.service_category or None,
+                    now,
+                    item_id,
+                ),
+            )
+            return self._get_catalog_item(connection, item_id)
 
-    def process_mis_procedure_event(
+    def delete_catalog_item(self, item_id: int, actor_id: str) -> dict[str, Any]:
+        with self.database.transaction() as connection:
+            item = self._get_catalog_item(connection, item_id)
+            self._require_supplier_membership(connection, actor_id, item["supplier_id"])
+            connection.execute(
+                "UPDATE supplier_catalog SET is_active = 0, updated_at = ? WHERE id = ?",
+                (now_iso(), item_id),
+            )
+            return self._get_catalog_item(connection, item_id)
+
+    def set_catalog_item_image(
+        self, item_id: int, actor_id: str, file_id: str
+    ) -> dict[str, Any]:
+        with self.database.transaction() as connection:
+            item = self._get_catalog_item(connection, item_id)
+            self._require_supplier_membership(connection, actor_id, item["supplier_id"])
+            connection.execute(
+                "UPDATE supplier_catalog SET image_file_id = ?, updated_at = ? WHERE id = ?",
+                (file_id, now_iso(), item_id),
+            )
+            return self._get_catalog_item(connection, item_id)
+
+    def list_supplier_catalog(
         self,
-        *,
-        mis_clinic_id: str,
-        mis_room_id: str,
-        service_code: str,
-        mis_event_id: str,
-        patient_id: str | None = None,
-        doctor_id: str | None = None,
-        medical_record_no: str | None = None,
-        actor_id: str = "mis-integration",
-    ) -> dict:
-        with self.database.transaction() as conn:
-            already = conn.execute(
-                "SELECT id FROM mis_processed_events WHERE mis_event_id = ?", (mis_event_id,)
-            ).fetchone()
-            if already:
-                return {"status": "already_processed", "mis_event_id": mis_event_id, "write_offs": []}
-
-            warehouse = conn.execute(
-                "SELECT id FROM warehouses WHERE mis_clinic_id = ? AND mis_room_id = ?",
-                (mis_clinic_id, mis_room_id),
-            ).fetchone()
-            if not warehouse:
-                raise NotFoundError(
-                    f"Кабинет (clinic={mis_clinic_id}, room={mis_room_id}) "
-                    f"не сопоставлен со складом в sklad"
-                )
-            warehouse_id = warehouse["id"]
-
-            template = conn.execute(
-                "SELECT id FROM procedure_consumption_templates"
-                " WHERE mis_clinic_id = ? AND service_code = ?",
-                (mis_clinic_id, service_code),
-            ).fetchone()
-            if not template:
-                raise NotFoundError(f"Расход для процедуры «{service_code}» не настроен")
-            items = conn.execute(
-                "SELECT product_id, quantity FROM procedure_consumption_items WHERE template_id = ?",
-                (template["id"],),
-            ).fetchall()
-            if not items:
-                raise ValidationError(f"Шаблон расхода для процедуры «{service_code}» пуст")
-
-            write_offs = [
-                self._write_off_fefo_within(
-                    conn,
-                    actor_id=actor_id,
-                    product_id=item["product_id"],
-                    warehouse_id=warehouse_id,
-                    quantity=Decimal(str(item["quantity"])),
-                    reason=f"МИС: процедура {service_code}",
-                    patient_id=patient_id,
-                    doctor_id=doctor_id,
-                    medical_record_no=medical_record_no,
-                )
-                for item in items
-            ]
-
-            conn.execute(
-                "INSERT INTO mis_processed_events (mis_event_id, created_at) VALUES (?, ?)",
-                (mis_event_id, now_iso()),
-            )
-
-            return {
-                "status": "processed",
-                "mis_event_id": mis_event_id,
-                "warehouse_id": warehouse_id,
-                "write_offs": write_offs,
-            }
-
-    # === AUCTIONS ===
-
-    def create_auction(self, data: dict, actor_id: str) -> dict:
-        with self.database.transaction() as conn:
-            sql = (
-                "INSERT INTO auctions (title, description, product_id, warehouse_id, quantity, unit,"
-                " start_price, current_price, min_price, step_amount, step_interval_seconds,"
-                " status, created_by, created_at, starts_at)"
-                " VALUES (?,?,?,?,?,?,?,?,?,?,?,'draft',?,?,?)"
-            )
-            auction_id = insert_and_get_id(conn, sql, (
-                data["title"], data.get("description"), data["product_id"], data["warehouse_id"],
-                str(data["quantity"]), data.get("unit", "шт"), str(data["start_price"]),
-                str(data["start_price"]), str(data["min_price"]), str(data.get("step_amount", "100")),
-                data.get("step_interval_seconds", 300), actor_id, now_iso(), data.get("starts_at"),
-            ))
-            row = conn.execute("SELECT * FROM auctions WHERE id = ?", (auction_id,)).fetchone()
-        return dict(row)
-
-    def list_auctions(self, status: str | None = None, limit: int = 20, offset: int = 0) -> dict:
-        where = "WHERE a.status = ?" if status else ""
-        params: tuple = (status,) if status else ()
-        with self.database.transaction() as conn:
-            total = conn.execute(f"SELECT COUNT(*) as n FROM auctions a {where}", params).fetchone()["n"]
-            rows = conn.execute(
-                f"SELECT a.*, p.name as product_name,"
-                f" (SELECT COUNT(*) FROM auction_bids b WHERE b.auction_id = a.id) as bid_count"
-                f" FROM auctions a LEFT JOIN products p ON p.id = a.product_id"
-                f" {where} ORDER BY a.created_at DESC LIMIT ? OFFSET ?",
-                params + (limit, offset)
-            ).fetchall()
-        return {"items": [dict(r) for r in rows], "total": total}
-
-    def get_auction(self, auction_id: int) -> dict | None:
-        with self.database.transaction() as conn:
-            row = conn.execute(
-                "SELECT a.*, p.name as product_name,"
-                " (SELECT COUNT(*) FROM auction_bids b WHERE b.auction_id = a.id) as bid_count"
-                " FROM auctions a LEFT JOIN products p ON p.id = a.product_id WHERE a.id = ?",
-                (auction_id,)
-            ).fetchone()
-        return dict(row) if row else None
-
-    def start_auction(self, auction_id: int) -> dict | None:
-        with self.database.transaction() as conn:
-            _now = now_iso()
-            conn.execute(
-                "UPDATE auctions SET status='active', starts_at=?"
-                " WHERE id = ? AND status='draft'",
-                (_now, auction_id)
-            )
-            row = conn.execute("SELECT * FROM auctions WHERE id = ?", (auction_id,)).fetchone()
-        return dict(row) if row else None
-
-    def place_bid(self, auction_id: int, supplier_id: int, bid_amount: float) -> dict:
-        with self.database.transaction() as conn:
-            auction = conn.execute(
-                "SELECT * FROM auctions WHERE id = ? AND status = 'active'", (auction_id,)
-            ).fetchone()
-            if not auction:
-                raise ValueError("Auction not active")
-            if bid_amount >= float(auction["current_price"]):
-                raise ValueError(f"Ставка должна быть ниже текущей цены {auction['current_price']}")
-            if bid_amount < float(auction["min_price"]):
-                raise ValueError(f"Ставка не может быть ниже минимальной {auction['min_price']}")
-            bid_id = insert_and_get_id(
-                conn,
-                "INSERT INTO auction_bids (auction_id, supplier_id, bid_amount) VALUES (?,?,?)",
-                (auction_id, supplier_id, str(bid_amount))
-            )
-            conn.execute(
-                "UPDATE auctions SET current_price=?, winner_supplier_id=?, winner_bid=? WHERE id=?",
-                (str(bid_amount), supplier_id, str(bid_amount), auction_id)
-            )
-            row = conn.execute("SELECT * FROM auction_bids WHERE id=?", (bid_id,)).fetchone()
-        return dict(row)
-
-    def close_auction(self, auction_id: int) -> dict | None:
-        with self.database.transaction() as conn:
-            cur = conn.execute(
-                "UPDATE auctions SET status='closed', ends_at=? WHERE id=? AND status='active'",
-                (now_iso(), auction_id)
-            )
-            if cur.rowcount == 0:
-                return None
-            row = conn.execute("SELECT * FROM auctions WHERE id=?", (auction_id,)).fetchone()
-        return dict(row) if row else None
-
-    def list_auction_bids(self, auction_id: int) -> list[dict]:
-        with self.database.transaction() as conn:
-            rows = conn.execute(
-                "SELECT b.*, s.name as supplier_name FROM auction_bids b"
-                " LEFT JOIN suppliers s ON s.id = b.supplier_id"
-                " WHERE b.auction_id=? ORDER BY b.bid_amount ASC",
-                (auction_id,)
-            ).fetchall()
-        return [dict(r) for r in rows]
-
-
-
-    def _fire_accounting_webhook(self, purchase_request):
-        """Fire outbound webhook to accounting service when purchase request is ordered."""
-        try:
-            from app.core.config import get_settings
-            settings = get_settings()
-            url = settings.accounting_webhook_url
-            if not url:
-                return
-            import urllib.request as _urllib
-            payload = json.dumps({
-                "event": "purchase_request.ordered",
-                "id": purchase_request.get("id"),
-                "warehouse_id": purchase_request.get("warehouse_id"),
-                "product_id": purchase_request.get("product_id"),
-                "recommended_quantity": str(purchase_request.get("recommended_quantity") or 0),
-                "reason": purchase_request.get("reason"),
-                "created_at": str(purchase_request.get("created_at")),
-            }).encode()
-            headers = {"Content-Type": "application/json"}
-            secret = settings.accounting_webhook_secret
-            if secret:
-                import hmac as _hmac, hashlib as _hashlib
-                sig = _hmac.new(secret.encode(), payload, _hashlib.sha256).hexdigest()
-                headers["X-Sklad-Signature"] = sig
-            def _send():
-                try:
-                    req = _urllib.Request(url, data=payload, headers=headers, method="POST")
-                    _urllib.urlopen(req, timeout=10)
-                except Exception as exc:
-                    import logging
-                    logging.getLogger(__name__).warning("Accounting webhook failed: %s", exc)
-            threading.Thread(target=_send, daemon=True).start()
-        except Exception:
-            pass
-    def _check_and_create_reorder_requests(self, connection, warehouse_id, product_ids):
-        if not product_ids:
-            return
-        placeholders = ",".join("?" * len(product_ids))
-        qsql = (
-            "SELECT p.id AS product_id, p.name AS product_name, p.reorder_point, p.safety_stock,"
-            " COALESCE(SUM(CAST(sb.quantity AS REAL) - CAST(sb.reserved_quantity AS REAL)), 0) AS free_quantity"
-            " FROM products p"
-            " LEFT JOIN batches b ON b.product_id = p.id"
-            " LEFT JOIN stock_balances sb ON sb.batch_id = b.id AND sb.warehouse_id = ?"
-            f" WHERE p.id IN ({placeholders})"
-            " GROUP BY p.id, p.name, p.reorder_point, p.safety_stock"
-            " HAVING CAST(p.reorder_point AS REAL) > 0"
-            " AND COALESCE(SUM(CAST(sb.quantity AS REAL) - CAST(sb.reserved_quantity AS REAL)), 0) < CAST(p.reorder_point AS REAL)"
-        )
-        rows = connection.execute(qsql, (warehouse_id, *product_ids)).fetchall()
-        for row in rows:
-            existing = connection.execute("SELECT id FROM purchase_requests WHERE warehouse_id = ? AND product_id = ? AND status = 'draft'", (warehouse_id, row["product_id"])).fetchone()
-            if existing:
-                continue
-            current_free = Decimal(str(row["free_quantity"] or 0))
-            reorder_point = Decimal(str(row["reorder_point"] or 0))
-            safety_stock = Decimal(str(row["safety_stock"] or 0))
-            rec_qty = max(Decimal("0"), reorder_point + safety_stock - current_free)
-            if self._is_postgresql(connection):
-                req_id = self._insert_purchase_request_if_absent_postgresql(connection, warehouse_id=warehouse_id, product_id=row["product_id"], current_free=current_free, reorder_point=reorder_point, safety_stock=safety_stock, recommended_quantity=rec_qty, reason="Ниже точки заказа (авто)", actor_id="system")
-            else:
-                req_id = insert_and_get_id(connection, "INSERT INTO purchase_requests(warehouse_id, product_id, status, current_free_quantity, reorder_point, safety_stock, recommended_quantity, reason, source, created_by, created_at) VALUES (?, ?, 'draft', ?, ?, ?, ?, ?, 'auto', 'system', ?)", (warehouse_id, row["product_id"], self._report_decimal(current_free), self._report_decimal(reorder_point), self._report_decimal(safety_stock), self._report_decimal(rec_qty), "Ниже точки заказа (авто)", now_iso()))
-            if not req_id:
-                continue
-            product_name = row["product_name"]
-            msg = f"Автозаявка: {product_name} (остаток {float(current_free):.3f}, точка {float(reorder_point):.3f})"
-            existing_notif = connection.execute("SELECT id FROM notifications WHERE notification_type = 'low_stock' AND product_id = ? AND warehouse_id = ? AND is_read = 0", (row["product_id"], warehouse_id)).fetchone()
-            if not existing_notif:
-                insert_and_get_id(connection, "INSERT INTO notifications(notification_type, warehouse_id, product_id, title, message, is_read, created_at) VALUES (?, ?, ?, ?, ?, 0, ?)", ('low_stock', warehouse_id, row["product_id"], "Сформирована автозаявка", msg, now_iso()))
-
-    def list_all_supplier_reviews(self, status: str | None = None) -> list[dict]:
+        actor_id: str,
+        item_type: str | None = None,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> list[dict[str, Any]]:
+        safe_limit = max(1, min(limit, 500))
+        safe_offset = max(0, offset)
         connection = self.database.connect()
         try:
-            q = "SELECT * FROM supplier_reviews"
-            params: list = []
-            if status:
-                q += " WHERE status = ?"
-                params.append(status)
-            q += " ORDER BY created_at DESC LIMIT 200"
-            rows = connection.execute(q, params).fetchall()
-            return [dict(r) for r in rows]
+            supplier_ids = self._require_active_supplier_ids(connection, actor_id)
+            params: tuple[Any, ...] = tuple(supplier_ids)
+            filters = [f"sc.supplier_id IN ({', '.join('?' for _ in supplier_ids)})"]
+            if item_type is not None:
+                filters.append("sc.type = ?")
+                params = (*params, item_type)
+            rows = connection.execute(
+                f"""
+                {self._catalog_select_sql()}
+                WHERE {" AND ".join(filters)}
+                ORDER BY sc.created_at DESC, sc.id DESC
+                LIMIT ? OFFSET ?
+                """,
+                (*params, safe_limit, safe_offset),
+            ).fetchall()
+            return [dict(row) for row in rows]
         finally:
             self._close_connection(connection)
+
+    def count_supplier_catalog(self, actor_id: str, item_type: str | None = None) -> int:
+        connection = self.database.connect()
+        try:
+            supplier_ids = self._active_supplier_ids_for_actor(connection, actor_id)
+            if not supplier_ids:
+                return 0
+            params: tuple[Any, ...] = tuple(supplier_ids)
+            filters = [f"supplier_id IN ({', '.join('?' for _ in supplier_ids)})"]
+            if item_type is not None:
+                filters.append("type = ?")
+                params = (*params, item_type)
+            row = connection.execute(
+                f"SELECT COUNT(*) FROM supplier_catalog WHERE {' AND '.join(filters)}",
+                params,
+            ).fetchone()
+            return int(row[0]) if row else 0
+        finally:
+            self._close_connection(connection)
+
+    def list_marketplace(
+        self,
+        item_type: str | None = None,
+        service_category: str | None = None,
+        supplier_id: int | None = None,
+        q: str | None = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> list[dict[str, Any]]:
+        safe_limit = max(1, min(limit, 200))
+        safe_offset = max(0, offset)
+        connection = self.database.connect()
+        try:
+            filters = ["sc.is_active = 1"]
+            params: tuple[Any, ...] = ()
+            if item_type is not None:
+                filters.append("sc.type = ?")
+                params = (*params, item_type)
+            if service_category is not None:
+                filters.append("sc.service_category = ?")
+                params = (*params, service_category)
+            if supplier_id is not None:
+                filters.append("sc.supplier_id = ?")
+                params = (*params, supplier_id)
+            if q:
+                filters.append("(sc.title LIKE ? OR sc.description LIKE ?)")
+                like = f"%{q}%"
+                params = (*params, like, like)
+            rows = connection.execute(
+                f"""
+                {self._catalog_select_sql()}
+                WHERE {" AND ".join(filters)}
+                ORDER BY sc.created_at DESC, sc.id DESC
+                LIMIT ? OFFSET ?
+                """,
+                (*params, safe_limit, safe_offset),
+            ).fetchall()
+            return [dict(row) for row in rows]
+        finally:
+            self._close_connection(connection)
+
+    def count_marketplace(
+        self,
+        item_type: str | None = None,
+        service_category: str | None = None,
+        supplier_id: int | None = None,
+        q: str | None = None,
+    ) -> int:
+        connection = self.database.connect()
+        try:
+            filters = ["sc.is_active = 1"]
+            params: tuple[Any, ...] = ()
+            if item_type is not None:
+                filters.append("sc.type = ?")
+                params = (*params, item_type)
+            if service_category is not None:
+                filters.append("sc.service_category = ?")
+                params = (*params, service_category)
+            if supplier_id is not None:
+                filters.append("sc.supplier_id = ?")
+                params = (*params, supplier_id)
+            if q:
+                filters.append("(sc.title LIKE ? OR sc.description LIKE ?)")
+                like = f"%{q}%"
+                params = (*params, like, like)
+            row = connection.execute(
+                f"""
+                SELECT COUNT(*)
+                FROM supplier_catalog sc
+                WHERE {" AND ".join(filters)}
+                """,
+                params,
+            ).fetchone()
+            return int(row[0]) if row else 0
+        finally:
+            self._close_connection(connection)
+

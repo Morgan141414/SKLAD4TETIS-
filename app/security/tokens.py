@@ -112,16 +112,11 @@ def actor_from_jwt_claims(payload: dict[str, Any]) -> ActorContext:
     if department is not None and not isinstance(department, str):
         raise ValidationError("Invalid department")
 
-    supplier_id = payload.get("supplier_id")
-    if supplier_id is not None:
-        supplier_id = _numeric_claim(supplier_id, "supplier_id")
-
     return ActorContext(
         actor_id=actor_id,
         roles=frozenset(roles),
         warehouse_ids=frozenset(warehouse_ids),
         department=department,
-        supplier_id=supplier_id,
     )
 
 

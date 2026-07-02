@@ -17,7 +17,10 @@ class Permission(StrEnum):
     NOTIFICATIONS_READ = "notifications:read"
     AUDIT_READ = "audit:read"
     ADMIN_USERS = "admin:users"
-    SUPPLIER_PORTAL = "supplier:portal"
+    SUPPLIER_PROFILE_READ = "supplier:profile:read"
+    SUPPLIER_PROFILE_WRITE = "supplier:profile:write"
+    SUPPLIER_ORDERS_READ = "supplier:orders:read"
+    SUPPLIER_OFFERS_WRITE = "supplier:offers:write"
 
 
 class Role(StrEnum):
@@ -57,7 +60,14 @@ ROLE_PERMISSIONS: dict[Role, frozenset[Permission]] = {
         }
     ),
     Role.OTHER: frozenset({Permission.STOCK_WRITEOFF}),
-    Role.SUPPLIER: frozenset({Permission.SUPPLIER_PORTAL}),
+    Role.SUPPLIER: frozenset(
+        {
+            Permission.SUPPLIER_PROFILE_READ,
+            Permission.SUPPLIER_PROFILE_WRITE,
+            Permission.SUPPLIER_ORDERS_READ,
+            Permission.SUPPLIER_OFFERS_WRITE,
+        }
+    ),
 }
 
 
@@ -67,7 +77,6 @@ class ActorContext:
     roles: frozenset[Role] = field(default_factory=frozenset)
     warehouse_ids: frozenset[int] = field(default_factory=frozenset)
     department: str | None = None
-    supplier_id: int | None = None
 
     @property
     def permissions(self) -> frozenset[Permission]:
@@ -86,21 +95,6 @@ def require_permission(actor: ActorContext, permission: Permission) -> None:
         raise PermissionDeniedError(f"Permission denied: {permission}")
 
 
-def require_permission_or_supplier(actor: ActorContext, permission: Permission) -> None:
-    """Like require_permission, but a Role.SUPPLIER actor is admitted on the
-    strength of Permission.SUPPLIER_PORTAL alone instead of needing the
-    listed staff permission (which suppliers never hold). Use this on the
-    handful of endpoints suppliers are meant to reach (auctions, bids,
-    price history, shipments, reviews) and pair it with
-    require_supplier_scope / manual filtering so the supplier only sees
-    their own rows.
-    """
-    if Role.SUPPLIER in actor.roles:
-        require_permission(actor, Permission.SUPPLIER_PORTAL)
-        return
-    require_permission(actor, permission)
-
-
 def require_warehouse_scope(actor: ActorContext, warehouse_id: int) -> None:
     if Role.WAREHOUSE_MANAGER in actor.roles:
         return
@@ -114,20 +108,6 @@ def require_warehouse_filter(actor: ActorContext, warehouse_id: int | None) -> N
     if warehouse_id is None:
         raise PermissionDeniedError("Warehouse filter is required for scoped actor")
     require_warehouse_scope(actor, warehouse_id)
-
-
-def require_supplier_scope(actor: ActorContext, supplier_id: int) -> None:
-    """Restrict a supplier-role actor to their own supplier_id.
-
-    Staff roles (anyone without Role.SUPPLIER) are unrestricted — they
-    legitimately act on behalf of any supplier (phoning in bids, logging
-    shipments, etc). Only an authenticated supplier actor is locked to
-    their own record.
-    """
-    if Role.SUPPLIER not in actor.roles:
-        return
-    if actor.supplier_id != supplier_id:
-        raise PermissionDeniedError(f"Supplier scope denied: {supplier_id}")
 
 
 def require_stock_access(

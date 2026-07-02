@@ -20,35 +20,6 @@ CREATE TABLE IF NOT EXISTS suppliers (
   CONSTRAINT suppliers_rating_range CHECK (rating IS NULL OR (rating >= 1 AND rating <= 5))
 );
 
-CREATE TABLE IF NOT EXISTS supplier_applications (
-  id BIGSERIAL PRIMARY KEY,
-  actor_id TEXT NOT NULL,
-  supplier_id BIGINT REFERENCES suppliers(id),
-  status TEXT NOT NULL,
-  name TEXT NOT NULL,
-  bin TEXT,
-  phone TEXT,
-  email TEXT NOT NULL,
-  contact_person TEXT,
-  address TEXT,
-  city TEXT,
-  delivery_days INTEGER,
-  notes TEXT,
-  review_reason TEXT,
-  submitted_at TIMESTAMPTZ NOT NULL,
-  reviewed_by TEXT,
-  reviewed_at TIMESTAMPTZ,
-  CONSTRAINT supplier_applications_status_check CHECK (
-    status IN ('pending', 'approved', 'rejected', 'needs_changes', 'suspended')
-  ),
-  CONSTRAINT supplier_applications_delivery_days_check CHECK (
-    delivery_days IS NULL OR delivery_days > 0
-  )
-);
-
-CREATE INDEX IF NOT EXISTS idx_supplier_applications_status_submitted
-  ON supplier_applications(status, submitted_at DESC, id DESC);
-
 CREATE TABLE IF NOT EXISTS warehouses (
   id BIGSERIAL PRIMARY KEY,
   name TEXT NOT NULL,
@@ -419,6 +390,42 @@ CREATE TABLE IF NOT EXISTS supplier_price_history (
 CREATE INDEX IF NOT EXISTS idx_supplier_price_history_supplier_product_recorded
   ON supplier_price_history(supplier_id, product_id, recorded_at DESC, id DESC);
 
+CREATE TABLE IF NOT EXISTS supplier_applications (
+  id BIGSERIAL PRIMARY KEY,
+  actor_id TEXT NOT NULL UNIQUE,
+  supplier_id BIGINT REFERENCES suppliers(id),
+  status TEXT NOT NULL,
+  name TEXT NOT NULL,
+  bin TEXT,
+  phone TEXT,
+  email TEXT,
+  contact_person TEXT,
+  address TEXT,
+  notes TEXT,
+  review_reason TEXT,
+  submitted_at TIMESTAMPTZ NOT NULL,
+  reviewed_by TEXT,
+  reviewed_at TIMESTAMPTZ,
+  CONSTRAINT supplier_applications_status_check CHECK (
+    status IN ('pending', 'approved', 'rejected', 'needs_changes', 'suspended')
+  )
+);
+
+CREATE TABLE IF NOT EXISTS supplier_members (
+  supplier_id BIGINT NOT NULL REFERENCES suppliers(id) ON DELETE CASCADE,
+  actor_id TEXT NOT NULL,
+  member_role TEXT NOT NULL DEFAULT 'owner',
+  is_active BOOLEAN NOT NULL DEFAULT TRUE,
+  created_at TIMESTAMPTZ NOT NULL,
+  PRIMARY KEY(supplier_id, actor_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_supplier_applications_status_submitted
+  ON supplier_applications(status, submitted_at DESC, id DESC);
+
+CREATE INDEX IF NOT EXISTS idx_supplier_members_actor_active
+  ON supplier_members(actor_id, is_active, supplier_id);
+
 CREATE TABLE IF NOT EXISTS audit_log (
   id BIGSERIAL PRIMARY KEY,
   actor_id TEXT NOT NULL,
@@ -501,6 +508,43 @@ CREATE INDEX IF NOT EXISTS idx_purchase_requests_warehouse_status_created
 CREATE UNIQUE INDEX IF NOT EXISTS uq_purchase_requests_open_draft_product_warehouse
   ON purchase_requests(warehouse_id, product_id)
   WHERE status = 'draft';
+
+CREATE TABLE IF NOT EXISTS supplier_offers (
+  id BIGSERIAL PRIMARY KEY,
+  purchase_request_id BIGINT NOT NULL REFERENCES purchase_requests(id) ON DELETE CASCADE,
+  supplier_id BIGINT NOT NULL REFERENCES suppliers(id),
+  actor_id TEXT NOT NULL,
+  status TEXT NOT NULL,
+  unit_price NUMERIC(18, 4) NOT NULL,
+  quantity NUMERIC(18, 3) NOT NULL,
+  delivery_date DATE,
+  expires_at DATE,
+  comment TEXT,
+  reviewed_by TEXT,
+  reviewed_at TIMESTAMPTZ,
+  review_reason TEXT,
+  created_at TIMESTAMPTZ NOT NULL,
+  updated_at TIMESTAMPTZ NOT NULL,
+  CONSTRAINT supplier_offers_status_check CHECK (
+    status IN ('submitted', 'accepted', 'rejected', 'withdrawn')
+  ),
+  CONSTRAINT supplier_offers_unit_price_non_negative CHECK (unit_price >= 0),
+  CONSTRAINT supplier_offers_quantity_positive CHECK (quantity > 0)
+);
+
+CREATE INDEX IF NOT EXISTS idx_supplier_offers_request_status
+  ON supplier_offers(purchase_request_id, status, id);
+
+CREATE INDEX IF NOT EXISTS idx_supplier_offers_supplier_status
+  ON supplier_offers(supplier_id, status, updated_at DESC, id DESC);
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_supplier_offers_active_supplier_request
+  ON supplier_offers(purchase_request_id, supplier_id)
+  WHERE status IN ('submitted', 'accepted');
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_supplier_offers_one_accepted_request
+  ON supplier_offers(purchase_request_id)
+  WHERE status = 'accepted';
 
 CREATE TABLE IF NOT EXISTS abc_xyz_runs (
   id BIGSERIAL PRIMARY KEY,

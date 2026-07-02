@@ -1,4 +1,3 @@
-from dataclasses import replace
 from pathlib import Path
 
 from fastapi import Header, HTTPException, status
@@ -8,9 +7,8 @@ from app.domain.errors import AuthenticationError, ValidationError
 from app.repositories.idempotency import PostgresIdempotencyRepository, SQLiteIdempotencyRepository
 from app.services.idempotency import IdempotencyStore
 from app.services.warehouse import WarehouseService
-from app.security.rbac import ActorContext, Role, actor_from_headers
+from app.security.rbac import ActorContext, actor_from_headers
 from app.security.tokens import actor_from_bearer_token
-from app.security.oidc import actor_from_oidc_token
 from app.storage.base import WarehouseDatabase
 from app.storage.postgresql import PostgresDatabase
 from app.storage.sqlite import SQLiteDatabase
@@ -87,29 +85,6 @@ def get_idempotency_store() -> IdempotencyStore:
     return IdempotencyStore(SQLiteIdempotencyRepository(database))
 
 
-def _enrich_with_supplier(actor_ctx: ActorContext) -> ActorContext:
-    """If JWT has no supplier_id but DB has one (approved since last login), enrich the context."""
-    if actor_ctx.supplier_id is not None:
-        return actor_ctx
-    try:
-        svc = get_warehouse_service()
-        actor_id = actor_ctx.actor_id or ""
-        db_user = None
-        if actor_id and not actor_id.isdigit():
-            db_user = svc.get_user_by_username(f"tetis:{actor_id}")
-        elif actor_id and actor_id.isdigit():
-            db_user = svc.get_user_by_id(int(actor_id))
-        if db_user is not None and db_user.get("supplier_id"):
-            return replace(
-                actor_ctx,
-                supplier_id=db_user["supplier_id"],
-                roles=actor_ctx.roles | frozenset({Role.SUPPLIER}),
-            )
-    except Exception:
-        pass
-    return actor_ctx
-
-
 def get_actor_context(
     authorization: str | None = Header(default=None),
     x_actor_id: str = Header(default="system"),
@@ -119,35 +94,19 @@ def get_actor_context(
 ) -> ActorContext:
     settings = get_settings()
     if settings.public_access_enabled:
-        if authorization:
+        if authorization and settings.jwt_hmac_secret:
             scheme, _, token = authorization.partition(" ")
             if scheme.lower() == "bearer" and token.strip():
-                # Try OIDC first if enabled
-                if settings.oidc_enabled:
-                    try:
-                        import json as _json
-                        role_map = _json.loads(settings.oidc_role_mapping_json) if settings.oidc_role_mapping_json else {}
-                        return actor_from_oidc_token(
-                            token.strip(),
-                            audience=settings.oidc_audience,
-                            issuer=settings.oidc_issuer,
-                            role_mapping=role_map,
-                            leeway_seconds=settings.jwt_clock_skew_seconds,
-                        )
-                    except (AuthenticationError, ValidationError):
-                        pass
-                # Fall back to HS256
-                if settings.jwt_hmac_secret:
-                    try:
-                        return _enrich_with_supplier(actor_from_bearer_token(
-                            token.strip(),
-                            secret=settings.jwt_hmac_secret,
-                            issuer=settings.jwt_issuer,
-                            audience=settings.jwt_audience,
-                            leeway_seconds=settings.jwt_clock_skew_seconds,
-                        ))
-                    except (AuthenticationError, ValidationError):
-                        pass
+                try:
+                    return actor_from_bearer_token(
+                        token.strip(),
+                        secret=settings.jwt_hmac_secret,
+                        issuer=settings.jwt_issuer,
+                        audience=settings.jwt_audience,
+                        leeway_seconds=settings.jwt_clock_skew_seconds,
+                    )
+                except (AuthenticationError, ValidationError):
+                    pass
         try:
             return actor_from_headers(
                 actor_id=x_actor_id or "public-user",
@@ -181,28 +140,14 @@ def get_actor_context(
                     "details": {},
                 },
             )
-        if settings.oidc_enabled:
-            try:
-                import json as _json
-                role_map = _json.loads(settings.oidc_role_mapping_json) if settings.oidc_role_mapping_json else {}
-                return actor_from_oidc_token(
-                    token.strip(),
-                    audience=settings.oidc_audience,
-                    issuer=settings.oidc_issuer,
-                    role_mapping=role_map,
-                    leeway_seconds=settings.jwt_clock_skew_seconds,
-                )
-            except (AuthenticationError, ValidationError) as error:
-                if not settings.jwt_hmac_secret:
-                    raise _unauthorized(str(error)) from error
         try:
-            return _enrich_with_supplier(actor_from_bearer_token(
+            return actor_from_bearer_token(
                 token.strip(),
                 secret=settings.jwt_hmac_secret,
                 issuer=settings.jwt_issuer,
                 audience=settings.jwt_audience,
                 leeway_seconds=settings.jwt_clock_skew_seconds,
-            ))
+            )
         except AuthenticationError as error:
             raise _unauthorized(str(error)) from error
         except ValidationError as error:
@@ -236,3 +181,4 @@ def _unauthorized(message: str) -> HTTPException:
         detail={"code": "unauthorized", "message": message, "details": {}},
         headers={"WWW-Authenticate": "Bearer"},
     )
+

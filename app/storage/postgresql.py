@@ -21,8 +21,6 @@ BOOLEAN_CONSTANTS = (
     (re.compile(r"\bis_read\s*=\s*0\b"), "is_read = FALSE"),
     (re.compile(r"\bis_read\s*=\s*1\b"), "is_read = TRUE"),
     (re.compile(r"\binventory_lock\s*=\s*0\b"), "inventory_lock = FALSE"),
-    (re.compile(r"\bis_active\s*=\s*0\b"), "is_active = FALSE"),
-    (re.compile(r"\bis_active\s*=\s*1\b"), "is_active = TRUE"),
     (re.compile(r"\binventory_lock\s*=\s*1\b"), "inventory_lock = TRUE"),
 )
 

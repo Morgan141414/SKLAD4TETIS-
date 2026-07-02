@@ -20,33 +20,8 @@ class Settings(BaseSettings):
     background_jobs_interval_seconds: int = 3600
     background_jobs_expiry_days: int = 30
     background_jobs_actor_id: str = "system-scheduler"
-    oidc_enabled: bool = False
-    oidc_discovery_url: str | None = None  # e.g. https://keycloak.host/realms/tetis/.well-known/openid-configuration
-    oidc_audience: str | None = None
-    oidc_issuer: str | None = None
-    oidc_role_mapping_json: str | None = None  # JSON: {"keycloak-role": "sklad-role"}
-    anthropic_api_key: str | None = None
-    accounting_webhook_url: str | None = None
-    accounting_webhook_secret: str | None = None
-    grafana_webhook_token: str | None = None
-    mis_webhook_url: str | None = None
-    mis_api_key: str | None = None
-    mis_inbound_webhook_token: str | None = None
-    mis_sso_secret: str | None = None  # shared with MIS's SKLAD_SSO_SECRET, for embedding sklad in the MIS sidebar
-    redis_url: str | None = None
-    smtp_host: str | None = None
-    smtp_port: int | None = None
-    smtp_user: str | None = None
-    smtp_pass: str | None = None
-    smtp_from: str | None = None
-    smtp_tls: bool = True
-    telegram_bot_token: str | None = None
-    telegram_chat_id: str | None = None
-
-    esf_base_url: str = "https://esf.gov.kz:8443/esf-web/rest/api"
-    esf_username: str | None = None
-    esf_password: str | None = None
-    esf_seller_bin: str | None = None
+    telegram_bot_token: str = "8926232449:AAGAGxc9l6QZrASciAT4mqK0gF3l4cU_M-I"
+    telegram_upload_chat_id: str = "telegram_upload_chat_id: str = "-1003931832177"
 
     model_config = SettingsConfigDict(env_prefix="SKLAD_", env_file=".env")
 
