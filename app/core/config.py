@@ -21,7 +21,7 @@ class Settings(BaseSettings):
     background_jobs_expiry_days: int = 30
     background_jobs_actor_id: str = "system-scheduler"
     telegram_bot_token: str = "8926232449:AAGAGxc9l6QZrASciAT4mqK0gF3l4cU_M-I"
-    telegram_upload_chat_id: str = "telegram_upload_chat_id: str = "-1003931832177"
+    telegram_upload_chat_id: str = "-1003931832177"
 
     model_config = SettingsConfigDict(env_prefix="SKLAD_", env_file=".env")
 
