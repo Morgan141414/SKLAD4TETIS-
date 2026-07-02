@@ -9088,7 +9088,7 @@ class WarehouseService:
                 filters.append("type = ?")
                 params = (*params, item_type)
             row = connection.execute(
-                f"SELECT COUNT(*) FROM supplier_catalog WHERE {' AND '.join(filters)}",
+                f"SELECT COUNT(*) AS n FROM supplier_catalog WHERE {' AND '.join(filters)}",
                 params,
             ).fetchone()
             return int(row["n"]) if row else 0
@@ -9262,7 +9262,7 @@ class WarehouseService:
                 like = f"%{q}%"
                 params = (*params, like, like)
             row = connection.execute(
-                f"SELECT COUNT(*) FROM supplier_catalog sc WHERE {' AND '.join(filters)}",
+                f"SELECT COUNT(*) AS n FROM supplier_catalog sc WHERE {' AND '.join(filters)}",
                 params,
             ).fetchone()
             return int(row["n"]) if row else 0
