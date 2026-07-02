@@ -5981,3 +5981,208 @@ def compare_catalog_items(
         raise
     except Exception as error:
         raise map_error(error) from error
+
+
+# ── Service marketplace (repair/cleaning/logistics/consulting) ─────────────────
+
+class ServiceCatalogCreate(BaseModel):
+    type: str = Field(default="service", pattern="^(product|service)$")
+    title: str = Field(min_length=1, max_length=240)
+    description: str | None = Field(default=None, max_length=4000)
+    price: Decimal | None = Field(default=None, ge=0)
+    price_type: str = Field(default="negotiable", pattern="^(fixed|hourly|negotiable)$")
+    unit: str | None = Field(default=None, max_length=64)
+    service_category: str | None = Field(default=None, pattern="^(repair|cleaning|logistics|consulting|)$")
+
+
+class ServiceCatalogUpdate(ServiceCatalogCreate):
+    pass
+
+
+@router.get("/supplier/services", tags=["supplier-self"])
+def list_my_services(
+    type: str | None = None,
+    limit: int = 100,
+    offset: int = 0,
+    actor_ctx: ActorContext = Depends(get_actor_context),
+) -> Any:
+    if actor_ctx.supplier_id is None:
+        raise HTTPException(status_code=403, detail={"code": "forbidden", "message": "No supplier linked", "details": {}})
+    try:
+        svc = get_warehouse_service()
+        safe_limit = max(1, min(limit, 500))
+        safe_offset = max(0, offset)
+        return {
+            "items": svc.list_service_catalog(actor_ctx.supplier_id, type, safe_limit, safe_offset),
+            "total": svc.count_service_catalog(actor_ctx.supplier_id, type),
+            "limit": safe_limit,
+            "offset": safe_offset,
+        }
+    except Exception as error:
+        raise map_error(error) from error
+
+
+@router.post("/supplier/services", status_code=201, tags=["supplier-self"])
+def create_service_item(
+    body: ServiceCatalogCreate,
+    actor_ctx: ActorContext = Depends(get_actor_context),
+) -> Any:
+    if actor_ctx.supplier_id is None:
+        raise HTTPException(status_code=403, detail={"code": "forbidden", "message": "No supplier linked", "details": {}})
+    try:
+        svc = get_warehouse_service()
+        return svc.create_service_catalog_item(actor_ctx.supplier_id, actor_ctx.actor_id, body.model_dump())
+    except Exception as error:
+        raise map_error(error) from error
+
+
+@router.patch("/supplier/services/{item_id}", tags=["supplier-self"])
+def update_service_item(
+    item_id: int,
+    body: ServiceCatalogUpdate,
+    actor_ctx: ActorContext = Depends(get_actor_context),
+) -> Any:
+    if actor_ctx.supplier_id is None:
+        raise HTTPException(status_code=403, detail={"code": "forbidden", "message": "No supplier linked", "details": {}})
+    try:
+        svc = get_warehouse_service()
+        result = svc.update_service_catalog_item(item_id, actor_ctx.supplier_id, body.model_dump())
+        if result is None:
+            raise HTTPException(status_code=404, detail={"code": "not_found", "message": "Item not found or not yours", "details": {}})
+        return result
+    except HTTPException:
+        raise
+    except Exception as error:
+        raise map_error(error) from error
+
+
+@router.delete("/supplier/services/{item_id}", status_code=204, tags=["supplier-self"])
+def delete_service_item(
+    item_id: int,
+    actor_ctx: ActorContext = Depends(get_actor_context),
+) -> None:
+    if actor_ctx.supplier_id is None:
+        raise HTTPException(status_code=403, detail={"code": "forbidden", "message": "No supplier linked", "details": {}})
+    try:
+        svc = get_warehouse_service()
+        ok = svc.delete_service_catalog_item(item_id, actor_ctx.supplier_id)
+        if not ok:
+            raise HTTPException(status_code=404, detail={"code": "not_found", "message": "Item not found or not yours", "details": {}})
+    except HTTPException:
+        raise
+    except Exception as error:
+        raise map_error(error) from error
+
+
+@router.post("/supplier/services/{item_id}/image", tags=["supplier-self"])
+async def upload_service_item_image(
+    item_id: int,
+    file: UploadFile,
+    actor_ctx: ActorContext = Depends(get_actor_context),
+) -> Any:
+    import urllib.request as _urllib, json as _json
+    if actor_ctx.supplier_id is None:
+        raise HTTPException(status_code=403, detail={"code": "forbidden", "message": "No supplier linked", "details": {}})
+    settings = get_settings()
+    if not settings.telegram_bot_token or not settings.telegram_chat_id:
+        raise HTTPException(
+            status_code=503,
+            detail={"code": "not_configured", "message": "Image upload not configured", "details": {}},
+        )
+    try:
+        content = await file.read()
+        filename = file.filename or "photo.jpg"
+        boundary = b"----FormBoundary"
+        body = (
+            b"--" + boundary + b"\r\n"
+            b'Content-Disposition: form-data; name="chat_id"\r\n\r\n'
+            + settings.telegram_chat_id.encode() + b"\r\n"
+            b"--" + boundary + b"\r\n"
+            b'Content-Disposition: form-data; name="photo"; filename="' + filename.encode() + b'"\r\n'
+            b"Content-Type: " + (file.content_type or "image/jpeg").encode() + b"\r\n\r\n"
+            + content + b"\r\n"
+            b"--" + boundary + b"--\r\n"
+        )
+        req = _urllib.Request(
+            f"https://api.telegram.org/bot{settings.telegram_bot_token}/sendPhoto",
+            data=body,
+            headers={"Content-Type": f"multipart/form-data; boundary={boundary.decode()}"},
+            method="POST",
+        )
+        with _urllib.urlopen(req, timeout=30) as resp:
+            tg_data = _json.loads(resp.read())
+        if not tg_data.get("ok"):
+            raise HTTPException(
+                status_code=502,
+                detail={"code": "upload_failed", "message": "Telegram upload failed", "details": tg_data},
+            )
+        photos = tg_data["result"]["photo"]
+        file_id = max(photos, key=lambda p: p.get("file_size", 0))["file_id"]
+        svc = get_warehouse_service()
+        result = svc.set_service_catalog_item_image(item_id, actor_ctx.supplier_id, file_id)
+        if result is None:
+            raise HTTPException(status_code=404, detail={"code": "not_found", "message": "Item not found or not yours", "details": {}})
+        return result
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise map_error(exc) from exc
+
+
+@router.get("/services/{item_id}/image")
+def get_service_item_image(item_id: int) -> Any:
+    import urllib.request as _urllib, json as _json
+    settings = get_settings()
+    if not settings.telegram_bot_token:
+        raise HTTPException(status_code=404, detail="Not found")
+    try:
+        svc = get_warehouse_service()
+        connection = svc.database.connect()
+        try:
+            row = connection.execute(
+                "SELECT image_file_id FROM supplier_catalog WHERE id = ? AND is_active = 1",
+                (item_id,),
+            ).fetchone()
+        finally:
+            svc._close_connection(connection)
+        if not row or not row["image_file_id"]:
+            raise HTTPException(status_code=404, detail="No image")
+        file_id = row["image_file_id"]
+        req = _urllib.Request(
+            f"https://api.telegram.org/bot{settings.telegram_bot_token}/getFile?file_id={file_id}"
+        )
+        with _urllib.urlopen(req, timeout=10) as resp:
+            info = _json.loads(resp.read())
+        file_path = info["result"]["file_path"]
+        img_url = f"https://api.telegram.org/file/bot{settings.telegram_bot_token}/{file_path}"
+        with _urllib.urlopen(img_url, timeout=30) as img_resp:
+            content = img_resp.read()
+            content_type = img_resp.headers.get("Content-Type", "image/jpeg")
+        return Response(content=content, media_type=content_type, headers={"Cache-Control": "public, max-age=3600"})
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise map_error(exc) from exc
+
+
+@router.get("/marketplace/services")
+def list_service_marketplace_endpoint(
+    type: str | None = None,
+    service_category: str | None = None,
+    supplier_id: int | None = None,
+    q: str | None = None,
+    limit: int = 50,
+    offset: int = 0,
+) -> Any:
+    try:
+        svc = get_warehouse_service()
+        safe_limit = max(1, min(limit, 200))
+        safe_offset = max(0, offset)
+        return {
+            "items": svc.list_service_marketplace(type, service_category, supplier_id, q, safe_limit, safe_offset),
+            "total": svc.count_service_marketplace(type, service_category, supplier_id, q),
+            "limit": safe_limit,
+            "offset": safe_offset,
+        }
+    except Exception as error:
+        raise map_error(error) from error

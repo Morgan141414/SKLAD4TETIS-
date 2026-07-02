@@ -9042,3 +9042,229 @@ class WarehouseService:
             return [dict(r) for r in rows]
         finally:
             self._close_connection(connection)
+
+    # ── Service marketplace (repair/cleaning/logistics/consulting) ─────────────
+
+    def _service_catalog_select(self) -> str:
+        return """
+            SELECT sc.*, s.name AS supplier_name
+            FROM supplier_catalog sc
+            JOIN suppliers s ON s.id = sc.supplier_id
+        """
+
+    def list_service_catalog(
+        self,
+        supplier_id: int,
+        item_type: str | None = None,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> list[dict[str, Any]]:
+        connection = self.database.connect()
+        try:
+            filters = ["sc.supplier_id = ?"]
+            params: tuple[Any, ...] = (supplier_id,)
+            if item_type is not None:
+                filters.append("sc.type = ?")
+                params = (*params, item_type)
+            rows = connection.execute(
+                f"""
+                {self._service_catalog_select()}
+                WHERE {" AND ".join(filters)}
+                ORDER BY sc.created_at DESC, sc.id DESC
+                LIMIT ? OFFSET ?
+                """,
+                (*params, limit, offset),
+            ).fetchall()
+            return [dict(row) for row in rows]
+        finally:
+            self._close_connection(connection)
+
+    def count_service_catalog(self, supplier_id: int, item_type: str | None = None) -> int:
+        connection = self.database.connect()
+        try:
+            filters = ["supplier_id = ?"]
+            params: tuple[Any, ...] = (supplier_id,)
+            if item_type is not None:
+                filters.append("type = ?")
+                params = (*params, item_type)
+            row = connection.execute(
+                f"SELECT COUNT(*) FROM supplier_catalog WHERE {' AND '.join(filters)}",
+                params,
+            ).fetchone()
+            return int(row[0]) if row else 0
+        finally:
+            self._close_connection(connection)
+
+    def create_service_catalog_item(
+        self, supplier_id: int, actor_id: str, data: dict[str, Any]
+    ) -> dict[str, Any]:
+        with self.database.transaction() as connection:
+            now = now_iso()
+            item_id = insert_and_get_id(
+                connection,
+                """
+                INSERT INTO supplier_catalog
+                  (supplier_id, actor_id, type, title, description, price,
+                   price_type, unit, service_category, is_active, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
+                """,
+                (
+                    supplier_id,
+                    actor_id,
+                    data.get("type", "service"),
+                    data["title"],
+                    data.get("description"),
+                    data.get("price"),
+                    data.get("price_type", "negotiable"),
+                    data.get("unit"),
+                    data.get("service_category") or None,
+                    now,
+                    now,
+                ),
+            )
+            row = connection.execute(
+                f"{self._service_catalog_select()} WHERE sc.id = ?",
+                (item_id,),
+            ).fetchone()
+            return dict(row) if row else {}
+
+    def update_service_catalog_item(
+        self, item_id: int, supplier_id: int, data: dict[str, Any]
+    ) -> dict[str, Any] | None:
+        with self.database.transaction() as connection:
+            row = connection.execute(
+                "SELECT id FROM supplier_catalog WHERE id = ? AND supplier_id = ?",
+                (item_id, supplier_id),
+            ).fetchone()
+            if row is None:
+                return None
+            now = now_iso()
+            connection.execute(
+                """
+                UPDATE supplier_catalog
+                SET type = ?, title = ?, description = ?, price = ?,
+                    price_type = ?, unit = ?, service_category = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                (
+                    data.get("type", "service"),
+                    data["title"],
+                    data.get("description"),
+                    data.get("price"),
+                    data.get("price_type", "negotiable"),
+                    data.get("unit"),
+                    data.get("service_category") or None,
+                    now,
+                    item_id,
+                ),
+            )
+            updated = connection.execute(
+                f"{self._service_catalog_select()} WHERE sc.id = ?",
+                (item_id,),
+            ).fetchone()
+            return dict(updated) if updated else None
+
+    def delete_service_catalog_item(self, item_id: int, supplier_id: int) -> bool:
+        with self.database.transaction() as connection:
+            row = connection.execute(
+                "SELECT id FROM supplier_catalog WHERE id = ? AND supplier_id = ?",
+                (item_id, supplier_id),
+            ).fetchone()
+            if row is None:
+                return False
+            connection.execute(
+                "UPDATE supplier_catalog SET is_active = 0, updated_at = ? WHERE id = ?",
+                (now_iso(), item_id),
+            )
+            return True
+
+    def set_service_catalog_item_image(
+        self, item_id: int, supplier_id: int, file_id: str
+    ) -> dict[str, Any] | None:
+        with self.database.transaction() as connection:
+            row = connection.execute(
+                "SELECT id FROM supplier_catalog WHERE id = ? AND supplier_id = ? AND is_active = 1",
+                (item_id, supplier_id),
+            ).fetchone()
+            if row is None:
+                return None
+            connection.execute(
+                "UPDATE supplier_catalog SET image_file_id = ?, updated_at = ? WHERE id = ?",
+                (file_id, now_iso(), item_id),
+            )
+            updated = connection.execute(
+                f"{self._service_catalog_select()} WHERE sc.id = ?",
+                (item_id,),
+            ).fetchone()
+            return dict(updated) if updated else None
+
+    def list_service_marketplace(
+        self,
+        item_type: str | None = None,
+        service_category: str | None = None,
+        supplier_id: int | None = None,
+        q: str | None = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> list[dict[str, Any]]:
+        connection = self.database.connect()
+        try:
+            filters = ["sc.is_active = 1"]
+            params: tuple[Any, ...] = ()
+            if item_type is not None:
+                filters.append("sc.type = ?")
+                params = (*params, item_type)
+            if service_category is not None:
+                filters.append("sc.service_category = ?")
+                params = (*params, service_category)
+            if supplier_id is not None:
+                filters.append("sc.supplier_id = ?")
+                params = (*params, supplier_id)
+            if q:
+                filters.append("(sc.title ILIKE ? OR sc.description ILIKE ?)")
+                like = f"%{q}%"
+                params = (*params, like, like)
+            rows = connection.execute(
+                f"""
+                {self._service_catalog_select()}
+                WHERE {" AND ".join(filters)}
+                ORDER BY sc.created_at DESC, sc.id DESC
+                LIMIT ? OFFSET ?
+                """,
+                (*params, limit, offset),
+            ).fetchall()
+            return [dict(row) for row in rows]
+        finally:
+            self._close_connection(connection)
+
+    def count_service_marketplace(
+        self,
+        item_type: str | None = None,
+        service_category: str | None = None,
+        supplier_id: int | None = None,
+        q: str | None = None,
+    ) -> int:
+        connection = self.database.connect()
+        try:
+            filters = ["sc.is_active = 1"]
+            params: tuple[Any, ...] = ()
+            if item_type is not None:
+                filters.append("sc.type = ?")
+                params = (*params, item_type)
+            if service_category is not None:
+                filters.append("sc.service_category = ?")
+                params = (*params, service_category)
+            if supplier_id is not None:
+                filters.append("sc.supplier_id = ?")
+                params = (*params, supplier_id)
+            if q:
+                filters.append("(sc.title ILIKE ? OR sc.description ILIKE ?)")
+                like = f"%{q}%"
+                params = (*params, like, like)
+            row = connection.execute(
+                f"SELECT COUNT(*) FROM supplier_catalog sc WHERE {' AND '.join(filters)}",
+                params,
+            ).fetchone()
+            return int(row[0]) if row else 0
+        finally:
+            self._close_connection(connection)
