@@ -2,13 +2,29 @@
 <html lang="ru">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
     <meta name="theme-color" content="#25636f" />
     <link rel="manifest" href="manifest.webmanifest" />
     <title>Склад медицинской организации</title>
     <link rel="stylesheet" href="styles.css" />
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   </head>
   <body>
+    <!-- Barcode scanner overlay — lives outside #content so render() never destroys it -->
+    <div id="barcode-overlay" class="barcode-overlay" style="display:none" role="dialog" aria-modal="true" aria-label="Сканер штрихкода">
+      <div class="barcode-overlay-inner">
+        <div class="barcode-overlay-header">
+          <span id="barcode-overlay-title">Наведите камеру на штрихкод</span>
+          <div style="display:flex;align-items:center;gap:.5rem">
+            <button id="barcode-overlay-torch" type="button" aria-label="Фонарик" style="display:none">🔦</button>
+            <button id="barcode-overlay-close" type="button" aria-label="Закрыть сканер">✕</button>
+          </div>
+        </div>
+        <div id="barcode-reader"></div>
+        <div id="barcode-overlay-status" style="min-height:1.5rem;text-align:center;font-size:.9rem;color:#64748b;padding:.5rem 0"></div>
+      </div>
+    </div>
     <div class="app">
       <aside class="sidebar">
         <div class="brand">
@@ -17,6 +33,7 @@
             <strong>Склад</strong>
             <span>медицинский учет</span>
           </div>
+          <button id="nav-toggle" type="button" aria-label="Открыть меню" aria-expanded="false">&#9776;</button>
         </div>
         <nav class="nav" id="nav"></nav>
       </aside>
@@ -33,6 +50,11 @@
             <button id="become-supplier-button" class="secondary" type="button" style="display:none" title="Подать заявку на статус поставщика">Стать поставщиком</button>
             <button id="density-button" class="secondary" type="button" title="Сделать строки таблиц компактнее" aria-pressed="false">Компактно</button>
             <span id="api-status" class="status-dot muted">Проверяем связь</span>
+            <span id="offline-badge" class="offline-badge" style="display:none" title="Нет соединения — операции сохраняются в очередь">
+              📵 Офлайн
+              <span id="offline-queue-count" style="display:none"> · <strong id="offline-queue-num">0</strong> в очереди</span>
+            </span>
+            <button id="lang-toggle" class="secondary" type="button" title="Переключить язык / Тілді ауыстыру" style="font-weight:600;min-width:2.5rem">KZ</button>
             <button id="refresh-button" class="icon-button" title="Обновить данные">↻</button>
           </div>
         </header>
@@ -54,7 +76,6 @@
               <option value="nurse">Медсестра</option>
               <option value="doctor">Врач</option>
               <option value="other">Прочий пользователь</option>
-              <option value="supplier">Поставщик</option>
             </select>
           </label>
           <label>
@@ -64,7 +85,6 @@
             </select>
           </label>
           <p id="auth-context" class="auth-context full">Проверяем вход через Tetis</p>
-          <div id="supplier-context" class="supplier-context full"></div>
           <details class="advanced-settings full">
             <summary>Настройки администратора</summary>
             <div class="advanced-grid">
@@ -85,7 +105,65 @@
       </main>
     </div>
 
-    <script src="app.js?v=32"></script>
+
+    <div id="login-screen" style="display:none; position:fixed; inset:0; background:#f5f5f5; align-items:center; justify-content:center; z-index:1000">
+      <div style="background:white; padding:2rem; border-radius:8px; box-shadow:0 2px 16px rgba(0,0,0,0.12); min-width:320px; max-width:400px; text-align:center">
+        <div style="width:48px;height:48px;background:#2563eb;border-radius:12px;display:flex;align-items:center;justify-content:center;margin:0 auto .75rem;color:white;font-size:1.5rem">📦</div>
+        <h2 style="margin:0 0 .5rem">Склад</h2>
+        <p id="login-screen-message" style="color:#64748b; font-size:.9rem; margin:0 0 1.25rem">Для входа в склад войдите в свой аккаунт на tetis1.kz и откройте раздел «Склад».</p>
+        <a href="https://tetis1.kz/" style="display:block; width:100%; box-sizing:border-box; padding:.65rem; background:#2563eb; color:white; border:none; border-radius:6px; font-size:.95rem; text-decoration:none; font-weight:600">Перейти на tetis1.kz</a>
+        <div id="login-error" style="color:#dc2626; margin-top:.75rem; font-size:.83rem; display:none; background:#fff0f0; border-radius:6px; padding:8px 12px"></div>
+        <button id="show-supplier-application" type="button" class="secondary" style="width:100%; margin-top:.75rem; font-size:.88rem">Стать поставщиком</button>
+        <p style="margin-top:1rem;font-size:.78rem;color:#94a3b8">Уже вошли в tetis1.kz и видите эту страницу? <button onclick="location.reload()" style="background:none;border:none;color:#2563eb;cursor:pointer;font-size:.78rem;text-decoration:underline;padding:0">Нажмите здесь</button></p>
+      </div>
+    </div>
+
+    <div id="supplier-application-screen" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,.35); align-items:center; justify-content:center; z-index:1001; overflow:auto; padding:18px">
+      <div class="form-panel" style="width:100%; max-width:720px; margin:auto">
+        <div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start">
+          <div>
+            <h2 style="margin:0 0 .25rem">Заявка поставщика</h2>
+            <p style="color:var(--muted, #64748b);font-size:.9rem;margin-bottom:14px">После проверки Tetis выдаст вам доступ в портал поставщика на указанный email.</p>
+          </div>
+          <button id="hide-supplier-application" class="icon-button" type="button" title="Закрыть">×</button>
+        </div>
+        <form id="supplier-application-form" class="form-grid">
+          <label>Название компании
+            <input name="name" required maxlength="240" />
+          </label>
+          <label>БИН
+            <input name="bin" maxlength="32" />
+          </label>
+          <label>Email для входа
+            <input name="email" type="email" required maxlength="254" />
+          </label>
+          <label>Телефон
+            <input name="phone" maxlength="64" />
+          </label>
+          <label>Контактное лицо
+            <input name="contact_person" maxlength="200" />
+          </label>
+          <label>Город
+            <input name="city" maxlength="200" />
+          </label>
+          <label class="full">Адрес
+            <input name="address" maxlength="500" />
+          </label>
+          <label>Срок поставки, дней
+            <input name="delivery_days" type="number" min="1" max="365" />
+          </label>
+          <label class="full">Комментарий
+            <textarea name="notes" maxlength="2000"></textarea>
+          </label>
+          <div id="supplier-application-result" class="full" style="display:none"></div>
+          <div class="actions full">
+            <button class="primary" type="submit">Отправить заявку</button>
+          </div>
+        </form>
+      </div>
+    </div>
+    <script src="html5-qrcode.min.js"></script>
+    <script src="app.js?v=93"></script>
     <script>
       if ("serviceWorker" in navigator) {
         let refreshedByWorker = false;
@@ -94,10 +172,76 @@
           refreshedByWorker = true;
           window.location.reload();
         });
+
+        // Handle messages from the service worker
+        navigator.serviceWorker.addEventListener("message", (event) => {
+          if (!event.data) return;
+
+          if (event.data.type === "QUEUE_COUNT_UPDATE") {
+            const count = event.data.count;
+            const badge = document.getElementById("offline-badge");
+            const countBadge = document.getElementById("offline-queue-count");
+            const countNum = document.getElementById("offline-queue-num");
+            if (badge && count > 0) {
+              badge.style.display = "inline-flex";
+              if (countBadge && countNum) {
+                countBadge.style.display = "inline";
+                countNum.textContent = count;
+              }
+            } else if (badge && count === 0) {
+              if (countBadge) countBadge.style.display = "none";
+            }
+          }
+
+          if (event.data.type === "SYNC_COMPLETE") {
+            const { replayed, failed, remaining } = event.data;
+            if (replayed > 0) {
+              // Trigger data refresh in the app
+              window.dispatchEvent(new CustomEvent("sklad:sync-complete", { detail: { replayed, failed, remaining } }));
+              if (typeof showAlert === "function") {
+                showAlert(`Синхронизировано ${replayed} отложенных операций${failed > 0 ? `, ${failed} ошибок` : ""}.`);
+              }
+              // Refresh current view
+              if (typeof renderCurrentView === "function") renderCurrentView();
+            }
+          }
+        });
+
+        // Track online/offline status
+        function updateOnlineStatus() {
+          const badge = document.getElementById("offline-badge");
+          if (!badge) return;
+          if (!navigator.onLine) {
+            badge.style.display = "inline-flex";
+          } else {
+            // Online — try to replay queue
+            if (navigator.serviceWorker.controller) {
+              navigator.serviceWorker.controller.postMessage({ type: "REPLAY_QUEUE" });
+            }
+            // Ask SW for current count
+            navigator.serviceWorker.ready.then((registration) => {
+              if (registration.sync) {
+                registration.sync.register("sklad-offline-sync").catch(() => {});
+              }
+            });
+          }
+        }
+        window.addEventListener("online", updateOnlineStatus);
+        window.addEventListener("offline", () => {
+          const badge = document.getElementById("offline-badge");
+          if (badge) badge.style.display = "inline-flex";
+        });
+
         window.addEventListener("load", () => {
           navigator.serviceWorker
             .register("service-worker.js", { scope: "./" })
-            .then((registration) => registration.update());
+            .then((registration) => {
+              registration.update();
+              // Ask SW for pending queue count on load
+              if (navigator.serviceWorker.controller) {
+                navigator.serviceWorker.controller.postMessage({ type: "GET_QUEUE_COUNT" });
+              }
+            });
         });
       }
     </script>
