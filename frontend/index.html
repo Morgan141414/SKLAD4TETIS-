@@ -6,9 +6,10 @@
     <meta name="theme-color" content="#25636f" />
     <link rel="manifest" href="manifest.webmanifest" />
     <title>Склад медицинской организации</title>
-    <link rel="stylesheet" href="styles.css" />
+    <link rel="stylesheet" href="styles.css?v=2" />
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script>if(window.location.pathname.startsWith('/sklad')){document.documentElement.classList.add('embedded');}</script>
   </head>
   <body>
     <!-- Barcode scanner overlay — lives outside #content so render() never destroys it -->
@@ -48,8 +49,6 @@
             <input id="global-search" class="search-input" aria-label="Глобальный поиск по складу" placeholder="Поиск по товару, партии, складу" />
             <button id="supplier-mode-toggle" class="secondary" type="button" style="display:none" title="Переключиться между сотрудником склада и поставщиком">Режим: Поставщик</button>
             <button id="become-supplier-button" class="secondary" type="button" style="display:none" title="Подать заявку на статус поставщика">Стать поставщиком</button>
-            <button id="supplier-login-button" class="secondary" type="button" style="display:none" title="Войти в портал поставщика">Войти как поставщик</button>
-            <button id="supplier-logout-button" class="secondary" type="button" style="display:none" title="Выйти из портала поставщика">Выйти из портала</button>
             <button id="density-button" class="secondary" type="button" title="Сделать строки таблиц компактнее" aria-pressed="false">Компактно</button>
             <span id="api-status" class="status-dot muted">Проверяем связь</span>
             <span id="offline-badge" class="offline-badge" style="display:none" title="Нет соединения — операции сохраняются в очередь">
@@ -165,7 +164,7 @@
       </div>
     </div>
     <script src="html5-qrcode.min.js"></script>
-    <script src="app.js?v=93"></script>
+    <script src="app.js?v=94"></script>
     <script>
       if ("serviceWorker" in navigator) {
         let refreshedByWorker = false;

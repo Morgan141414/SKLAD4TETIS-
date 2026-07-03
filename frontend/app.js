@@ -8041,10 +8041,9 @@ function updateBecomeSupplierButton() {
 async function toggleSupplierMode() {
   state.ui.supplierMode = !state.ui.supplierMode;
   if (state.ui.supplierMode) {
-    // If not authenticated as supplier, show login modal and abort
+    // Supplier access requires Tetis SSO — no separate login
     if (state.auth.source !== "tetis" && state.auth.source !== "login") {
       state.ui.supplierMode = false;
-      showSupplierLoginModal();
       return;
     }
     // Default to "profile" (shows dashboard stats) for approved suppliers, "my-applications" for applicants
