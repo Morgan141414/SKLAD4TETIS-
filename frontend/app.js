@@ -839,7 +839,7 @@ function applyActorProfile(profile) {
       : "Демо-режим: роль и доступ задаются вручную.";
   }
   state.auth.supplierId = profile.supplier_id ?? null;
-  const canBeSupplier = state.auth.source === "demo" || ((profile.roles || []).includes("supplier") && profile.supplier_id != null);
+  const canBeSupplier = (profile.roles || []).includes("supplier") && profile.supplier_id != null;
   const supplierToggle = el("supplier-mode-toggle");
   if (supplierToggle) {
     supplierToggle.style.display = canBeSupplier ? "" : "none";
@@ -7560,13 +7560,7 @@ function bindSupplierActions() {
     });
   });
 
-  // Load verification docs when profile view active
-  if (state.ui.supplierView === "profile") {
-    request("/supplier/verification-docs").then((docs) => {
-      state.data.supplierPortal.verificationDocs = docs;
-      render();
-    }).catch(() => {});
-  }
+  // Verification docs are loaded in loadSupplierPortalData() to avoid render loops
 
   // Delete verification doc
   document.querySelectorAll("[data-del-vdoc]").forEach((btn) => {
@@ -8019,6 +8013,7 @@ async function loadSupplierPortalData() {
     state.data.supplierPortal.stats = await request(`/supplier/stats`).catch(() => null);
     state.data.supplierPortal.orders = await request(`/supplier/orders?limit=100`).catch(() => ({ items: [], total: 0 }));
     state.data.supplierPortal.catalogAnalytics = await request(`/supplier/catalog/analytics`).catch(() => []);
+    state.data.supplierPortal.verificationDocs = await request(`/supplier/verification-docs`).catch(() => []);
   }
   state.data.supplierPortal.myApplications = await request(`/supplier/my-applications`).catch(() => []);
   updateBecomeSupplierButton();
@@ -8046,6 +8041,12 @@ function updateBecomeSupplierButton() {
 async function toggleSupplierMode() {
   state.ui.supplierMode = !state.ui.supplierMode;
   if (state.ui.supplierMode) {
+    // If not authenticated as supplier, show login modal and abort
+    if (state.auth.source !== "tetis" && state.auth.source !== "login") {
+      state.ui.supplierMode = false;
+      showSupplierLoginModal();
+      return;
+    }
     // Default to "profile" (shows dashboard stats) for approved suppliers, "my-applications" for applicants
     const pendingInq = (state.data.supplierPortal.inquiries || []).filter((i) => i.status === "pending").length;
     state.ui.supplierView = state.auth.supplierId
