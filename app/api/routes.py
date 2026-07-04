@@ -568,6 +568,62 @@ def exchange_tetis_token(
     return TokenResponse(access_token=sklad_token)
 
 
+@router.post("/cameras-token", tags=["auth"])
+def get_cameras_token(
+    actor_ctx: ActorContext = Depends(get_actor_context),
+) -> dict:
+    """Issue a short-lived cameras-system JWT for the current sklad user.
+
+    The cameras backend verifies this token at POST /api/sso/tetis-exchange
+    using the shared CAMERAS_SSO_SECRET / SKLAD_CAMERAS_SSO_SECRET.
+    """
+    settings = get_settings()
+    if not settings.cameras_sso_secret:
+        raise HTTPException(
+            status_code=503,
+            detail={"code": "cameras_not_configured", "message": "Camera system is not enabled on this server", "details": {}},
+        )
+
+    svc = get_warehouse_service()
+
+    # Resolve the company identifier (tetis_org_id from warehouses).
+    # Falls back to the smallest warehouse_id so isolation is always enforced.
+    tenant_id: int | None = None
+    if actor_ctx.warehouse_ids:
+        org_id_str = svc.get_tetis_org_id_for_warehouses(list(actor_ctx.warehouse_ids))
+        if org_id_str:
+            try:
+                tenant_id = int(org_id_str)
+            except (ValueError, TypeError):
+                import hashlib as _hl
+                tenant_id = int(_hl.sha256(org_id_str.encode()).hexdigest()[:8], 16) % 2147483647
+
+    if tenant_id is None:
+        if actor_ctx.warehouse_ids:
+            tenant_id = min(actor_ctx.warehouse_ids)
+        else:
+            raise HTTPException(
+                status_code=403,
+                detail={"code": "no_warehouse_scope", "message": "No warehouse scope assigned", "details": {}},
+            )
+
+    # Map sklad role to cameras role
+    role_names = {r.value if hasattr(r, "value") else str(r) for r in actor_ctx.roles}
+    cameras_role = "admin" if role_names & {"warehouse_manager", "head_nurse"} else "employee"
+
+    import time as _time
+    from app.security.tokens import encode_jwt_hs256 as _encode
+    now = int(_time.time())
+    cameras_payload = {
+        "org_id": str(tenant_id),
+        "role": cameras_role,
+        "iat": now,
+        "exp": now + 900,  # 15 minutes — cameras frontend re-exchanges on page load
+    }
+    token = _encode(cameras_payload, settings.cameras_sso_secret)
+    return {"access_token": token, "token_type": "bearer"}
+
+
 @router.get("/users", response_model=list[UserOut], tags=["users"])
 def list_users(actor_ctx: ActorContext = Depends(get_actor_context)) -> list[UserOut]:
     try:

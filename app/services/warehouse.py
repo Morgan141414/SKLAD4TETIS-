@@ -1871,6 +1871,21 @@ class WarehouseService:
         finally:
             self._close_connection(connection)
 
+    def get_tetis_org_id_for_warehouses(self, warehouse_ids: list[int]) -> str | None:
+        """Reverse lookup: given a list of warehouse IDs, return the shared tetis_org_id."""
+        if not warehouse_ids:
+            return None
+        connection = self.database.connect()
+        try:
+            placeholders = ','.join('?' * len(warehouse_ids))
+            row = connection.execute(
+                f"SELECT tetis_org_id FROM warehouses WHERE id IN ({placeholders}) AND tetis_org_id IS NOT NULL LIMIT 1",
+                warehouse_ids,
+            ).fetchone()
+            return row["tetis_org_id"] if row else None
+        finally:
+            self._close_connection(connection)
+
     def create_sensor_device(
         self, data: SensorDeviceCreate, actor_id: str = "system"
     ) -> dict[str, Any]:

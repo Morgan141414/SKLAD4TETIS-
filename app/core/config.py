@@ -33,6 +33,7 @@ class Settings(BaseSettings):
     mis_api_key: str | None = None
     mis_inbound_webhook_token: str | None = None
     mis_sso_secret: str | None = None  # shared with MIS's SKLAD_SSO_SECRET, for embedding sklad in the MIS sidebar
+    cameras_sso_secret: str | None = None  # shared with cameras backend CAMERAS_SSO_SECRET
     redis_url: str | None = None
     smtp_host: str | None = None
     smtp_port: int | None = None
