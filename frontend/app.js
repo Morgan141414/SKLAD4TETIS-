@@ -561,6 +561,7 @@ const views = [
   ["supplier-map", `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 21s-7-6.5-7-11.5a7 7 0 1 1 14 0C19 14.5 12 21 12 21z"/><circle cx="12" cy="9.5" r="2.5"/></svg>`, "Карта поставщиков"],
   ["auctions", `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><line x1="4" y1="20" x2="20" y2="20"/><polyline points="4 14 9 9 13 13 20 5"/><polyline points="15 5 20 5 20 10"/></svg>`, "Аукционы"],
   ["marketplace", `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3h18l-2 9H5L3 3z"/><path d="M5 12v6a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-6"/><path d="M9 21v-6h6v6"/></svg>`, "Маркетплейс"],
+  ["cameras", `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M23 7 16 12l7 5V7z"/><rect x="1" y="5" width="15" height="14" rx="2"/></svg>`, "Камеры"],
   ["support", `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 16v-1.5c1.66 0 3-1.12 3-2.5S13.66 9.5 12 9.5 9 10.62 9 12"/><line x1="12" y1="18.5" x2="12" y2="18.51"/></svg>`, "Поддержка"],
 ];
 
@@ -569,7 +570,7 @@ const navGroups = [
   { label: "Ежедневные операции", ids: ["tablet-writeoff", "stock", "operations", "repacking", "returns", "reservations"] },
   { label: "Снабжение", ids: ["receipts", "purchase-requests", "supplier-map", "auctions", "marketplace"] },
   { label: "Учёт и документы", ids: ["catalog", "documents", "movements", "inventory", "conditions"] },
-  { label: "Аналитика", ids: ["analytics", "notifications"] },
+  { label: "Аналитика", ids: ["analytics", "notifications", "cameras"] },
   { label: "Администрирование", ids: ["audit", "users"] },
   { label: "Помощь", ids: ["support"] },
 ];
@@ -6711,6 +6712,53 @@ function initBarcodeOverlay() {
   });
 }
 
+async function renderCameras() {
+  el("main").innerHTML = `
+    <div style="display:flex;align-items:center;justify-content:center;height:50vh;">
+      <div style="text-align:center;">
+        <div style="width:2rem;height:2rem;border:3px solid var(--c-border);border-top-color:var(--c-primary,#2563eb);border-radius:50%;animation:spin .7s linear infinite;margin:0 auto 1rem"></div>
+        <p style="color:var(--c-muted)">Подключение к системе камер...</p>
+      </div>
+    </div>`;
+  try {
+    // Get cameras SSO token from sklad backend
+    const sstResp = await request("/cameras-token", { method: "POST" });
+    if (!sstResp.ok) {
+      const err = await sstResp.json().catch(() => ({}));
+      throw new Error(err?.detail?.message || "Система камер не настроена на этом сервере");
+    }
+    const { access_token: sstToken } = await sstResp.json();
+    // Exchange for cameras JWT
+    const exchResp = await fetch("/cameras-api/sso/tetis-exchange", {
+      method: "POST",
+      headers: { "Authorization": `Bearer ${sstToken}` },
+    });
+    if (!exchResp.ok) {
+      throw new Error("Ошибка аутентификации в системе камер");
+    }
+    const { access_token: camerasToken } = await exchResp.json();
+    // Store cameras JWT (cameras SPA reads from localStorage.token)
+    try { localStorage.setItem("token", camerasToken); } catch (_) {}
+    // Embed cameras SPA
+    el("main").innerHTML = `
+      <div style="position:relative;height:calc(100vh - 60px);">
+        <iframe
+          src="${APP_BASE}/cameras/"
+          style="width:100%;height:100%;border:none;display:block;"
+          allow="autoplay; fullscreen"
+          title="Камеры видеонаблюдения"
+        ></iframe>
+      </div>`;
+  } catch (err) {
+    el("main").innerHTML = `
+      <div style="padding:2rem;max-width:480px;margin:0 auto;text-align:center;">
+        <svg style="width:3rem;height:3rem;color:var(--c-warning,#d97706);margin-bottom:1rem" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="12" r="9"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+        <p style="font-weight:600;margin-bottom:.5rem">${err.message}</p>
+        <p style="color:var(--c-muted);font-size:.875rem">Обратитесь к администратору для настройки системы камер.</p>
+      </div>`;
+  }
+}
+
 function renderSupport() {
   return `
     <div style="max-width:680px;margin:0 auto">
@@ -6769,6 +6817,7 @@ const renderers = {
   auctions: renderAuctions,
   marketplace: renderMarketplace,
   support: renderSupport,
+  cameras: renderCameras,
 };
 
 
