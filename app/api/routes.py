@@ -301,6 +301,10 @@ def login(body: LoginRequest) -> TokenResponse:
     }
     if user.get("department"):
         payload["department"] = user["department"]
+    if user.get("supplier_id") is not None:
+        payload["supplier_id"] = user["supplier_id"]
+        if "supplier" not in roles:
+            payload["roles"] = roles + ["supplier"]
     from app.security.tokens import encode_jwt_hs256
     token = encode_jwt_hs256(payload, settings.jwt_hmac_secret)
     return TokenResponse(access_token=token)
