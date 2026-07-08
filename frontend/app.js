@@ -6711,6 +6711,22 @@ function initBarcodeOverlay() {
     if (e.target === overlay) { stopBarcodeScanner(); render(); }
   });
 }
+
+async function renderCameras() {
+  el("main").innerHTML = `
+    <div style="display:flex;align-items:center;justify-content:center;height:50vh;">
+      <div style="text-align:center;">
+        <div style="width:2rem;height:2rem;border:3px solid var(--c-border);border-top-color:var(--c-primary,#2563eb);border-radius:50%;animation:spin .7s linear infinite;margin:0 auto 1rem"></div>
+        <p style="color:var(--c-muted)">Подключение к системе камер...</p>
+      </div>
+    </div>`;
+  try {
+    // Get cameras SSO token from sklad backend
+    const sstResp = await request("/cameras-token", { method: "POST" });
+    if (!sstResp.ok) {
+      const err = await sstResp.json().catch(() => ({}));
+      throw new Error(err?.detail?.message || "Система камер не настроена на этом сервере");
+    }
     const { access_token: sstToken } = await sstResp.json();
     // Exchange for cameras JWT
     const exchResp = await fetch("/cameras-api/sso/tetis-exchange", {
@@ -6801,6 +6817,7 @@ const renderers = {
   auctions: renderAuctions,
   marketplace: renderMarketplace,
   support: renderSupport,
+  cameras: renderCameras,
 };
 
 
