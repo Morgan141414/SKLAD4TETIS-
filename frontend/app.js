@@ -661,16 +661,68 @@ async function requestSkladTokenFromTetis() {
 }
 
 async function showLoginScreen() {
-  // Sklad is only accessed through tetis1.kz — no standalone login screen needed.
-  // Show a non-blocking top banner instead.
-  const existing = document.getElementById("auth-error-banner");
-  if (existing) return;
-  const banner = document.createElement("div");
-  banner.id = "auth-error-banner";
-  banner.style.cssText = "position:fixed;top:0;left:0;right:0;background:#dc2626;color:#fff;text-align:center;padding:10px 16px;font-size:.9rem;font-weight:500;z-index:9999;display:flex;align-items:center;justify-content:center;gap:16px";
-  banner.innerHTML = `<span>Не удалось подключиться к складу. Обновите страницу или войдите в <a href="https://tetis1.kz/" style="color:#fff;font-weight:700;text-decoration:underline">tetis1.kz</a> заново.</span>
-    <button onclick="location.reload()" style="background:rgba(255,255,255,.2);border:1px solid rgba(255,255,255,.5);color:#fff;border-radius:6px;padding:4px 12px;cursor:pointer;font-size:.85rem">Обновить</button>`;
-  document.body.insertAdjacentElement("afterbegin", banner);
+  const isTetis = window.location.hostname === "tetis1.kz" || window.location.hostname === "www.tetis1.kz";
+  if (isTetis) {
+    const existing = document.getElementById("auth-error-banner");
+    if (existing) return;
+    const banner = document.createElement("div");
+    banner.id = "auth-error-banner";
+    banner.style.cssText = "position:fixed;top:0;left:0;right:0;background:#dc2626;color:#fff;text-align:center;padding:10px 16px;font-size:.9rem;font-weight:500;z-index:9999;display:flex;align-items:center;justify-content:center;gap:16px";
+    banner.innerHTML = "<span>\u041d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u043f\u043e\u0434\u043a\u043b\u044e\u0447\u0438\u0442\u044c\u0441\u044f \u043a \u0441\u043a\u043b\u0430\u0434\u0443. \u041e\u0431\u043d\u043e\u0432\u0438\u0442\u0435 \u0441\u0442\u0440\u0430\u043d\u0438\u0446\u0443 \u0438\u043b\u0438 \u0432\u043e\u0439\u0434\u0438\u0442\u0435 \u0432 <a href=\"https://tetis1.kz/\" style=\"color:#fff;font-weight:700;text-decoration:underline\">tetis1.kz</a> \u0437\u0430\u043d\u043e\u0432\u043e.</span><button onclick=\"location.reload()\" style=\"background:rgba(255,255,255,.2);border:1px solid rgba(255,255,255,.5);color:#fff;border-radius:6px;padding:4px 12px;cursor:pointer;font-size:.85rem\">\u041e\u0431\u043d\u043e\u0432\u0438\u0442\u044c</button>";
+    document.body.insertAdjacentElement("afterbegin", banner);
+  } else {
+    const loginScreen = el("login-screen");
+    if (!loginScreen) return;
+    const tetisBlock = document.getElementById("login-tetis-block");
+    const directBlock = document.getElementById("login-direct-block");
+    if (tetisBlock) tetisBlock.style.display = "none";
+    if (directBlock) directBlock.style.display = "";
+    loginScreen.style.display = "flex";
+    const submitBtn = document.getElementById("login-direct-submit");
+    if (submitBtn && !submitBtn._bound) {
+      submitBtn._bound = true;
+      const doLogin = async () => {
+        const username = (document.getElementById("login-direct-username") || {}).value || "";
+        const password = (document.getElementById("login-direct-password") || {}).value || "";
+        const errEl = document.getElementById("login-error");
+        if (!username.trim() || !password) {
+          if (errEl) { errEl.textContent = "\u0412\u0432\u0435\u0434\u0438\u0442\u0435 \u043b\u043e\u0433\u0438\u043d \u0438 \u043f\u0430\u0440\u043e\u043b\u044c"; errEl.style.display = ""; }
+          return;
+        }
+        submitBtn.disabled = true;
+        submitBtn.textContent = "\u0412\u0445\u043e\u0436\u0443\u2026";
+        try {
+          const resp = await fetch(API + "/auth/login", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ username: username.trim(), password }),
+          });
+          const data = await resp.json().catch(() => ({}));
+          if (!resp.ok) {
+            if (errEl) { errEl.textContent = (data && (data.detail && data.detail.message || data.detail)) || "\u041d\u0435\u0432\u0435\u0440\u043d\u044b\u0439 \u043b\u043e\u0433\u0438\u043d \u0438\u043b\u0438 \u043f\u0430\u0440\u043e\u043b\u044c"; errEl.style.display = ""; }
+            submitBtn.disabled = false;
+            submitBtn.textContent = "\u0412\u043e\u0439\u0442\u0438";
+            return;
+          }
+          const token = data.access_token;
+          try { localStorage.setItem("sklad_supplier_token", token); } catch(_) {}
+          state.auth.loginToken = token;
+          state.auth.source = "login";
+          el("auth-token").value = token;
+          loginScreen.style.display = "none";
+          if (errEl) errEl.style.display = "none";
+          await loadAll();
+        } catch(e) {
+          if (errEl) { errEl.textContent = "\u041e\u0448\u0438\u0431\u043a\u0430 \u0441\u043e\u0435\u0434\u0438\u043d\u0435\u043d\u0438\u044f: " + e.message; errEl.style.display = ""; }
+          submitBtn.disabled = false;
+          submitBtn.textContent = "\u0412\u043e\u0439\u0442\u0438";
+        }
+      };
+      submitBtn.addEventListener("click", doLogin);
+      const pwdEl = document.getElementById("login-direct-password");
+      if (pwdEl) pwdEl.addEventListener("keydown", function(e) { if (e.key === "Enter") doLogin(); });
+    }
+  }
 }
 
 function hideLoginScreen() {
