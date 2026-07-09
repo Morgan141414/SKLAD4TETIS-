@@ -563,6 +563,7 @@ const views = [
   ["marketplace", `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3h18l-2 9H5L3 3z"/><path d="M5 12v6a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-6"/><path d="M9 21v-6h6v6"/></svg>`, "Маркетплейс"],
   
   ["support", `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 16v-1.5c1.66 0 3-1.12 3-2.5S13.66 9.5 12 9.5 9 10.62 9 12"/><line x1="12" y1="18.5" x2="12" y2="18.51"/></svg>`, "Поддержка"],
+  ["my-profile", `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="4"/><path d="M4 20c0-4 3.6-7 8-7s8 3 8 7"/></svg>`, "Мой профиль"],
 ];
 
 const navGroups = [
@@ -573,6 +574,7 @@ const navGroups = [
   { label: "Аналитика", ids: ["analytics", "notifications"] },
   { label: "Администрирование", ids: ["audit", "users"] },
   { label: "Помощь", ids: ["support"] },
+  { label: "Аккаунт", ids: ["my-profile"] },
 ];
 
 const limitedRoleViews = new Set(["dashboard", "tablet-writeoff", "stock", "movements", "notifications", "support"]);
@@ -958,10 +960,47 @@ function applyActorProfile(profile) {
       : "Демо-режим: роль и доступ задаются вручную.";
   }
   state.auth.supplierId = profile.supplier_id ?? null;
+  state.auth.fullName = profile.full_name || profile.actor_id || "";
   const canBeSupplier = (profile.roles || []).includes("supplier");
+
+  // Topbar user info for standalone (login source)
+  const isStandalone = state.auth.source === "login";
+  const topbarUser = el("topbar-user-info");
+  if (topbarUser) {
+    topbarUser.style.display = isStandalone ? "flex" : "none";
+    if (isStandalone) {
+      const roleLabel = canBeSupplier ? "Поставщик" : profile.roles?.includes("warehouse_manager") ? "Менеджер" : (profile.roles?.[0] || "");
+      topbarUser.innerHTML = `
+        <span style="font-size:.85rem;color:var(--muted)">
+          <strong style="color:var(--text)">${escapeHtml(state.auth.fullName)}</strong>
+          <span style="background:#e5e7eb;border-radius:4px;padding:1px 6px;font-size:.75rem;margin-left:4px">${escapeHtml(roleLabel)}</span>
+        </span>
+        <button onclick="navigateTo('my-profile')" class="secondary" type="button" style="padding:.3rem .7rem;font-size:.8rem">Профиль</button>
+        <button id="standalone-logout" class="secondary" type="button" style="padding:.3rem .7rem;font-size:.8rem">Выйти</button>
+      `;
+      el("standalone-logout")?.addEventListener("click", () => {
+        try { localStorage.removeItem("sklad_supplier_token"); } catch(_) {}
+        state.auth.loginToken = "";
+        state.auth.source = "demo";
+        el("auth-token").value = "";
+        location.reload();
+      });
+    }
+  }
+
+  // Hide demo auth fields for standalone users
+  const opPanel = document.querySelector(".work-context");
+  if (opPanel) opPanel.style.display = isStandalone ? "none" : "";
+
   const supplierToggle = el("supplier-mode-toggle");
   if (supplierToggle) {
     supplierToggle.style.display = canBeSupplier ? "" : "none";
+    if (canBeSupplier) {
+      supplierToggle.textContent = state.ui.supplierMode ? "← Режим склада" : "Кабинет поставщика";
+      supplierToggle.style.fontWeight = "600";
+      supplierToggle.style.background = state.ui.supplierMode ? "" : "#2563eb";
+      supplierToggle.style.color = state.ui.supplierMode ? "" : "#fff";
+    }
     if (!canBeSupplier) state.ui.supplierMode = false;
   }
   const becomeSupplierButton = el("become-supplier-button");
@@ -7000,6 +7039,135 @@ function applyStaticI18n() {
   if (langBtn) langBtn.textContent = getLang() === "kz" ? "RU" : "KZ";
 }
 
+// ── Профиль пользователя ─────────────────────────────────────
+function navigateTo(view) {
+  state.view = view;
+  render();
+}
+
+function renderMyProfile() {
+  const profile = state.auth.actor || {};
+  const isStandalone = state.auth.source === "login";
+  const roles = profile.roles || [];
+  const roleLabel = roles.includes("supplier") ? "Поставщик" : roles.includes("warehouse_manager") ? "Менеджер склада" : roles[0] || "—";
+  const supplierId = profile.supplier_id;
+
+  return `
+    <div class="panel span-12" style="max-width:600px">
+      <h2 style="margin:0 0 1.5rem">Мой профиль</h2>
+
+      <div style="background:#f8fafc;border-radius:8px;padding:1.25rem;margin-bottom:1.5rem">
+        <div style="display:flex;align-items:center;gap:1rem;margin-bottom:1rem">
+          <div style="width:56px;height:56px;background:#2563eb;border-radius:50%;display:flex;align-items:center;justify-content:center;color:#fff;font-size:1.4rem;font-weight:700">
+            ${escapeHtml((state.auth.fullName||"?")[0]?.toUpperCase()||"?")}
+          </div>
+          <div>
+            <div style="font-size:1.1rem;font-weight:600">${escapeHtml(state.auth.fullName || profile.actor_id || "")}</div>
+            <div style="font-size:.85rem;color:var(--muted)">@${escapeHtml(profile.actor_id || "")}</div>
+          </div>
+        </div>
+        <div style="display:flex;gap:.5rem;flex-wrap:wrap">
+          <span style="background:#dbeafe;color:#1d4ed8;border-radius:20px;padding:3px 10px;font-size:.8rem;font-weight:500">${escapeHtml(roleLabel)}</span>
+          ${supplierId ? `<span style="background:#d1fae5;color:#065f46;border-radius:20px;padding:3px 10px;font-size:.8rem;font-weight:500">Поставщик #${supplierId}</span>` : ""}
+        </div>
+      </div>
+
+      ${isStandalone ? `
+      <div style="border:1px solid var(--border);border-radius:8px;padding:1.25rem;margin-bottom:1rem">
+        <h3 style="margin:0 0 1rem;font-size:1rem">Изменить имя</h3>
+        <label style="display:block;font-size:.85rem;font-weight:500;margin-bottom:4px">Полное имя</label>
+        <input id="profile-fullname" type="text" value="${escapeAttr(state.auth.fullName || "")}"
+          style="width:100%;box-sizing:border-box;padding:.55rem .75rem;border:1px solid #d1d5db;border-radius:6px;font-size:.9rem;margin-bottom:.75rem"/>
+        <button data-profile-save-name class="primary" type="button" style="padding:.5rem 1.25rem">Сохранить имя</button>
+      </div>
+
+      <div style="border:1px solid var(--border);border-radius:8px;padding:1.25rem;margin-bottom:1rem">
+        <h3 style="margin:0 0 1rem;font-size:1rem">Сменить пароль</h3>
+        <label style="display:block;font-size:.85rem;font-weight:500;margin-bottom:4px">Текущий пароль</label>
+        <input id="profile-old-pw" type="password" autocomplete="current-password"
+          style="width:100%;box-sizing:border-box;padding:.55rem .75rem;border:1px solid #d1d5db;border-radius:6px;font-size:.9rem;margin-bottom:.75rem"/>
+        <label style="display:block;font-size:.85rem;font-weight:500;margin-bottom:4px">Новый пароль</label>
+        <input id="profile-new-pw" type="password" autocomplete="new-password" placeholder="Минимум 8 символов"
+          style="width:100%;box-sizing:border-box;padding:.55rem .75rem;border:1px solid #d1d5db;border-radius:6px;font-size:.9rem;margin-bottom:.75rem"/>
+        <label style="display:block;font-size:.85rem;font-weight:500;margin-bottom:4px">Повторите пароль</label>
+        <input id="profile-new-pw2" type="password" autocomplete="new-password"
+          style="width:100%;box-sizing:border-box;padding:.55rem .75rem;border:1px solid #d1d5db;border-radius:6px;font-size:.9rem;margin-bottom:.75rem"/>
+        <div id="profile-pw-msg" style="display:none;margin-bottom:.75rem;padding:8px 12px;border-radius:6px;font-size:.85rem"></div>
+        <button data-profile-save-pw class="primary" type="button" style="padding:.5rem 1.25rem">Сменить пароль</button>
+      </div>
+      ` : ""}
+
+      ${supplierId ? `
+      <div style="border:1px solid var(--border);border-radius:8px;padding:1.25rem">
+        <h3 style="margin:0 0 .75rem;font-size:1rem">Кабинет поставщика</h3>
+        <p style="color:var(--muted);font-size:.9rem;margin:0 0 .75rem">Переключитесь в режим поставщика чтобы управлять каталогом и заявками.</p>
+        <button onclick="el('supplier-mode-toggle')?.click()" class="primary" type="button"
+          style="background:#2563eb;color:#fff;padding:.5rem 1.25rem">Открыть кабинет поставщика →</button>
+      </div>
+      ` : ""}
+    </div>
+  `;
+}
+
+function bindMyProfileActions() {
+  document.querySelector("[data-profile-save-name]")?.addEventListener("click", async () => {
+    const btn = document.querySelector("[data-profile-save-name]");
+    const fullname = (el("profile-fullname")?.value || "").trim();
+    if (!fullname) return;
+    btn.disabled = true; btn.textContent = "Сохраняем...";
+    try {
+      const resp = await fetch(API + "/me/profile", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json", "Authorization": "Bearer " + state.auth.loginToken },
+        body: JSON.stringify({ full_name: fullname })
+      });
+      if (resp.ok) {
+        state.auth.fullName = fullname;
+        if (state.auth.actor) state.auth.actor.full_name = fullname;
+        btn.textContent = "✓ Сохранено";
+        const topbarUser = el("topbar-user-info");
+        if (topbarUser) applyActorProfile(state.auth.actor);
+      } else {
+        btn.textContent = "Ошибка";
+      }
+    } catch(e) { btn.textContent = "Ошибка"; }
+    finally { setTimeout(() => { btn.disabled=false; btn.textContent="Сохранить имя"; }, 2000); }
+  });
+
+  document.querySelector("[data-profile-save-pw]")?.addEventListener("click", async () => {
+    const btn = document.querySelector("[data-profile-save-pw]");
+    const msgEl = el("profile-pw-msg");
+    const oldPw = el("profile-old-pw")?.value || "";
+    const newPw = el("profile-new-pw")?.value || "";
+    const newPw2 = el("profile-new-pw2")?.value || "";
+    const showMsg = (text, ok) => {
+      msgEl.textContent = text;
+      msgEl.style.display = "";
+      msgEl.style.background = ok ? "#f0fdf4" : "#fff0f0";
+      msgEl.style.color = ok ? "#16a34a" : "#dc2626";
+    };
+    if (!oldPw || !newPw) return showMsg("Заполните все поля", false);
+    if (newPw.length < 8) return showMsg("Новый пароль — минимум 8 символов", false);
+    if (newPw !== newPw2) return showMsg("Пароли не совпадают", false);
+    btn.disabled = true; btn.textContent = "Меняем...";
+    try {
+      const resp = await fetch(API + "/me/password", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "Authorization": "Bearer " + state.auth.loginToken },
+        body: JSON.stringify({ current_password: oldPw, new_password: newPw })
+      });
+      const data = await resp.json().catch(() => ({}));
+      if (resp.ok) {
+        showMsg("✓ Пароль успешно изменён", true);
+        el("profile-old-pw").value = ""; el("profile-new-pw").value = ""; el("profile-new-pw2").value = "";
+      } else {
+        showMsg(data?.detail?.message || data?.detail || "Ошибка", false);
+      }
+    } catch(e) { showMsg("Ошибка соединения", false); }
+    finally { setTimeout(() => { btn.disabled=false; btn.textContent="Сменить пароль"; }, 2000); }
+  });
+}
+
 function render() {
   if (state.ui.supplierMode) {
     renderSupplierNav();
@@ -7024,6 +7192,7 @@ function render() {
   bindActions();
   if (state.view === "supplier-map") initSupplierMap();
   if (state.view === "marketplace") initMarketplace();
+  if (state.view === "my-profile") bindMyProfileActions();
   applyDensity();
 }
 
@@ -10261,7 +10430,11 @@ el("supplier-logout-button")?.addEventListener("click", () => supplierLogout());
 el("supplier-mode-toggle")?.addEventListener("click", async () => {
   await toggleSupplierMode();
   const btn = el("supplier-mode-toggle");
-  if (btn) btn.textContent = state.ui.supplierMode ? "Режим: Сотрудник склада" : "Режим: Поставщик";
+  if (btn) {
+    btn.textContent = state.ui.supplierMode ? "← Режим склада" : "Кабинет поставщика";
+    btn.style.background = state.ui.supplierMode ? "" : "#2563eb";
+    btn.style.color = state.ui.supplierMode ? "" : "#fff";
+  }
 });
 
 // === ПКУ PENDING WRITEOFFS UI ===
