@@ -7052,62 +7052,96 @@ function renderMyProfile() {
   const profile = state.auth.actor || {};
   const isStandalone = state.auth.source === "login";
   const roles = profile.roles || [];
-  const roleLabel = roles.includes("supplier") ? "Поставщик" : roles.includes("warehouse_manager") ? "Менеджер склада" : roles[0] || "—";
+  const isSupplier = roles.includes("supplier");
+  const isMgr = roles.includes("warehouse_manager");
+  const roleLabel = isSupplier && isMgr ? "Менеджер + Поставщик" :
+                    isSupplier ? "Поставщик" : isMgr ? "Менеджер склада" : roles[0] || "—";
   const supplierId = profile.supplier_id;
+  const username = profile.actor_id || "";
+  const fullName = state.auth.fullName || username;
 
   return `
-    <div class="panel span-12" style="max-width:600px">
-      <h2 style="margin:0 0 1.5rem">Мой профиль</h2>
+    <div style="max-width:680px">
+      <h2 style="margin:0 0 1.5rem;font-size:1.3rem">Настройки профиля</h2>
 
-      <div style="background:#f8fafc;border-radius:8px;padding:1.25rem;margin-bottom:1.5rem">
-        <div style="display:flex;align-items:center;gap:1rem;margin-bottom:1rem">
-          <div style="width:56px;height:56px;background:#2563eb;border-radius:50%;display:flex;align-items:center;justify-content:center;color:#fff;font-size:1.4rem;font-weight:700">
-            ${escapeHtml((state.auth.fullName||"?")[0]?.toUpperCase()||"?")}
-          </div>
-          <div>
-            <div style="font-size:1.1rem;font-weight:600">${escapeHtml(state.auth.fullName || profile.actor_id || "")}</div>
-            <div style="font-size:.85rem;color:var(--muted)">@${escapeHtml(profile.actor_id || "")}</div>
+      <!-- Avatar card -->
+      <div style="background:var(--surface,#fff);border:1px solid var(--border,#e5e7eb);border-radius:12px;padding:1.5rem;margin-bottom:1.25rem;display:flex;align-items:center;gap:1.25rem">
+        <div style="width:64px;height:64px;background:#2563eb;border-radius:50%;display:flex;align-items:center;justify-content:center;color:#fff;font-size:1.6rem;font-weight:700;flex-shrink:0">
+          ${escapeHtml((fullName||"?")[0]?.toUpperCase()||"?")}
+        </div>
+        <div style="flex:1;min-width:0">
+          <div style="font-size:1.15rem;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escapeHtml(fullName)}</div>
+          <div style="font-size:.85rem;color:var(--muted,#6b7280);margin-bottom:.5rem">@${escapeHtml(username)}</div>
+          <div style="display:flex;gap:.4rem;flex-wrap:wrap">
+            <span style="background:#dbeafe;color:#1d4ed8;border-radius:20px;padding:2px 10px;font-size:.78rem;font-weight:500">${escapeHtml(roleLabel)}</span>
+            ${supplierId ? `<span style="background:#d1fae5;color:#065f46;border-radius:20px;padding:2px 10px;font-size:.78rem;font-weight:500">Поставщик #${supplierId}</span>` : ""}
           </div>
         </div>
-        <div style="display:flex;gap:.5rem;flex-wrap:wrap">
-          <span style="background:#dbeafe;color:#1d4ed8;border-radius:20px;padding:3px 10px;font-size:.8rem;font-weight:500">${escapeHtml(roleLabel)}</span>
-          ${supplierId ? `<span style="background:#d1fae5;color:#065f46;border-radius:20px;padding:3px 10px;font-size:.8rem;font-weight:500">Поставщик #${supplierId}</span>` : ""}
-        </div>
+        <button onclick="(function(){try{localStorage.removeItem('sklad_supplier_token')}catch(e){}; state.auth.loginToken=''; state.auth.source='demo'; location.reload();})()" 
+          style="background:none;border:1px solid #d1d5db;border-radius:6px;padding:.4rem .9rem;font-size:.82rem;color:#6b7280;cursor:pointer;white-space:nowrap;flex-shrink:0">
+          Выйти
+        </button>
       </div>
 
       ${isStandalone ? `
-      <div style="border:1px solid var(--border);border-radius:8px;padding:1.25rem;margin-bottom:1rem">
-        <h3 style="margin:0 0 1rem;font-size:1rem">Изменить имя</h3>
-        <label style="display:block;font-size:.85rem;font-weight:500;margin-bottom:4px">Полное имя</label>
-        <input id="profile-fullname" type="text" value="${escapeAttr(state.auth.fullName || "")}"
-          style="width:100%;box-sizing:border-box;padding:.55rem .75rem;border:1px solid #d1d5db;border-radius:6px;font-size:.9rem;margin-bottom:.75rem"/>
-        <button data-profile-save-name class="primary" type="button" style="padding:.5rem 1.25rem">Сохранить имя</button>
+      <!-- Личные данные -->
+      <div style="background:var(--surface,#fff);border:1px solid var(--border,#e5e7eb);border-radius:12px;padding:1.25rem;margin-bottom:1.25rem">
+        <h3 style="margin:0 0 1rem;font-size:1rem;font-weight:600">Личные данные</h3>
+        <div style="margin-bottom:.75rem">
+          <label style="display:block;font-size:.82rem;font-weight:500;color:#374151;margin-bottom:4px">Логин (не изменяется)</label>
+          <input type="text" value="${escapeAttr(username)}" disabled
+            style="width:100%;box-sizing:border-box;padding:.5rem .75rem;border:1px solid #e5e7eb;border-radius:6px;font-size:.9rem;background:#f9fafb;color:#6b7280"/>
+        </div>
+        <div style="margin-bottom:.75rem">
+          <label style="display:block;font-size:.82rem;font-weight:500;color:#374151;margin-bottom:4px">Полное имя</label>
+          <input id="profile-fullname" type="text" value="${escapeAttr(fullName)}"
+            style="width:100%;box-sizing:border-box;padding:.5rem .75rem;border:1px solid #d1d5db;border-radius:6px;font-size:.9rem"/>
+        </div>
+        <div id="profile-name-msg" style="display:none;margin-bottom:.75rem;padding:8px 12px;border-radius:6px;font-size:.85rem"></div>
+        <button data-profile-save-name class="primary" type="button" style="padding:.5rem 1.5rem">Сохранить</button>
       </div>
 
-      <div style="border:1px solid var(--border);border-radius:8px;padding:1.25rem;margin-bottom:1rem">
-        <h3 style="margin:0 0 1rem;font-size:1rem">Сменить пароль</h3>
-        <label style="display:block;font-size:.85rem;font-weight:500;margin-bottom:4px">Текущий пароль</label>
-        <input id="profile-old-pw" type="password" autocomplete="current-password"
-          style="width:100%;box-sizing:border-box;padding:.55rem .75rem;border:1px solid #d1d5db;border-radius:6px;font-size:.9rem;margin-bottom:.75rem"/>
-        <label style="display:block;font-size:.85rem;font-weight:500;margin-bottom:4px">Новый пароль</label>
-        <input id="profile-new-pw" type="password" autocomplete="new-password" placeholder="Минимум 8 символов"
-          style="width:100%;box-sizing:border-box;padding:.55rem .75rem;border:1px solid #d1d5db;border-radius:6px;font-size:.9rem;margin-bottom:.75rem"/>
-        <label style="display:block;font-size:.85rem;font-weight:500;margin-bottom:4px">Повторите пароль</label>
-        <input id="profile-new-pw2" type="password" autocomplete="new-password"
-          style="width:100%;box-sizing:border-box;padding:.55rem .75rem;border:1px solid #d1d5db;border-radius:6px;font-size:.9rem;margin-bottom:.75rem"/>
+      <!-- Безопасность -->
+      <div style="background:var(--surface,#fff);border:1px solid var(--border,#e5e7eb);border-radius:12px;padding:1.25rem;margin-bottom:1.25rem">
+        <h3 style="margin:0 0 1rem;font-size:1rem;font-weight:600">Безопасность</h3>
+        <div style="margin-bottom:.75rem">
+          <label style="display:block;font-size:.82rem;font-weight:500;color:#374151;margin-bottom:4px">Текущий пароль</label>
+          <input id="profile-old-pw" type="password" autocomplete="current-password"
+            style="width:100%;box-sizing:border-box;padding:.5rem .75rem;border:1px solid #d1d5db;border-radius:6px;font-size:.9rem"/>
+        </div>
+        <div style="margin-bottom:.75rem">
+          <label style="display:block;font-size:.82rem;font-weight:500;color:#374151;margin-bottom:4px">Новый пароль <span style="color:#6b7280;font-weight:400">(минимум 8 символов)</span></label>
+          <input id="profile-new-pw" type="password" autocomplete="new-password"
+            style="width:100%;box-sizing:border-box;padding:.5rem .75rem;border:1px solid #d1d5db;border-radius:6px;font-size:.9rem"/>
+        </div>
+        <div style="margin-bottom:.75rem">
+          <label style="display:block;font-size:.82rem;font-weight:500;color:#374151;margin-bottom:4px">Повторите новый пароль</label>
+          <input id="profile-new-pw2" type="password" autocomplete="new-password"
+            style="width:100%;box-sizing:border-box;padding:.5rem .75rem;border:1px solid #d1d5db;border-radius:6px;font-size:.9rem"/>
+        </div>
         <div id="profile-pw-msg" style="display:none;margin-bottom:.75rem;padding:8px 12px;border-radius:6px;font-size:.85rem"></div>
-        <button data-profile-save-pw class="primary" type="button" style="padding:.5rem 1.25rem">Сменить пароль</button>
+        <button data-profile-save-pw class="primary" type="button" style="padding:.5rem 1.5rem">Сменить пароль</button>
+      </div>
+      ` : `
+      <div style="background:#fefce8;border:1px solid #fde047;border-radius:8px;padding:1rem;margin-bottom:1rem;font-size:.9rem;color:#713f12">
+        Для редактирования профиля войдите через форму логина на этом сайте.
+      </div>
+      `}
+
+      ${supplierId || isSupplier ? `
+      <!-- Кабинет поставщика -->
+      <div style="background:var(--surface,#fff);border:1px solid var(--border,#e5e7eb);border-radius:12px;padding:1.25rem;margin-bottom:1.25rem">
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:1rem">
+          <div>
+            <h3 style="margin:0 0 .25rem;font-size:1rem;font-weight:600">Кабинет поставщика</h3>
+            <p style="margin:0;font-size:.85rem;color:var(--muted,#6b7280)">Управление каталогом, заявками и аукционами</p>
+          </div>
+          <button onclick="el('supplier-mode-toggle')?.click()" class="primary" type="button"
+            style="padding:.5rem 1.1rem;white-space:nowrap">Открыть →</button>
+        </div>
       </div>
       ` : ""}
 
-      ${supplierId ? `
-      <div style="border:1px solid var(--border);border-radius:8px;padding:1.25rem">
-        <h3 style="margin:0 0 .75rem;font-size:1rem">Кабинет поставщика</h3>
-        <p style="color:var(--muted);font-size:.9rem;margin:0 0 .75rem">Переключитесь в режим поставщика чтобы управлять каталогом и заявками.</p>
-        <button onclick="el('supplier-mode-toggle')?.click()" class="primary" type="button"
-          style="background:#2563eb;color:#fff;padding:.5rem 1.25rem">Открыть кабинет поставщика →</button>
-      </div>
-      ` : ""}
     </div>
   `;
 }
@@ -7115,8 +7149,12 @@ function renderMyProfile() {
 function bindMyProfileActions() {
   document.querySelector("[data-profile-save-name]")?.addEventListener("click", async () => {
     const btn = document.querySelector("[data-profile-save-name]");
+    const msgEl = el("profile-name-msg");
     const fullname = (el("profile-fullname")?.value || "").trim();
-    if (!fullname) return;
+    if (!fullname) { 
+      if(msgEl){msgEl.textContent="Введите имя";msgEl.style.display="";msgEl.style.background="#fff0f0";msgEl.style.color="#dc2626";}
+      return; 
+    }
     btn.disabled = true; btn.textContent = "Сохраняем...";
     try {
       const resp = await fetch(API + "/me/profile", {
@@ -7127,14 +7165,16 @@ function bindMyProfileActions() {
       if (resp.ok) {
         state.auth.fullName = fullname;
         if (state.auth.actor) state.auth.actor.full_name = fullname;
-        btn.textContent = "✓ Сохранено";
-        const topbarUser = el("topbar-user-info");
-        if (topbarUser) applyActorProfile(state.auth.actor);
+        if(msgEl){msgEl.textContent="✓ Имя сохранено";msgEl.style.display="";msgEl.style.background="#f0fdf4";msgEl.style.color="#16a34a";}
+        applyActorProfile(state.auth.actor || {});
+        render();
       } else {
-        btn.textContent = "Ошибка";
+        if(msgEl){msgEl.textContent="Ошибка сохранения";msgEl.style.display="";msgEl.style.background="#fff0f0";msgEl.style.color="#dc2626";}
       }
-    } catch(e) { btn.textContent = "Ошибка"; }
-    finally { setTimeout(() => { btn.disabled=false; btn.textContent="Сохранить имя"; }, 2000); }
+    } catch(e) { 
+      if(msgEl){msgEl.textContent="Ошибка: "+e.message;msgEl.style.display="";msgEl.style.background="#fff0f0";msgEl.style.color="#dc2626";}
+    }
+    finally { btn.disabled=false; btn.textContent="Сохранить"; setTimeout(()=>{if(msgEl)msgEl.style.display="none"},3000); }
   });
 
   document.querySelector("[data-profile-save-pw]")?.addEventListener("click", async () => {
@@ -8506,6 +8546,16 @@ function applyDensity() {
 }
 
 async function loadAll() {
+  // Standalone (non-tetis, non-/sklad) требует логин перед загрузкой
+  const _isStandaloneGuard = !(
+    window.location.hostname === "tetis1.kz" ||
+    window.location.hostname === "www.tetis1.kz" ||
+    window.location.pathname.startsWith("/sklad")
+  );
+  if (_isStandaloneGuard && state.auth.source !== "login") {
+    await showLoginScreen();
+    return;
+  }
   try {
     console.log("[SKLAD_DBG]",{src:state.auth.source,hasLogin:!!state.auth.loginToken,hasAuthTok:!!el("auth-token").value.trim(),qormed:!!localStorage.getItem("qormed_token"),supToken:!!localStorage.getItem("sklad_supplier_token")});
     state.loadWarnings = [];
