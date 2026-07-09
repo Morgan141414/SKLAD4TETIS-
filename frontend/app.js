@@ -722,6 +722,71 @@ async function showLoginScreen() {
       const pwdEl = document.getElementById("login-direct-password");
       if (pwdEl) pwdEl.addEventListener("keydown", function(e) { if (e.key === "Enter") doLogin(); });
     }
+    // Tab switching: Войти / Регистрация
+    const tabLoginEl = document.getElementById("tab-login");
+    const tabRegEl = document.getElementById("tab-register");
+    if (tabLoginEl && tabRegEl && !tabLoginEl._tabBound) {
+      tabLoginEl._tabBound = true;
+      const fLogin = document.getElementById("auth-login-form");
+      const fReg = document.getElementById("auth-register-form");
+      const activateTab = (active, inactive, activeForm, inactiveForm) => {
+        activeForm.style.display = ""; inactiveForm.style.display = "none";
+        active.style.borderBottomColor = "#2563eb"; active.style.color = "#2563eb"; active.style.fontWeight = "600";
+        inactive.style.borderBottomColor = "transparent"; inactive.style.color = "#64748b"; inactive.style.fontWeight = "500";
+      };
+      tabLoginEl.addEventListener("click", () => activateTab(tabLoginEl, tabRegEl, fLogin, fReg));
+      tabRegEl.addEventListener("click", () => activateTab(tabRegEl, tabLoginEl, fReg, fLogin));
+    }
+    // Registration submit
+    const regBtn = document.getElementById("register-submit");
+    if (regBtn && !regBtn._bound) {
+      regBtn._bound = true;
+      regBtn.addEventListener("click", async () => {
+        const errEl = document.getElementById("login-error");
+        errEl.style.display = "none"; errEl.style.color = "#dc2626"; errEl.style.background = "#fff0f0";
+        const username = (document.getElementById("reg-username") || {}).value?.trim() || "";
+        const fullname = (document.getElementById("reg-fullname") || {}).value?.trim() || "";
+        const password = (document.getElementById("reg-password") || {}).value || "";
+        const password2 = (document.getElementById("reg-password2") || {}).value || "";
+        const role = (document.getElementById("reg-role") || {}).value || "warehouse_manager";
+        if (!username || !fullname || !password) { errEl.textContent = "Заполните все обязательные поля"; errEl.style.display = ""; return; }
+        if (password.length < 8) { errEl.textContent = "Пароль должен быть не менее 8 символов"; errEl.style.display = ""; return; }
+        if (password !== password2) { errEl.textContent = "Пароли не совпадают"; errEl.style.display = ""; return; }
+        regBtn.disabled = true; regBtn.textContent = "Регистрация...";
+        try {
+          const resp = await fetch(API + "/auth/register", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ username, full_name: fullname, password, role })
+          });
+          const data = await resp.json().catch(() => ({}));
+          if (!resp.ok) { errEl.textContent = (data && (data.detail?.message || data.detail)) || "Ошибка регистрации"; errEl.style.display = ""; return; }
+          // Auto-login
+          const loginResp = await fetch(API + "/auth/login", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ username, password })
+          });
+          const loginData = await loginResp.json().catch(() => ({}));
+          if (!loginResp.ok) {
+            errEl.textContent = "Аккаунт создан! Войдите с вашими данными.";
+            errEl.style.color = "#16a34a"; errEl.style.background = "#f0fdf4"; errEl.style.display = "";
+            document.getElementById("tab-login")?.click();
+            return;
+          }
+          const token = loginData.access_token;
+          try { localStorage.setItem("sklad_supplier_token", token); } catch(_) {}
+          state.auth.loginToken = token; state.auth.source = "login";
+          el("auth-token").value = token;
+          el("login-screen").style.display = "none";
+          await loadAll();
+        } catch(e) {
+          errEl.textContent = "Ошибка соединения: " + e.message; errEl.style.display = "";
+        } finally {
+          regBtn.disabled = false; regBtn.textContent = "Зарегистрироваться";
+        }
+      });
+    }
   }
 }
 

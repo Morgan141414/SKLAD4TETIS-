@@ -313,6 +313,51 @@ def login(body: LoginRequest) -> TokenResponse:
 from app.domain.schemas import SupplierLoginRequest, SupplierPortalAccessResponse  # noqa: E402, F811
 
 
+class RegisterRequest(BaseModel):
+    username: str
+    full_name: str
+    password: str
+    role: str = "warehouse_manager"
+
+
+@router.post("/auth/register", response_model=TokenResponse, status_code=201, tags=["auth"])
+def register(body: RegisterRequest) -> TokenResponse:
+    """Self-registration for standalone sklad. Creates a new user and returns a JWT."""
+    allowed_roles = {"warehouse_manager", "supplier"}
+    if body.role not in allowed_roles:
+        raise HTTPException(status_code=400, detail={"code": "bad_request", "message": "Invalid role", "details": {}})
+    if not body.username or len(body.username) < 3:
+        raise HTTPException(status_code=400, detail={"code": "bad_request", "message": "Username must be at least 3 characters", "details": {}})
+    if not body.password or len(body.password) < 8:
+        raise HTTPException(status_code=400, detail={"code": "bad_request", "message": "Password must be at least 8 characters", "details": {}})
+    settings = get_settings()
+    if not settings.jwt_hmac_secret:
+        raise HTTPException(status_code=500, detail={"code": "server_error", "message": "JWT not configured", "details": {}})
+    svc = get_warehouse_service()
+    existing = svc.get_user_by_username(body.username)
+    if existing:
+        raise HTTPException(status_code=409, detail={"code": "conflict", "message": "Пользователь с таким логином уже существует", "details": {}})
+    pw_hash = hash_password(body.password)
+    user = svc.create_user(body.username, body.full_name, pw_hash, [body.role], [], None, None)
+    import time
+    roles = [body.role]
+    now = int(time.time())
+    payload = {
+        "sub": str(user["id"]),
+        "iss": settings.jwt_issuer or "sklad",
+        "aud": settings.jwt_audience or "sklad",
+        "iat": now,
+        "exp": now + 8 * 3600,
+        "roles": roles,
+        "warehouse_ids": [],
+        "full_name": body.full_name,
+        "username": body.username,
+    }
+    from app.security.tokens import encode_jwt_hs256
+    token = encode_jwt_hs256(payload, settings.jwt_hmac_secret)
+    return TokenResponse(access_token=token)
+
+
 @router.post("/auth/supplier-login", response_model=TokenResponse, tags=["auth"])
 def supplier_login(body: SupplierLoginRequest) -> TokenResponse:
     """Authenticate a supplier with email and password, returns a JWT scoped
