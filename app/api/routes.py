@@ -283,14 +283,12 @@ def update_my_profile(body: MeProfileUpdate, actor_ctx: ActorContext = Depends(g
     """Update own display name."""
     if not body.full_name or len(body.full_name.strip()) < 1:
         raise HTTPException(status_code=400, detail={"code": "bad_request", "message": "Name is required", "details": {}})
-    actor_id = actor_ctx.actor_id
-    if not actor_id or not actor_id.isdigit():
-        raise HTTPException(status_code=400, detail={"code": "bad_request", "message": "Cannot update profile for this account type", "details": {}})
     svc = get_warehouse_service()
-    user = svc.get_user_by_id(int(actor_id))
+    actor_id = actor_ctx.actor_id
+    user = (svc.get_user_by_id(int(actor_id)) if actor_id and actor_id.isdigit() else None) or svc.get_user_by_username(actor_id)
     if not user:
         raise HTTPException(status_code=404, detail={"code": "not_found", "message": "User not found", "details": {}})
-    svc.update_user(int(actor_id), {"full_name": body.full_name.strip()})
+    svc.update_user(user["id"], {"full_name": body.full_name.strip()})
     return {"ok": True, "full_name": body.full_name.strip()}
 
 @router.post("/me/password", tags=["auth"])
@@ -298,18 +296,16 @@ def change_my_password(body: MePasswordChange, actor_ctx: ActorContext = Depends
     """Change own password (requires current password)."""
     if not body.new_password or len(body.new_password) < 8:
         raise HTTPException(status_code=400, detail={"code": "bad_request", "message": "Password must be at least 8 characters", "details": {}})
-    actor_id = actor_ctx.actor_id
-    if not actor_id or not actor_id.isdigit():
-        raise HTTPException(status_code=400, detail={"code": "bad_request", "message": "Cannot change password for this account type", "details": {}})
     svc = get_warehouse_service()
-    user_basic = svc.get_user_by_id(int(actor_id))
-    if not user_basic:
+    actor_id = actor_ctx.actor_id
+    user = (svc.get_user_by_id(int(actor_id)) if actor_id and actor_id.isdigit() else None) or svc.get_user_by_username(actor_id)
+    if not user:
         raise HTTPException(status_code=404, detail={"code": "not_found", "message": "User not found", "details": {}})
-    user_full = svc.get_user_by_username(user_basic["username"])
+    user_full = svc.get_user_by_username(user["username"])
     if not user_full or not verify_password(body.current_password, user_full["password_hash"]):
         raise HTTPException(status_code=401, detail={"code": "unauthorized", "message": "Текущий пароль неверный", "details": {}})
     new_hash = hash_password(body.new_password)
-    svc.update_user(int(actor_id), {"password_hash": new_hash})
+    svc.update_user(user["id"], {"password_hash": new_hash})
     return {"ok": True}
 
 @router.post("/auth/login", response_model=TokenResponse, tags=["auth"])
