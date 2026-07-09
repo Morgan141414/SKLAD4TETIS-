@@ -10,3 +10,8 @@ sklad.db
 server-projects/
 .playwright/
 uploads/
+*.bak*
+*.v98
+.codex/
+.agents/
+app/api/routes.py.bak*
