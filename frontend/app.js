@@ -1005,7 +1005,9 @@ function applyActorProfile(profile) {
   }
   const becomeSupplierButton = el("become-supplier-button");
   if (becomeSupplierButton) {
-    becomeSupplierButton.style.display = "none";
+    const showBecome = isStandalone && !canBeSupplier;
+    becomeSupplierButton.style.display = showBecome ? "" : "none";
+    if (showBecome) becomeSupplierButton.textContent = "Стать поставщиком";
   }
   const supplierLoginBtn = el("supplier-login-button");
   if (supplierLoginBtn) {
@@ -7023,6 +7025,7 @@ const renderers = {
   marketplace: renderMarketplace,
   support: renderSupport,
   cameras: renderCameras,
+  "my-profile": renderMyProfile,
 };
 
 
@@ -10403,9 +10406,24 @@ el("nav-toggle")?.addEventListener("click", () => {
 });
 
 el("show-supplier-application")?.addEventListener("click", () => {
-  showSupplierApplicationScreen();
+  const _isTetis = window.location.hostname === "tetis1.kz" || window.location.hostname === "www.tetis1.kz";
+  if (!_isTetis) {
+    const loginScreen = el("login-screen");
+    if (loginScreen) loginScreen.style.display = "flex";
+    const directBlock = document.getElementById("login-direct-block");
+    if (directBlock) directBlock.style.display = "";
+    const tetisBlock = document.getElementById("login-tetis-block");
+    if (tetisBlock) tetisBlock.style.display = "none";
+    document.getElementById("tab-register")?.click();
+    const roleEl = document.getElementById("reg-role");
+    if (roleEl) { roleEl.value = "supplier"; roleEl.dispatchEvent(new Event("change")); }
+    setTimeout(() => document.getElementById("reg-username")?.focus(), 80);
+  } else {
+    showSupplierApplicationScreen();
+  }
 });
 el("become-supplier-button")?.addEventListener("click", async () => {
+  if (state.auth.source === "login") { navigateTo("my-profile"); return; }
   const apps = state.data.supplierPortal.myApplications || [];
   const hasActiveApp = apps.some((a) => ["pending", "needs_changes"].includes(a.status));
   if (hasActiveApp) {
