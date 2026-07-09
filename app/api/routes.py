@@ -347,8 +347,6 @@ def register(body: RegisterRequest) -> TokenResponse:
         supplier = svc.create_supplier(supplier_data, actor_id="register")
         supplier_id = supplier["id"]
         user = svc.create_user(body.username, body.full_name, pw_hash, [body.role], [], None, supplier_id)
-        # Enable portal access
-        svc.set_supplier_portal_access(supplier_id, None, actor_id="register")
     else:
         user = svc.create_user(body.username, body.full_name, pw_hash, [body.role], [], None, None)
 
