@@ -338,7 +338,20 @@ def register(body: RegisterRequest) -> TokenResponse:
     if existing:
         raise HTTPException(status_code=409, detail={"code": "conflict", "message": "Пользователь с таким логином уже существует", "details": {}})
     pw_hash = hash_password(body.password)
-    user = svc.create_user(body.username, body.full_name, pw_hash, [body.role], [], None, None)
+
+    supplier_id = None
+    if body.role == "supplier":
+        # Auto-create supplier record and link to user
+        from app.domain.schemas import SupplierCreate
+        supplier_data = SupplierCreate(name=body.full_name)
+        supplier = svc.create_supplier(supplier_data, actor_id="register")
+        supplier_id = supplier["id"]
+        user = svc.create_user(body.username, body.full_name, pw_hash, [body.role], [], None, supplier_id)
+        # Enable portal access
+        svc.set_supplier_portal_access(supplier_id, None, actor_id="register")
+    else:
+        user = svc.create_user(body.username, body.full_name, pw_hash, [body.role], [], None, None)
+
     import time
     roles = [body.role]
     now = int(time.time())
@@ -353,6 +366,8 @@ def register(body: RegisterRequest) -> TokenResponse:
         "full_name": body.full_name,
         "username": body.username,
     }
+    if supplier_id is not None:
+        payload["supplier_id"] = supplier_id
     from app.security.tokens import encode_jwt_hs256
     token = encode_jwt_hs256(payload, settings.jwt_hmac_secret)
     return TokenResponse(access_token=token)
