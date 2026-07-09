@@ -4792,6 +4792,16 @@ class WarehouseService:
                     ),
                 )
                 action = AuditAction.CREATE
+            # Set gov-procurement fields (not in ON CONFLICT upsert above)
+            condition_accepted = getattr(data, "condition_accepted", "any") or "any"
+            is_gov = getattr(data, "is_gov_procurement", False) or False
+            connection.execute(
+                """UPDATE purchase_requests
+                   SET condition_accepted = ?, is_gov_procurement = ?,
+                       gov_status = CASE WHEN ? THEN COALESCE(gov_status, 'demand') ELSE gov_status END
+                   WHERE id = ?""",
+                (condition_accepted, is_gov, is_gov, request_id),
+            )
             self._audit(
                 connection,
                 actor_id,
@@ -4804,6 +4814,8 @@ class WarehouseService:
                     "recommended_quantity": data.quantity,
                     "reason": data.reason,
                     "source": data.source,
+                    "condition_accepted": condition_accepted,
+                    "is_gov_procurement": is_gov,
                 },
                 warehouse_id=data.warehouse_id,
             )

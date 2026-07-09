@@ -4270,6 +4270,12 @@ function renderPurchaseRequests() {
         { label: "Склад", name: "warehouse_id", type: "select", options: optionsFrom("warehouses", "Для какого склада") },
         { label: "Количество", name: "quantity", type: "number", step: "0.001", required: true },
         { label: "Причина", name: "reason", value: "Пополнение склада", full: true },
+        { label: "Требуемое состояние", name: "condition_accepted", type: "select", options: [
+          { value: "any", label: "Любое" },
+          { value: "new", label: "Только новый" },
+          { value: "used", label: "Б/У принимается" },
+        ]},
+        { label: "Гос. закупка", name: "is_gov_procurement", type: "checkbox" },
       ], "Создать заявку", {
         disabledSubmit: productUnavailable,
         submitHint: productUnavailable ? "Сначала создайте товар." : "",
@@ -4296,7 +4302,20 @@ function renderPurchaseRequests() {
           { label: "Товар", render: (row) => nameById("products", row.product_id) },
           { label: "Склад", render: (row) => row.warehouse_id ? nameById("warehouses", row.warehouse_id) : "—" },
           { label: "Количество", render: (row) => escapeHtml(row.recommended_quantity || row.quantity || row.recommended_order_quantity || "—") },
-          { label: "Статус", render: (row) => badge(row.status || "open") },
+          { label: "Статус", render: (row) => {
+            let s = badge(row.status || "open");
+            if (row.is_gov_procurement) {
+              const govLabels = { demand: "Спрос", accepting: "Приём", closed: "Закрыт", feedback: "Фидбэк" };
+              const govCls = { demand: "warning", accepting: "ok", closed: "", feedback: "ok" };
+              const gl = govLabels[row.gov_status] || row.gov_status || "Спрос";
+              const gc = govCls[row.gov_status] || "";
+              s += ` <span class="badge ${gc}" title="Гос. закупка" style="font-size:.72rem">🏛 ${gl}</span>`;
+            }
+            if (row.condition_accepted && row.condition_accepted !== "any") {
+              s += ` <span class="badge" style="font-size:.72rem">${row.condition_accepted === "new" ? "Только новый" : "Б/У ОК"}</span>`;
+            }
+            return s;
+          }},
           { label: "Предложения", render: (row) => {
             const offers = findMarketplaceOffersForProduct(row.product_id);
             if (!offers.length) return `<button class="secondary" style="font-size:.75rem;padding:.2rem .6rem" data-goto-marketplace="${rawNameById("products", row.product_id)}">🔍 Найти</button>`;
@@ -4304,7 +4323,19 @@ function renderPurchaseRequests() {
             return `<button class="secondary" style="font-size:.75rem;padding:.2rem .6rem;white-space:nowrap" data-show-pr-offers="${row.product_id}" data-pr-id="${row.id}">📦 ${offers.length} · от ${fmtMoneyKzt(best.unit_price)} тг</button>`;
           }},
           { label: "Создано", render: (row) => dateText(row.created_at) },
-          { label: "", render: (row) => row.status === "draft" ? `<div class="row-actions"><button class="primary" data-purchase-status="${row.id}" data-purchase-next-status="ordered">Заказано</button><button class="secondary" data-purchase-status="${row.id}" data-purchase-next-status="cancelled">Отменить</button></div>` : "" },
+          { label: "", render: (row) => {
+            let btns = "";
+            if (row.status === "draft") {
+              btns += `<button class="primary" data-purchase-status="${row.id}" data-purchase-next-status="ordered">Заказано</button>`;
+              btns += `<button class="secondary" data-purchase-status="${row.id}" data-purchase-next-status="cancelled">Отменить</button>`;
+            }
+            if (row.is_gov_procurement && row.gov_status && row.gov_status !== "feedback") {
+              const nextLabels = { demand: "→ Приём", accepting: "→ Закрыть", closed: "Добавить фидбэк" };
+              const nl = nextLabels[row.gov_status];
+              if (nl) btns += `<button class="secondary" style="font-size:.75rem" data-gov-advance="${row.id}" data-gov-status="${row.gov_status}">🏛 ${nl}</button>`;
+            }
+            return btns ? `<div class="row-actions">${btns}</div>` : "";
+          }},
         ], requests, "Заявок пока нет. Нажмите «Сформировать автозаявки» или создайте заявку вручную слева.")}
         <div id="pr-offers-panel" style="display:none;margin-top:12px"></div>
       </div>
@@ -5221,6 +5252,9 @@ function renderMarketplace() {
           ${item.stock_qty != null ? `<div>В наличии: <strong>${item.stock_qty}</strong></div>` : ""}
           ${item.delivery_days || item.supplier_delivery_days ? `<div>Доставка: <strong>${item.delivery_days || item.supplier_delivery_days} дн.</strong></div>` : ""}
           ${item.min_order_qty > 1 ? `<div>Мин. заказ: <strong>${item.min_order_qty}</strong></div>` : ""}
+          ${item.condition === "used" ? `<div><span class="badge warning" style="font-size:.72rem">Б/У</span></div>` : item.condition === "refurbished" ? `<div><span class="badge" style="font-size:.72rem">Восстановлен</span></div>` : ""}
+          ${item.delivery_price && !item.delivery_included ? `<div style="font-size:.78rem">Доставка: <strong>${fmtMoneyKzt(item.delivery_price)} тг</strong></div>` : ""}
+          ${item.delivery_included ? `<div style="font-size:.78rem;color:var(--success,#16a34a)">Доставка включена</div>` : ""}
         </div>
       </div>
       ${item.description ? `<div style="font-size:.83rem;color:var(--muted)">${escapeHtml(item.description)}</div>` : ""}
@@ -5560,6 +5594,8 @@ function renderMyInquiries(items) {
         <div style="display:flex;gap:8px;margin-top:4px;flex-wrap:wrap">
           <button class="secondary" style="font-size:.82rem" data-inquiry-chat="${inq.id}" data-chat-role="buyer">💬 Переписка</button>
           <button class="secondary" style="font-size:.82rem" data-create-po="${inq.id}" data-inquiry-json='${JSON.stringify({product_name:inq.product_name,supplier_name:inq.supplier_name,quantity:inq.quantity,unit:inq.unit,unit_price:inq.unit_price})}'>📄 Заказ (PO)</button>
+          <button class="secondary" style="font-size:.82rem" data-escrow-action="${inq.id}" data-action="reserve" title="Зарезервировать средства в escrow">🔒 Escrow резерв</button>
+          <button class="primary" style="font-size:.82rem;background:var(--success,#16a34a)" data-escrow-action="${inq.id}" data-action="release" title="Подтвердить получение и освободить escrow">✓ Товар получен</button>
         </div>` : ""}
       ${inq.status === "pending" ? `
         <div style="display:flex;gap:8px;margin-top:4px">
@@ -5601,6 +5637,19 @@ function showPOModal(inquiryId, inquiryData) {
         <label style="font-size:.85rem">Контактное лицо<input type="text" name="buyer_contact" placeholder="Имя Фамилия, тел." /></label>
         <label style="font-size:.85rem">Адрес доставки<input type="text" name="delivery_address" placeholder="Куда доставить" /></label>
         <label style="font-size:.85rem">Условия оплаты<input type="text" name="payment_terms" value="По договорённости" /></label>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+          <label style="font-size:.85rem">Тип доставки<select name="delivery_type">
+            <option value="">Не указан</option>
+            <option value="courier">Курьер</option>
+            <option value="postal">Почта</option>
+            <option value="freight">Грузоперевозка</option>
+            <option value="pickup">Самовывоз</option>
+            <option value="buyer_arranges">Покупатель организует</option>
+          </select></label>
+          <label style="font-size:.85rem">Стоимость доставки (тг)<input type="number" name="delivery_price" placeholder="0" min="0" step="0.01" /></label>
+        </div>
+        <label style="font-size:.85rem;display:flex;align-items:center;gap:8px"><input type="checkbox" name="delivery_included" value="true" /> Доставка включена в цену</label>
+        <label style="font-size:.85rem">Сумма escrow (тг, необязательно)<input type="number" name="escrow_amount" placeholder="0" min="0" step="0.01" title="Сумма будет зарезервирована до подтверждения доставки" /></label>
         <label style="font-size:.85rem">Примечания<textarea name="notes" rows="2" placeholder="Срок, особые требования..."></textarea></label>
         <div style="display:flex;gap:8px">
           <button type="submit" class="primary" id="po-create-btn">Создать PO</button>
@@ -7382,6 +7431,8 @@ function renderSupplierMyCatalog() {
         ${item.stock_qty != null ? `<span>В наличии: <strong>${item.stock_qty} ${escapeHtml(item.unit)}</strong></span>` : ""}
         ${item.delivery_days ? `<span>Доставка: <strong>${item.delivery_days} дн.</strong></span>` : ""}
         ${item.valid_until ? `<span style="color:${new Date(item.valid_until) < new Date() ? "var(--danger,#dc2626)" : "var(--success,#16a34a)"}">До: <strong>${item.valid_until}</strong></span>` : ""}
+        ${item.condition === "used" ? `<span class="badge warning">Б/У</span>` : item.condition === "refurbished" ? `<span class="badge">Восстановлен</span>` : `<span class="badge ok">Новый</span>`}
+        ${item.delivery_type && item.delivery_type !== "buyer_arranges" ? `<span style="font-size:.78rem;color:var(--muted)">${{"courier":"Курьер","postal":"Почта","freight":"Груз","pickup":"Самовывоз"}[item.delivery_type]||item.delivery_type}${item.delivery_price ? " · " + fmtMoneyKzt(item.delivery_price) + " тг" : item.delivery_included ? " (включена)" : ""}</span>` : ""}
         <span class="badge ${item.is_active ? "ok" : "danger"}">${item.is_active ? "Активен" : "Скрыт"}</span>
       </div>
       ${item.description ? `<div style="font-size:.85rem;color:var(--muted);margin-top:6px">${escapeHtml(item.description)}</div>` : ""}
@@ -7408,7 +7459,25 @@ function renderSupplierMyCatalog() {
             <label style="font-size:.85rem">Доставка (дней)<input type="number" name="delivery_days" value="${item.delivery_days ?? ""}" min="0" /></label>
             <label style="font-size:.85rem">Категория<input type="text" name="category" value="${escapeAttr(item.category||"")}" list="catalog-categories-list" /></label>
             <label style="font-size:.85rem">Действует до<input type="date" name="valid_until" value="${escapeAttr(item.valid_until||"")}" title="Срок действия цены" /></label>
+            <label style="font-size:.85rem">Состояние<select name="condition">
+              <option value="new" ${item.condition === "new" || !item.condition ? "selected" : ""}>Новый</option>
+              <option value="used" ${item.condition === "used" ? "selected" : ""}>Б/У</option>
+              <option value="refurbished" ${item.condition === "refurbished" ? "selected" : ""}>Восстановленный</option>
+            </select></label>
+            <label style="font-size:.85rem">Тип доставки<select name="delivery_type">
+              <option value="buyer_arranges" ${!item.delivery_type || item.delivery_type === "buyer_arranges" ? "selected" : ""}>Покупатель организует</option>
+              <option value="courier" ${item.delivery_type === "courier" ? "selected" : ""}>Курьер</option>
+              <option value="postal" ${item.delivery_type === "postal" ? "selected" : ""}>Почта</option>
+              <option value="freight" ${item.delivery_type === "freight" ? "selected" : ""}>Грузоперевозка</option>
+              <option value="pickup" ${item.delivery_type === "pickup" ? "selected" : ""}>Самовывоз</option>
+            </select></label>
+            <label style="font-size:.85rem">Стоимость доставки (тг)<input type="number" name="delivery_price" value="${item.delivery_price ?? ""}" min="0" step="0.01" /></label>
           </div>
+          <label style="font-size:.85rem;display:flex;align-items:center;gap:8px">
+            <input type="checkbox" name="delivery_included" value="true" ${item.delivery_included ? "checked" : ""} />
+            Доставка включена в цену товара
+          </label>
+          <label style="font-size:.85rem">Регионы доставки<input type="text" name="delivery_regions" value="${escapeAttr(item.delivery_regions||"")}" placeholder="Алматы, Астана..." /></label>
           <label style="font-size:.85rem">Описание<textarea name="description" rows="2">${escapeHtml(item.description||"")}</textarea></label>
           <div style="display:flex;gap:8px">
             <button type="submit" class="primary" style="font-size:.82rem">Сохранить</button>
@@ -7492,7 +7561,25 @@ function renderSupplierMyCatalog() {
             <label style="font-size:.85rem">Доставка (дней)<input type="number" name="delivery_days" placeholder="3" min="0" /></label>
             <label style="font-size:.85rem">Категория<input type="text" name="category" placeholder="Расходники" list="catalog-categories-list" /></label>
             <label style="font-size:.85rem">Действует до<input type="date" name="valid_until" title="Срок действия цены" /></label>
+            <label style="font-size:.85rem">Состояние<select name="condition">
+              <option value="new" selected>Новый</option>
+              <option value="used">Б/У</option>
+              <option value="refurbished">Восстановленный</option>
+            </select></label>
+            <label style="font-size:.85rem">Тип доставки<select name="delivery_type">
+              <option value="buyer_arranges" selected>Покупатель организует</option>
+              <option value="courier">Курьер</option>
+              <option value="postal">Почта</option>
+              <option value="freight">Грузоперевозка</option>
+              <option value="pickup">Самовывоз</option>
+            </select></label>
+            <label style="font-size:.85rem">Стоимость доставки (тг)<input type="number" name="delivery_price" placeholder="0" min="0" step="0.01" /></label>
           </div>
+          <label style="font-size:.85rem;display:flex;align-items:center;gap:8px">
+            <input type="checkbox" name="delivery_included" value="true" />
+            Доставка включена в цену товара
+          </label>
+          <label style="font-size:.85rem">Регионы доставки<input type="text" name="delivery_regions" placeholder="Алматы, Астана..." /></label>
           <label style="font-size:.85rem">Описание<textarea name="description" rows="2" placeholder="Краткое описание товара"></textarea></label>
           <div style="display:flex;gap:8px">
             <button type="submit" class="primary">Добавить</button>
@@ -7871,7 +7958,8 @@ function bindSupplierActions() {
     const body = {};
     for (const [k, v] of fd.entries()) {
       if (v.trim() === "") continue;
-      body[k] = ["unit_price", "min_order_qty", "stock_qty", "delivery_days"].includes(k) ? Number(v) : v.trim();
+      if (k === "delivery_included") { body[k] = true; continue; }
+      body[k] = ["unit_price", "min_order_qty", "stock_qty", "delivery_days", "delivery_price"].includes(k) ? Number(v) : v.trim();
     }
     const btn = e.target.querySelector("button[type=submit]");
     try {
@@ -7911,8 +7999,10 @@ function bindSupplierActions() {
       const fd = new FormData(form);
       const body = {};
       for (const [k, v] of fd.entries()) {
-        body[k] = ["unit_price", "min_order_qty", "stock_qty", "delivery_days"].includes(k) ? (v ? Number(v) : null) : v || null;
+        if (k === "delivery_included") { body[k] = true; continue; }
+        body[k] = ["unit_price", "min_order_qty", "stock_qty", "delivery_days", "delivery_price"].includes(k) ? (v ? Number(v) : null) : v || null;
       }
+      if (!("delivery_included" in body)) body.delivery_included = false;
       const btn = form.querySelector("button[type=submit]");
       try {
         if (btn) { btn.disabled = true; btn.textContent = "Сохраняю..."; }
@@ -9082,6 +9172,62 @@ function bindActions() {
         await loadAll();
       } catch (error) { showAlert(error.message, "error"); }
       finally { setPending(button, false); }
+    });
+  });
+
+  // Gov procurement advance
+  document.querySelectorAll("[data-gov-advance]").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      if (btn.disabled) return;
+      const reqId = btn.dataset.govAdvance;
+      const status = btn.dataset.govStatus;
+      if (status === "closed") {
+        const text = prompt("Введите текст фидбэка (оценка поставщика):");
+        if (!text) return;
+        const rating = parseInt(prompt("Оценка (1-5):") || "5", 10);
+        try {
+          setPending(btn, true);
+          await request(`/purchase-requests/${reqId}/gov-feedback`, {
+            method: "POST",
+            body: JSON.stringify({ feedback_text: text, rating: Math.max(1, Math.min(5, rating || 5)) }),
+          });
+          state.data.purchaseRequests = await request("/purchase-requests").catch(() => state.data.purchaseRequests);
+          render();
+        } catch (err) { showAlert(err.message, "error"); }
+        finally { setPending(btn, false); }
+      } else {
+        const labels = { demand: "перевести в приём", accepting: "закрыть" };
+        if (!(await confirmAction(`Гос. закупка #${reqId}: ${labels[status] || "продвинуть"}?`))) return;
+        try {
+          setPending(btn, true);
+          await request(`/purchase-requests/${reqId}/gov-advance`, { method: "POST" });
+          state.data.purchaseRequests = await request("/purchase-requests").catch(() => state.data.purchaseRequests);
+          render();
+        } catch (err) { showAlert(err.message, "error"); }
+        finally { setPending(btn, false); }
+      }
+    });
+  });
+
+  // Escrow actions (reserve / release / refund) from my-inquiries (buyer side)
+  document.querySelectorAll("[data-escrow-action]").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      if (btn.disabled) return;
+      const inquiryId = btn.dataset.escrowAction;
+      const action = btn.dataset.action;
+      const labels = { reserve: "зарезервировать средства (escrow)", release: "подтвердить получение и освободить escrow", refund: "вернуть средства (refund)" };
+      if (!(await confirmAction(`Escrow: ${labels[action] || action}?`))) return;
+      try {
+        setPending(btn, true);
+        await request(`/marketplace/my-inquiries/${inquiryId}/purchase-order/escrow`, {
+          method: "POST",
+          body: JSON.stringify({ action }),
+        });
+        showAlert(action === "release" ? "Escrow освобождён. Средства перечислены поставщику." : action === "reserve" ? "Средства зарезервированы." : "Средства возвращены.", "ok");
+        state.data.myInquiries = await request("/marketplace/my-inquiries?limit=50").catch(() => state.data.myInquiries);
+        render();
+      } catch (err) { showAlert(err.message, "error"); }
+      finally { setPending(btn, false); }
     });
   });
 
