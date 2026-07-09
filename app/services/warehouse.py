@@ -904,8 +904,9 @@ class WarehouseService:
                 """INSERT INTO supplier_catalog_items
                    (supplier_id, product_id, product_name, sku, unit, unit_price,
                     min_order_qty, stock_qty, delivery_days, category, description, is_active,
-                    valid_until)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    valid_until, condition, delivery_type, delivery_price,
+                    delivery_included, delivery_regions)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     supplier_id,
                     data.get("product_id"),
@@ -920,6 +921,11 @@ class WarehouseService:
                     data.get("description"),
                     data.get("is_active", True),
                     data.get("valid_until"),
+                    data.get("condition", "new"),
+                    data.get("delivery_type", "buyer_arranges"),
+                    data.get("delivery_price"),
+                    data.get("delivery_included", False),
+                    data.get("delivery_regions"),
                 ),
             )
             row = conn.execute("SELECT * FROM supplier_catalog_items WHERE id = ?", (row_id,)).fetchone()
@@ -929,7 +935,8 @@ class WarehouseService:
         allowed = {
             "product_name", "sku", "unit", "unit_price", "min_order_qty",
             "stock_qty", "delivery_days", "category", "description", "is_active", "product_id",
-            "valid_until",
+            "valid_until", "condition", "delivery_type", "delivery_price",
+            "delivery_included", "delivery_regions",
         }
         updates = {k: v for k, v in data.items() if k in allowed}
         if not updates:
@@ -958,6 +965,173 @@ class WarehouseService:
                 return False
             conn.execute("DELETE FROM supplier_catalog_items WHERE id = ?", (item_id,))
             return True
+
+    # ── Gov procurement ───────────────────────────────────────────────────────
+
+    _GOV_STATUS_NEXT = {"demand": "accepting", "accepting": "closed"}
+
+    def advance_gov_status(self, request_id: int, actor_id: str) -> dict[str, Any]:
+        with self.database.transaction() as conn:
+            row = conn.execute(
+                "SELECT id, is_gov_procurement, gov_status FROM purchase_requests WHERE id = ?",
+                (request_id,)
+            ).fetchone()
+            if row is None:
+                raise NotFoundError(f"purchase_requests#{request_id} not found")
+            if not row["is_gov_procurement"]:
+                raise ValidationError("This request is not a gov procurement request")
+            current = row["gov_status"] or "demand"
+            nxt = self._GOV_STATUS_NEXT.get(current)
+            if nxt is None:
+                raise ValidationError(f"Cannot advance from status '{current}'")
+            conn.execute(
+                "UPDATE purchase_requests SET gov_status = ? WHERE id = ?",
+                (nxt, request_id)
+            )
+            updated = conn.execute("SELECT * FROM purchase_requests WHERE id = ?", (request_id,)).fetchone()
+            return dict(updated)
+
+    def add_gov_feedback(
+        self, request_id: int, feedback_text: str, rating: int, actor_id: str
+    ) -> dict[str, Any]:
+        with self.database.transaction() as conn:
+            row = conn.execute(
+                "SELECT id, is_gov_procurement, gov_status FROM purchase_requests WHERE id = ?",
+                (request_id,)
+            ).fetchone()
+            if row is None:
+                raise NotFoundError(f"purchase_requests#{request_id} not found")
+            if not row["is_gov_procurement"]:
+                raise ValidationError("Not a gov procurement request")
+            if row["gov_status"] != "closed":
+                raise ValidationError("Feedback can only be added when status is 'closed'")
+            conn.execute(
+                """UPDATE purchase_requests
+                   SET gov_feedback_text = ?, gov_feedback_rating = ?, gov_status = 'feedback'
+                   WHERE id = ?""",
+                (feedback_text, rating, request_id)
+            )
+            updated = conn.execute("SELECT * FROM purchase_requests WHERE id = ?", (request_id,)).fetchone()
+            return dict(updated)
+
+    # ── Purchase Order escrow + delivery ─────────────────────────────────────
+
+    def update_po_escrow(self, inquiry_id: int, action: str, actor_id: str) -> dict[str, Any]:
+        import datetime as _dt
+        valid = {"reserve", "release", "refund"}
+        if action not in valid:
+            raise ValidationError(f"action must be one of {valid}")
+        with self.database.transaction() as conn:
+            inq = conn.execute(
+                "SELECT id, actor_id FROM marketplace_inquiries WHERE id = ?", (inquiry_id,)
+            ).fetchone()
+            if inq is None or inq["actor_id"] != actor_id:
+                raise PermissionError("Inquiry not found or not yours")
+            po = conn.execute(
+                "SELECT id, escrow_status FROM purchase_orders WHERE inquiry_id = ?", (inquiry_id,)
+            ).fetchone()
+            if po is None:
+                raise NotFoundError("Purchase order not found — create it first")
+            now = _dt.datetime.now(_dt.UTC).isoformat()
+            if action == "reserve":
+                conn.execute(
+                    """UPDATE purchase_orders
+                       SET escrow_status = 'reserved', escrow_reserved_at = ?
+                       WHERE id = ?""",
+                    (now, po["id"])
+                )
+            elif action == "release":
+                conn.execute(
+                    """UPDATE purchase_orders
+                       SET escrow_status = 'released', escrow_released_at = ?
+                       WHERE id = ?""",
+                    (now, po["id"])
+                )
+            else:  # refund
+                conn.execute(
+                    """UPDATE purchase_orders
+                       SET escrow_status = 'refunded', escrow_released_at = ?
+                       WHERE id = ?""",
+                    (now, po["id"])
+                )
+            updated = conn.execute("SELECT * FROM purchase_orders WHERE id = ?", (po["id"],)).fetchone()
+            return dict(updated)
+
+    def update_po_delivery(
+        self, inquiry_id: int, data: dict[str, Any], actor_id: str
+    ) -> dict[str, Any]:
+        import datetime as _dt
+        with self.database.transaction() as conn:
+            inq = conn.execute(
+                "SELECT id, actor_id FROM marketplace_inquiries WHERE id = ?", (inquiry_id,)
+            ).fetchone()
+            if inq is None or inq["actor_id"] != actor_id:
+                raise PermissionError("Inquiry not found or not yours")
+            po = conn.execute(
+                "SELECT id FROM purchase_orders WHERE inquiry_id = ?", (inquiry_id,)
+            ).fetchone()
+            if po is None:
+                raise NotFoundError("Purchase order not found")
+            allowed = {
+                "delivery_status", "delivery_tracking_number",
+                "delivery_type", "delivery_price", "delivery_included",
+            }
+            updates = {k: v for k, v in data.items() if k in allowed}
+            now = _dt.datetime.now(_dt.UTC).isoformat()
+            if updates.get("delivery_status") == "shipped":
+                updates["delivery_shipped_at"] = now
+            elif updates.get("delivery_status") == "delivered":
+                updates["delivery_delivered_at"] = now
+                if po.get("escrow_status") == "held":
+                    updates["escrow_status"] = "released"
+                    updates["escrow_released_at"] = now
+            if updates:
+                set_clause = ", ".join(f"{k} = ?" for k in updates)
+                conn.execute(
+                    f"UPDATE purchase_orders SET {set_clause} WHERE id = ?",
+                    (*updates.values(), po["id"])
+                )
+            updated = conn.execute("SELECT * FROM purchase_orders WHERE id = ?", (po["id"],)).fetchone()
+            return dict(updated)
+
+    # ── Auction escrow ────────────────────────────────────────────────────────
+
+    def update_auction_escrow(self, auction_id: int, action: str, actor_id: str) -> dict[str, Any]:
+        import datetime as _dt
+        valid = {"reserve", "release", "refund"}
+        if action not in valid:
+            raise ValidationError(f"action must be one of {valid}")
+        with self.database.transaction() as conn:
+            auction = conn.execute(
+                "SELECT id, status, winner_supplier_id, escrow_status FROM auctions WHERE id = ?",
+                (auction_id,)
+            ).fetchone()
+            if auction is None:
+                raise NotFoundError(f"auctions#{auction_id} not found")
+            now = _dt.datetime.now(_dt.UTC).isoformat()
+            if action == "reserve":
+                conn.execute(
+                    """UPDATE auctions
+                       SET escrow_status = 'reserved', escrow_reserved_at = ?
+                       WHERE id = ?""",
+                    (now, auction_id)
+                )
+            elif action == "release":
+                conn.execute(
+                    """UPDATE auctions
+                       SET escrow_status = 'released', escrow_released_at = ?
+                       WHERE id = ?""",
+                    (now, auction_id)
+                )
+            else:
+                conn.execute(
+                    """UPDATE auctions
+                       SET escrow_status = 'refunded', escrow_released_at = ?
+                       WHERE id = ?""",
+                    (now, auction_id)
+                )
+            updated = conn.execute("SELECT * FROM auctions WHERE id = ?", (auction_id,)).fetchone()
+            return dict(updated)
 
     def list_suppliers_directory(
         self,

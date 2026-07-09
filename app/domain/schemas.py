@@ -1012,6 +1012,11 @@ class PurchaseRequest(Row):
     source: str
     created_by: str
     created_at: datetime
+    condition_accepted: str = "any"
+    is_gov_procurement: bool = False
+    gov_status: str | None = None
+    gov_feedback_text: str | None = None
+    gov_feedback_rating: int | None = None
 
 
 class PurchaseRequestCreate(BaseModel):
@@ -1020,6 +1025,8 @@ class PurchaseRequestCreate(BaseModel):
     quantity: Decimal = Field(gt=0)
     reason: str = Field(default="Пополнение склада", min_length=1, max_length=500)
     source: str = Field(default="manual", min_length=1, max_length=80)
+    condition_accepted: str = "any"
+    is_gov_procurement: bool = False
 
 
 class PurchaseRequestStatusUpdate(BaseModel):

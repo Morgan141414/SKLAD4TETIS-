@@ -4797,6 +4797,11 @@ class CatalogItemCreate(BaseModel):
     product_id: int | None = None
     is_active: bool = True
     valid_until: str | None = None
+    condition: str = "new"
+    delivery_type: str = "buyer_arranges"
+    delivery_price: float | None = None
+    delivery_included: bool = False
+    delivery_regions: str | None = None
 
 
 class CatalogItemUpdate(BaseModel):
@@ -4812,6 +4817,11 @@ class CatalogItemUpdate(BaseModel):
     product_id: int | None = None
     is_active: bool | None = None
     valid_until: str | None = None
+    condition: str | None = None
+    delivery_type: str | None = None
+    delivery_price: float | None = None
+    delivery_included: bool | None = None
+    delivery_regions: str | None = None
 
 
 @router.post("/mis/procedure-event", tags=["mis"])
@@ -5787,6 +5797,31 @@ class PurchaseOrderCreate(BaseModel):
     delivery_address: str | None = None
     payment_terms: str | None = None
     notes: str | None = None
+    delivery_type: str | None = None
+    delivery_price: float | None = None
+    delivery_included: bool = False
+    escrow_amount: float | None = None
+
+
+class EscrowActionBody(BaseModel):
+    action: str = Field(pattern="^(reserve|release|refund)$")
+
+
+class DeliveryUpdateBody(BaseModel):
+    delivery_status: str | None = Field(default=None, pattern="^(pending|preparing|shipped|in_transit|delivered|returned)$")
+    delivery_tracking_number: str | None = None
+    delivery_type: str | None = None
+    delivery_price: float | None = None
+    delivery_included: bool | None = None
+
+
+class GovAdvanceBody(BaseModel):
+    pass
+
+
+class GovFeedbackBody(BaseModel):
+    feedback_text: str
+    rating: int = Field(ge=1, le=5)
 
 
 @router.post("/marketplace/my-inquiries/{inquiry_id}/purchase-order", tags=["marketplace"])
@@ -6244,5 +6279,89 @@ def list_service_marketplace_endpoint(
             "limit": safe_limit,
             "offset": safe_offset,
         }
+    except Exception as error:
+        raise map_error(error) from error
+
+
+# ── Gov procurement cycle ────────────────────────────────────────────────────
+
+@router.post("/purchase-requests/{request_id}/gov-advance", tags=["purchase-requests"])
+def advance_gov_status(
+    request_id: int,
+    actor_ctx: ActorContext = Depends(get_actor_context),
+) -> Any:
+    """Advance gov procurement status: demand → accepting → closed."""
+    try:
+        return get_warehouse_service().advance_gov_status(request_id, actor_ctx.actor_id)
+    except Exception as error:
+        raise map_error(error) from error
+
+
+@router.post("/purchase-requests/{request_id}/gov-feedback", tags=["purchase-requests"])
+def add_gov_feedback(
+    request_id: int,
+    body: GovFeedbackBody,
+    actor_ctx: ActorContext = Depends(get_actor_context),
+) -> Any:
+    """Add gov procurement feedback (rating + text) — allowed when status is closed."""
+    try:
+        return get_warehouse_service().add_gov_feedback(
+            request_id, body.feedback_text, body.rating, actor_ctx.actor_id
+        )
+    except Exception as error:
+        raise map_error(error) from error
+
+
+# ── Purchase Order escrow + delivery ─────────────────────────────────────────
+
+@router.post("/marketplace/my-inquiries/{inquiry_id}/purchase-order/escrow", tags=["marketplace"])
+def po_escrow_action(
+    inquiry_id: int,
+    body: EscrowActionBody,
+    actor_ctx: ActorContext = Depends(get_actor_context),
+) -> Any:
+    """Reserve / release / refund escrow for a Purchase Order."""
+    try:
+        return get_warehouse_service().update_po_escrow(
+            inquiry_id, body.action, actor_ctx.actor_id
+        )
+    except PermissionError as error:
+        raise HTTPException(status_code=403, detail={"code": "forbidden", "message": str(error), "details": {}}) from error
+    except Exception as error:
+        raise map_error(error) from error
+
+
+@router.patch("/marketplace/my-inquiries/{inquiry_id}/purchase-order/delivery", tags=["marketplace"])
+def update_po_delivery(
+    inquiry_id: int,
+    body: DeliveryUpdateBody,
+    actor_ctx: ActorContext = Depends(get_actor_context),
+) -> Any:
+    """Update delivery status / tracking for a Purchase Order."""
+    try:
+        return get_warehouse_service().update_po_delivery(
+            inquiry_id, body.model_dump(exclude_none=True), actor_ctx.actor_id
+        )
+    except PermissionError as error:
+        raise HTTPException(status_code=403, detail={"code": "forbidden", "message": str(error), "details": {}}) from error
+    except Exception as error:
+        raise map_error(error) from error
+
+
+# ── Auction escrow ────────────────────────────────────────────────────────────
+
+@router.post("/marketplace/auctions/{auction_id}/escrow", tags=["marketplace"])
+def auction_escrow_action(
+    auction_id: int,
+    body: EscrowActionBody,
+    actor_ctx: ActorContext = Depends(get_actor_context),
+) -> Any:
+    """Reserve / release / refund escrow for a Dutch auction win."""
+    try:
+        return get_warehouse_service().update_auction_escrow(
+            auction_id, body.action, actor_ctx.actor_id
+        )
+    except PermissionError as error:
+        raise HTTPException(status_code=403, detail={"code": "forbidden", "message": str(error), "details": {}}) from error
     except Exception as error:
         raise map_error(error) from error
