@@ -117,14 +117,38 @@
           <a href="https://tetis1.kz/" style="display:block; width:100%; box-sizing:border-box; padding:.65rem; background:#2563eb; color:white; border:none; border-radius:6px; font-size:.95rem; text-decoration:none; font-weight:600">Перейти на tetis1.kz</a>
           <p style="margin-top:1rem;font-size:.78rem;color:#94a3b8">Уже вошли в tetis1.kz и видите эту страницу? <button onclick="location.reload()" style="background:none;border:none;color:#2563eb;cursor:pointer;font-size:.78rem;text-decoration:underline;padding:0">Нажмите здесь</button></p>
         </div>
-        <!-- Standalone login form: shown on other domains -->
+        <!-- Standalone login/register form: shown on other domains -->
         <div id="login-direct-block" style="display:none;text-align:left">
-          <p style="color:#64748b; font-size:.9rem; margin:0 0 1rem;text-align:center">Войдите в систему управления складом.</p>
-          <label style="display:block;font-size:.85rem;font-weight:500;margin-bottom:4px">Логин</label>
-          <input id="login-direct-username" type="text" autocomplete="username" placeholder="admin" style="width:100%;box-sizing:border-box;padding:.55rem .75rem;border:1px solid #d1d5db;border-radius:6px;font-size:.9rem;margin-bottom:.75rem"/>
-          <label style="display:block;font-size:.85rem;font-weight:500;margin-bottom:4px">Пароль</label>
-          <input id="login-direct-password" type="password" autocomplete="current-password" style="width:100%;box-sizing:border-box;padding:.55rem .75rem;border:1px solid #d1d5db;border-radius:6px;font-size:.9rem;margin-bottom:1rem"/>
-          <button id="login-direct-submit" class="primary" type="button" style="width:100%;padding:.65rem;font-size:.95rem">Войти</button>
+          <!-- Tabs -->
+          <div style="display:flex;gap:0;margin-bottom:1rem;border-bottom:2px solid #e5e7eb">
+            <button id="tab-login" type="button" style="flex:1;padding:.5rem;background:none;border:none;border-bottom:2px solid #2563eb;margin-bottom:-2px;font-weight:600;color:#2563eb;cursor:pointer;font-size:.9rem">Войти</button>
+            <button id="tab-register" type="button" style="flex:1;padding:.5rem;background:none;border:none;border-bottom:2px solid transparent;margin-bottom:-2px;font-weight:500;color:#64748b;cursor:pointer;font-size:.9rem">Регистрация</button>
+          </div>
+          <!-- Login form -->
+          <div id="auth-login-form">
+            <label style="display:block;font-size:.85rem;font-weight:500;margin-bottom:4px">Логин</label>
+            <input id="login-direct-username" type="text" autocomplete="username" placeholder="ivan" style="width:100%;box-sizing:border-box;padding:.55rem .75rem;border:1px solid #d1d5db;border-radius:6px;font-size:.9rem;margin-bottom:.75rem"/>
+            <label style="display:block;font-size:.85rem;font-weight:500;margin-bottom:4px">Пароль</label>
+            <input id="login-direct-password" type="password" autocomplete="current-password" style="width:100%;box-sizing:border-box;padding:.55rem .75rem;border:1px solid #d1d5db;border-radius:6px;font-size:.9rem;margin-bottom:1rem"/>
+            <button id="login-direct-submit" class="primary" type="button" style="width:100%;padding:.65rem;font-size:.95rem">Войти</button>
+          </div>
+          <!-- Register form -->
+          <div id="auth-register-form" style="display:none">
+            <label style="display:block;font-size:.85rem;font-weight:500;margin-bottom:4px">Логин <span style="color:#dc2626">*</span></label>
+            <input id="reg-username" type="text" autocomplete="username" placeholder="ivan.petrov" style="width:100%;box-sizing:border-box;padding:.55rem .75rem;border:1px solid #d1d5db;border-radius:6px;font-size:.9rem;margin-bottom:.75rem"/>
+            <label style="display:block;font-size:.85rem;font-weight:500;margin-bottom:4px">Полное имя <span style="color:#dc2626">*</span></label>
+            <input id="reg-fullname" type="text" placeholder="Иван Петров" style="width:100%;box-sizing:border-box;padding:.55rem .75rem;border:1px solid #d1d5db;border-radius:6px;font-size:.9rem;margin-bottom:.75rem"/>
+            <label style="display:block;font-size:.85rem;font-weight:500;margin-bottom:4px">Пароль <span style="color:#dc2626">*</span></label>
+            <input id="reg-password" type="password" autocomplete="new-password" placeholder="Минимум 8 символов" style="width:100%;box-sizing:border-box;padding:.55rem .75rem;border:1px solid #d1d5db;border-radius:6px;font-size:.9rem;margin-bottom:.75rem"/>
+            <label style="display:block;font-size:.85rem;font-weight:500;margin-bottom:4px">Повторите пароль <span style="color:#dc2626">*</span></label>
+            <input id="reg-password2" type="password" autocomplete="new-password" placeholder="Повторите пароль" style="width:100%;box-sizing:border-box;padding:.55rem .75rem;border:1px solid #d1d5db;border-radius:6px;font-size:.9rem;margin-bottom:.75rem"/>
+            <label style="display:block;font-size:.85rem;font-weight:500;margin-bottom:4px">Я хочу стать</label>
+            <select id="reg-role" style="width:100%;box-sizing:border-box;padding:.55rem .75rem;border:1px solid #d1d5db;border-radius:6px;font-size:.9rem;margin-bottom:1rem">
+              <option value="warehouse_manager">Менеджером склада</option>
+              <option value="supplier">Поставщиком</option>
+            </select>
+            <button id="register-submit" class="primary" type="button" style="width:100%;padding:.65rem;font-size:.95rem">Зарегистрироваться</button>
+          </div>
         </div>
         <div id="login-error" style="color:#dc2626; margin-top:.75rem; font-size:.83rem; display:none; background:#fff0f0; border-radius:6px; padding:8px 12px"></div>
         <button id="show-supplier-application" type="button" class="secondary" style="width:100%; margin-top:.75rem; font-size:.88rem">Стать поставщиком</button>
