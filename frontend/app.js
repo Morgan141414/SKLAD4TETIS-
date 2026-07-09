@@ -958,7 +958,7 @@ function applyActorProfile(profile) {
       : "Демо-режим: роль и доступ задаются вручную.";
   }
   state.auth.supplierId = profile.supplier_id ?? null;
-  const canBeSupplier = (profile.roles || []).includes("supplier") && profile.supplier_id != null;
+  const canBeSupplier = (profile.roles || []).includes("supplier");
   const supplierToggle = el("supplier-mode-toggle");
   if (supplierToggle) {
     supplierToggle.style.display = canBeSupplier ? "" : "none";
@@ -966,8 +966,7 @@ function applyActorProfile(profile) {
   }
   const becomeSupplierButton = el("become-supplier-button");
   if (becomeSupplierButton) {
-    becomeSupplierButton.style.display = (!canBeSupplier && state.auth.source === "tetis") ? "" : "none";
-    if (canBeSupplier) becomeSupplierButton.style.display = "none";
+    becomeSupplierButton.style.display = "none";
   }
   const supplierLoginBtn = el("supplier-login-button");
   if (supplierLoginBtn) {
