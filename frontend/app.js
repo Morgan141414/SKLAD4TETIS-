@@ -653,6 +653,7 @@ async function requestSkladTokenFromTetis() {
       el("auth-token").value = payload.access_token;
       state.auth.source = "tetis";
       state.auth.blockedMessage = "";
+      try { sessionStorage.setItem("sklad_tetis_session", payload.access_token); } catch(_) {}
       return true;
     } catch (_) { continue; }
   }
@@ -8134,8 +8135,24 @@ async function loadAll() {
     if (state.auth.source === "login" && state.auth.loginToken) {
       el("auth-token").value = state.auth.loginToken;
     } else if (!el("auth-token").value.trim()) {
-      await requestSkladTokenFromTetis();
-      // If exchange failed, continue — /me will 401 and we'll show a banner
+      // Restore cached sklad JWT from session (avoids re-exchange when Qtrix access token has expired)
+      try {
+        const _cached = sessionStorage.getItem("sklad_tetis_session");
+        if (_cached) {
+          const _pb64 = _cached.split(".")[1];
+          const _p = JSON.parse(atob(_pb64.replace(/-/g,"+").replace(/_/g,"/")));
+          if (_p.exp && _p.exp > Math.floor(Date.now() / 1000) + 60) {
+            el("auth-token").value = _cached;
+            state.auth.source = "tetis";
+          } else {
+            sessionStorage.removeItem("sklad_tetis_session");
+          }
+        }
+      } catch(_) {}
+      if (!el("auth-token").value.trim()) {
+        await requestSkladTokenFromTetis();
+        // If exchange failed, continue — /me will 401 and we'll show a banner
+      }
     }
     let profile = await request("/me");
     // If supplier access was approved since last login, silently re-exchange the tetis token
