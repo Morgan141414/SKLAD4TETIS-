@@ -5645,6 +5645,20 @@ function orderTrackingSteps(inq) {
   `;
 }
 
+function marketplaceInquirySourceMeta(source) {
+  const key = source || "marqet";
+  return {
+    marqet: { label: "marqet.kz", hint: "Публичный маркетплейс", color: "var(--accent,#2563eb)" },
+    qpartner: { label: "qpartner", hint: "Складской маркетплейс", color: "var(--success,#16a34a)" },
+    api: { label: "API", hint: "Интеграция", color: "var(--muted,#64748b)" },
+  }[key] || { label: key, hint: "Источник заявки", color: "var(--muted,#64748b)" };
+}
+
+function marketplaceInquirySourceBadge(source) {
+  const meta = marketplaceInquirySourceMeta(source);
+  return `<span title="${escapeAttr(meta.hint)}" style="display:inline-flex;align-items:center;border:1px solid ${meta.color};color:${meta.color};border-radius:999px;padding:1px 7px;font-size:.72rem;font-weight:600;line-height:1.4;white-space:nowrap">${escapeHtml(meta.label)}</span>`;
+}
+
 function renderMyInquiries(items) {
   const STATUS = {
     pending: { label: "Ожидает ответа", cls: "warning" },
@@ -5674,7 +5688,10 @@ function renderMyInquiries(items) {
           </div>
           <div style="font-size:.78rem;color:var(--muted)">Запрос от ${String(inq.created_at || "").slice(0, 10)}</div>
         </div>
-        <span class="badge ${st.cls}" style="white-space:nowrap">${st.label}</span>
+        <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;justify-content:flex-end">
+          ${marketplaceInquirySourceBadge(inq.source)}
+          <span class="badge ${st.cls}" style="white-space:nowrap">${st.label}</span>
+        </div>
       </div>
       ${orderTrackingSteps(inq)}
       <div style="display:flex;gap:16px;flex-wrap:wrap;font-size:.88rem;margin-bottom:8px">
@@ -5929,7 +5946,7 @@ function showBulkInquiryModal(productName) {
   document.getElementById("bulk-inquiry-form")?.addEventListener("submit", async (e) => {
     e.preventDefault();
     const fd = new FormData(e.target);
-    const body = { product_name: productName, quantity: Number(fd.get("quantity")) };
+    const body = { product_name: productName, quantity: Number(fd.get("quantity")), source: "qpartner" };
     const notes = (fd.get("notes") || "").trim();
     if (notes) body.notes = notes;
     const btn = document.getElementById("bulk-inquiry-submit");
@@ -7638,7 +7655,10 @@ function renderSupplierInquiries() {
             · ${String(inq.created_at || "").slice(0, 10)}
           </div>
         </div>
-        <span class="badge ${st.cls}">${st.label}</span>
+        <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;justify-content:flex-end">
+          ${marketplaceInquirySourceBadge(inq.source)}
+          <span class="badge ${st.cls}">${st.label}</span>
+        </div>
       </div>
       <div style="display:flex;gap:16px;flex-wrap:wrap;font-size:.9rem;margin-bottom:8px">
         <div>Количество: <strong>${inq.quantity} ${escapeHtml(inq.unit || "")}</strong></div>

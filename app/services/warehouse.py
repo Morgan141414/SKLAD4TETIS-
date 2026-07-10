@@ -1725,8 +1725,11 @@ class WarehouseService:
         quantity: float,
         notes: str | None,
         warehouse_id: int | None,
+        source: str = "qpartner",
     ) -> dict[str, Any]:
         """Send inquiry to all suppliers that have matching catalog items."""
+        if source not in {"marqet", "qpartner", "api"}:
+            raise ValidationError("Marketplace inquiry source must be marqet, qpartner, or api")
         connection = self.database.connect()
         try:
             items = connection.execute(
@@ -1754,9 +1757,9 @@ class WarehouseService:
                 row_id = insert_and_get_id(
                     conn,
                     """INSERT INTO marketplace_inquiries
-                       (catalog_item_id, supplier_id, warehouse_id, actor_id, quantity, unit_price, notes)
-                       VALUES (?, ?, ?, ?, ?, ?, ?)""",
-                    (item["id"], sid, warehouse_id, actor_id, quantity, item["unit_price"], notes),
+                       (catalog_item_id, supplier_id, warehouse_id, actor_id, quantity, unit_price, notes, source)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (item["id"], sid, warehouse_id, actor_id, quantity, item["unit_price"], notes, source),
                 )
                 row = conn.execute("SELECT * FROM marketplace_inquiries WHERE id = ?", (row_id,)).fetchone()
                 if row:

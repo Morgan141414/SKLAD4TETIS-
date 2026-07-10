@@ -5689,6 +5689,7 @@ class BulkInquiryCreate(BaseModel):
     quantity: float = Field(gt=0, default=1)
     notes: str | None = None
     warehouse_id: int | None = None
+    source: str = Field(default="qpartner", pattern="^(marqet|qpartner|api)$")
 
 
 @router.post("/marketplace/bulk-inquire", status_code=201, tags=["marketplace"])
@@ -5707,6 +5708,7 @@ def create_bulk_inquiry(
             quantity=body.quantity,
             notes=body.notes,
             warehouse_id=warehouse_id,
+            source=body.source,
         )
     except Exception as error:
         raise map_error(error) from error

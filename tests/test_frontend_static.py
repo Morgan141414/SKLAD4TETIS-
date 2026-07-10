@@ -900,7 +900,12 @@ class FrontendStaticTest(TestCase):
 
         for snippet in (
             'const body = { quantity: Number(fd.get("quantity")), source: "qpartner" };',
+            'const body = { product_name: productName, quantity: Number(fd.get("quantity")), source: "qpartner" };',
             'body: JSON.stringify({ source: "qpartner" })',
+            "function marketplaceInquirySourceBadge",
+            "marketplaceInquirySourceBadge(inq.source)",
+            'label: "marqet.kz"',
+            'label: "qpartner"',
         ):
             with self.subTest(snippet=snippet):
                 self.assertIn(snippet, app)

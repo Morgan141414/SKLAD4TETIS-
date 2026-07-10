@@ -906,6 +906,7 @@ class APIContractStaticTest(TestCase):
             'source: str = Field(default="marqet", pattern="^(marqet|qpartner|api)$")',
             'source: str = Field(default="qpartner", pattern="^(marqet|qpartner|api)$")',
             "body.source",
+            "source=body.source",
             "source=source",
             "mi.source = ?",
             "ADD COLUMN IF NOT EXISTS source TEXT NOT NULL DEFAULT 'marqet'",
