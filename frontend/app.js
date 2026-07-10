@@ -5743,6 +5743,11 @@ function supplierInquiriesPath() {
   return `/supplier/inquiries?limit=50${marketplaceInquirySourceQuery(state.ui.supplierInquirySourceFilter || "all")}${marketplaceInquiryStatusQuery(state.ui.supplierInquiryStatusFilter || "all")}`;
 }
 
+function focusQpartnerPendingInquiries() {
+  state.ui.marketplaceInquirySourceFilter = "qpartner";
+  state.ui.marketplaceInquiryStatusFilter = "pending";
+}
+
 function renderMyInquiries(items) {
   const STATUS = {
     pending: { label: "Ожидает ответа", cls: "warning" },
@@ -6051,6 +6056,7 @@ function showBulkInquiryModal(productName) {
         ? `✓ Запрос отправлен ${count} поставщик${count === 1 ? "у" : count < 5 ? "ам" : "ам"}! Ответы появятся в «Мои запросы».`
         : "Поставщики с таким товаром не найдены в каталоге.";
       if (count > 0) {
+        focusQpartnerPendingInquiries();
         request(myInquiriesPath()).then((d) => { state.data.myInquiries = d; }).catch(() => {});
         if (btn) { btn.disabled = true; btn.textContent = "Отправлено"; }
         setTimeout(() => overlay.remove(), 3000);
@@ -6195,6 +6201,7 @@ function showInquiryModal(item, purchaseRequestId = null) {
       if (btn) { btn.disabled = true; btn.textContent = "Отправляю..."; }
       const created = await request(`/marketplace/inquire/${item.id}`, { method: "POST", body: JSON.stringify(body) });
       // Refresh my-inquiries so the new entry appears immediately
+      focusQpartnerPendingInquiries();
       request(myInquiriesPath()).then((d) => { state.data.myInquiries = d; }).catch(() => {});
       result.style.display = "block";
       result.style.background = "var(--success-bg,#f0fff4)";
@@ -6643,6 +6650,7 @@ async function initMarketplace() {
       if (btn) { btn.disabled = true; btn.textContent = "Оформляю..."; }
       const created = await request("/marketplace/cart/checkout", { method: "POST", body: JSON.stringify({ source: "qpartner" }) });
       state.data.cart = await request("/marketplace/cart").catch(() => ({ items: [], total_items: 0, total_amount: 0 }));
+      focusQpartnerPendingInquiries();
       state.data.myInquiries = await request(myInquiriesPath()).catch(() => ({ items: [], total: 0 }));
       state.ui.marketplaceTab = "my-inquiries";
       showAlert(`Заказ оформлен: создано запросов — ${created.length}`);
