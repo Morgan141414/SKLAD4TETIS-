@@ -908,6 +908,7 @@ class APIContractStaticTest(TestCase):
             "body.source",
             "source=body.source",
             "source=source",
+            "def _validate_marketplace_inquiry_source",
             "mi.source = ?",
             "ADD COLUMN IF NOT EXISTS source TEXT NOT NULL DEFAULT 'marqet'",
             "idx_marketplace_inquiries_source",

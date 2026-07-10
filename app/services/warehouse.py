@@ -121,6 +121,13 @@ class WarehouseService:
                 return allowed_unit
         raise ValidationError(f"Unsupported product unit: {unit}")
 
+    def _validate_marketplace_inquiry_source(self, source: str | None) -> str | None:
+        if source is None:
+            return None
+        if source not in {"marqet", "qpartner", "api"}:
+            raise ValidationError("Marketplace inquiry source must be marqet, qpartner, or api")
+        return source
+
     def create_category(self, data: CategoryCreate, actor_id: str = "system") -> dict[str, Any]:
         with self.database.transaction() as connection:
             category_id = insert_and_get_id(
@@ -1340,8 +1347,7 @@ class WarehouseService:
         source: str = "qpartner",
     ) -> list[dict[str, Any]]:
         """Create one marketplace inquiry per cart item (grouped per supplier offer) and clear the cart."""
-        if source not in {"marqet", "qpartner", "api"}:
-            raise ValidationError("Marketplace inquiry source must be marqet, qpartner, or api")
+        source = self._validate_marketplace_inquiry_source(source) or "qpartner"
         cart = self.get_cart(actor_id)
         if not cart["items"]:
             raise ValidationError("Cart is empty")
@@ -1372,8 +1378,7 @@ class WarehouseService:
         purchase_request_id: int | None = None,
         source: str = "marqet",
     ) -> dict[str, Any]:
-        if source not in {"marqet", "qpartner", "api"}:
-            raise ValidationError("Marketplace inquiry source must be marqet, qpartner, or api")
+        source = self._validate_marketplace_inquiry_source(source) or "marqet"
         connection = self.database.connect()
         try:
             item = connection.execute(
@@ -1462,6 +1467,7 @@ class WarehouseService:
         limit: int = 50,
         offset: int = 0,
     ) -> dict[str, Any]:
+        source = self._validate_marketplace_inquiry_source(source)
         where = []
         params: list[Any] = []
         if supplier_id is not None:
@@ -1728,8 +1734,7 @@ class WarehouseService:
         source: str = "qpartner",
     ) -> dict[str, Any]:
         """Send inquiry to all suppliers that have matching catalog items."""
-        if source not in {"marqet", "qpartner", "api"}:
-            raise ValidationError("Marketplace inquiry source must be marqet, qpartner, or api")
+        source = self._validate_marketplace_inquiry_source(source) or "qpartner"
         connection = self.database.connect()
         try:
             items = connection.execute(
