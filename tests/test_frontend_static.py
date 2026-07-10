@@ -894,3 +894,13 @@ class FrontendStaticTest(TestCase):
         ):
             with self.subTest(snippet=snippet):
                 self.assertIn(snippet, worker)
+
+    def test_qpartner_marketplace_actions_mark_source_channel(self) -> None:
+        app = (ROOT / "frontend" / "app.js").read_text()
+
+        for snippet in (
+            'const body = { quantity: Number(fd.get("quantity")), source: "qpartner" };',
+            'body: JSON.stringify({ source: "qpartner" })',
+        ):
+            with self.subTest(snippet=snippet):
+                self.assertIn(snippet, app)

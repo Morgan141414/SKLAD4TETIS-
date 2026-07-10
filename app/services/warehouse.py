@@ -1332,8 +1332,16 @@ class WarehouseService:
             )
         return self.get_cart(actor_id)
 
-    def checkout_cart(self, actor_id: str, warehouse_id: int | None, notes: str | None) -> list[dict[str, Any]]:
+    def checkout_cart(
+        self,
+        actor_id: str,
+        warehouse_id: int | None,
+        notes: str | None,
+        source: str = "qpartner",
+    ) -> list[dict[str, Any]]:
         """Create one marketplace inquiry per cart item (grouped per supplier offer) and clear the cart."""
+        if source not in {"marqet", "qpartner", "api"}:
+            raise ValidationError("Marketplace inquiry source must be marqet, qpartner, or api")
         cart = self.get_cart(actor_id)
         if not cart["items"]:
             raise ValidationError("Cart is empty")
@@ -1347,6 +1355,7 @@ class WarehouseService:
                     quantity=float(entry["quantity"]),
                     notes=notes,
                     warehouse_id=warehouse_id,
+                    source=source,
                 )
                 created.append(inquiry)
                 with self.database.transaction() as conn:
@@ -1361,7 +1370,10 @@ class WarehouseService:
         self, catalog_item_id: int, actor_id: str, quantity: float,
         notes: str | None, warehouse_id: int | None,
         purchase_request_id: int | None = None,
+        source: str = "marqet",
     ) -> dict[str, Any]:
+        if source not in {"marqet", "qpartner", "api"}:
+            raise ValidationError("Marketplace inquiry source must be marqet, qpartner, or api")
         connection = self.database.connect()
         try:
             item = connection.execute(
@@ -1385,9 +1397,19 @@ class WarehouseService:
             row_id = insert_and_get_id(
                 conn,
                 """INSERT INTO marketplace_inquiries
-                   (catalog_item_id, supplier_id, warehouse_id, actor_id, quantity, unit_price, notes, purchase_request_id)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-                (catalog_item_id, item["supplier_id"], warehouse_id, actor_id, quantity, item["unit_price"], notes, purchase_request_id),
+                   (catalog_item_id, supplier_id, warehouse_id, actor_id, quantity, unit_price, notes, purchase_request_id, source)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    catalog_item_id,
+                    item["supplier_id"],
+                    warehouse_id,
+                    actor_id,
+                    quantity,
+                    item["unit_price"],
+                    notes,
+                    purchase_request_id,
+                    source,
+                ),
             )
             # Auto-link purchase request status if provided
             if purchase_request_id:
@@ -1436,6 +1458,7 @@ class WarehouseService:
         supplier_id: int | None = None,
         actor_id: str | None = None,
         status: str | None = None,
+        source: str | None = None,
         limit: int = 50,
         offset: int = 0,
     ) -> dict[str, Any]:
@@ -1450,6 +1473,9 @@ class WarehouseService:
         if status:
             where.append("mi.status = ?")
             params.append(status)
+        if source:
+            where.append("mi.source = ?")
+            params.append(source)
         where_clause = f"WHERE {' AND '.join(where)}" if where else ""
         connection = self.database.connect()
         try:

@@ -5361,6 +5361,7 @@ class MarketplaceInquiryCreate(BaseModel):
     notes: str | None = None
     warehouse_id: int | None = None
     purchase_request_id: int | None = None
+    source: str = Field(default="marqet", pattern="^(marqet|qpartner|api)$")
 
 
 class InquiryResponseBody(BaseModel):
@@ -5433,6 +5434,7 @@ def create_inquiry(
             notes=body.notes,
             warehouse_id=warehouse_id,
             purchase_request_id=body.purchase_request_id,
+            source=body.source,
         )
     except ValueError as error:
         raise HTTPException(status_code=404, detail={"code": "not_found", "message": str(error), "details": {}}) from error
@@ -5443,12 +5445,13 @@ def create_inquiry(
 @router.get("/marketplace/my-inquiries", tags=["marketplace"])
 def list_my_inquiries(
     status: str | None = None,
+    source: str | None = None,
     limit: int = 50,
     actor_ctx: ActorContext = Depends(get_actor_context),
 ) -> Any:
     try:
         return get_warehouse_service().list_marketplace_inquiries(
-            actor_id=actor_ctx.actor_id, status=status, limit=limit
+            actor_id=actor_ctx.actor_id, status=status, source=source, limit=limit
         )
     except Exception as error:
         raise map_error(error) from error
@@ -5457,6 +5460,7 @@ def list_my_inquiries(
 @router.get("/supplier/inquiries", tags=["supplier-self"])
 def list_supplier_inquiries(
     status: str | None = None,
+    source: str | None = None,
     limit: int = 50,
     actor_ctx: ActorContext = Depends(get_actor_context),
 ) -> Any:
@@ -5464,7 +5468,7 @@ def list_supplier_inquiries(
         raise HTTPException(status_code=403, detail={"code": "forbidden", "message": "No supplier linked", "details": {}})
     try:
         return get_warehouse_service().list_marketplace_inquiries(
-            supplier_id=actor_ctx.supplier_id, status=status, limit=limit
+            supplier_id=actor_ctx.supplier_id, status=status, source=source, limit=limit
         )
     except Exception as error:
         raise map_error(error) from error
@@ -5618,6 +5622,7 @@ class CartItemQuantityUpdate(BaseModel):
 class CartCheckout(BaseModel):
     warehouse_id: int | None = None
     notes: str | None = None
+    source: str = Field(default="qpartner", pattern="^(marqet|qpartner|api)$")
 
 
 @router.get("/marketplace/cart", tags=["marketplace"])
@@ -5672,7 +5677,7 @@ def checkout_cart_endpoint(
         warehouse_id = body.warehouse_id
         if warehouse_id is None and actor_ctx.warehouse_ids:
             warehouse_id = list(actor_ctx.warehouse_ids)[0]
-        return svc.checkout_cart(actor_ctx.actor_id, warehouse_id, body.notes)
+        return svc.checkout_cart(actor_ctx.actor_id, warehouse_id, body.notes, body.source)
     except Exception as error:
         raise map_error(error) from error
 

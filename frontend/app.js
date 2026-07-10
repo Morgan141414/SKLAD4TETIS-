@@ -6079,7 +6079,7 @@ function showInquiryModal(item, purchaseRequestId = null) {
   document.getElementById("inquiry-modal-form")?.addEventListener("submit", async (e) => {
     e.preventDefault();
     const fd = new FormData(e.target);
-    const body = { quantity: Number(fd.get("quantity")) };
+    const body = { quantity: Number(fd.get("quantity")), source: "qpartner" };
     const notes = (fd.get("notes") || "").trim();
     if (notes) body.notes = notes;
     if (purchaseRequestId) body.purchase_request_id = purchaseRequestId;
@@ -6513,7 +6513,7 @@ async function initMarketplace() {
     const btn = el("cart-checkout-btn");
     try {
       if (btn) { btn.disabled = true; btn.textContent = "Оформляю..."; }
-      const created = await request("/marketplace/cart/checkout", { method: "POST", body: JSON.stringify({}) });
+      const created = await request("/marketplace/cart/checkout", { method: "POST", body: JSON.stringify({ source: "qpartner" }) });
       state.data.cart = await request("/marketplace/cart").catch(() => ({ items: [], total_items: 0, total_amount: 0 }));
       state.data.myInquiries = await request("/marketplace/my-inquiries?limit=50").catch(() => ({ items: [], total: 0 }));
       state.ui.marketplaceTab = "my-inquiries";

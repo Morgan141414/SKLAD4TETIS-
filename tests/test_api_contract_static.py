@@ -890,6 +890,30 @@ class APIContractStaticTest(TestCase):
             with self.subTest(snippet=snippet):
                 self.assertIn(snippet, routes_source + schemas_source)
 
+    def test_marketplace_inquiries_track_source_channel(self) -> None:
+        routes_source = ROUTES_PATH.read_text()
+        service_source = (ROOT / "app" / "services" / "warehouse.py").read_text()
+        migration_source = (
+            ROOT
+            / "app"
+            / "db"
+            / "migrations"
+            / "versions"
+            / "0045_marketplace_inquiry_source.py"
+        ).read_text()
+
+        for snippet in (
+            'source: str = Field(default="marqet", pattern="^(marqet|qpartner|api)$")',
+            'source: str = Field(default="qpartner", pattern="^(marqet|qpartner|api)$")',
+            "body.source",
+            "source=source",
+            "mi.source = ?",
+            "ADD COLUMN IF NOT EXISTS source TEXT NOT NULL DEFAULT 'marqet'",
+            "idx_marketplace_inquiries_source",
+        ):
+            with self.subTest(snippet=snippet):
+                self.assertIn(snippet, routes_source + service_source + migration_source)
+
     def _has_decorator_keyword(self, node: ast.AST, keyword_name: str) -> bool:
         decorators = getattr(node, "decorator_list", [])
         for decorator in decorators:
