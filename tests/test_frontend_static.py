@@ -938,6 +938,10 @@ class FrontendStaticTest(TestCase):
             "state.ui.supplierInquiryStatusFilter",
             'label: "marqet.kz"',
             'label: "qpartner"',
+            "mp-supplier-search-reset",
+            "refreshMarketplaceSuppliers",
+            'event.key !== "Enter"',
+            "поиск: ${escapeHtml(supplierSearch)}",
         ):
             with self.subTest(snippet=snippet):
                 self.assertIn(snippet, app)

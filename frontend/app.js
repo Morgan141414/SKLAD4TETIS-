@@ -5498,12 +5498,14 @@ async function showCompareModal() {
 
 function renderMarketplaceSuppliers(suppliers, filter) {
   const items = suppliers.items || [];
+  const supplierSearch = filter.supplierSearch || "";
   return `
     <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;align-items:center">
-      <input type="text" id="mp-supplier-search" placeholder="Поиск по названию или контакту..." value="${escapeAttr(filter.supplierSearch || "")}" style="flex:1;min-width:160px" />
+      <input type="text" id="mp-supplier-search" placeholder="Поиск по названию или контакту..." value="${escapeAttr(supplierSearch)}" style="flex:1;min-width:160px" />
       <button class="primary" id="mp-supplier-search-btn">Найти</button>
+      ${supplierSearch ? `<button class="secondary" id="mp-supplier-search-reset">Сбросить</button>` : ""}
     </div>
-    <div style="color:var(--muted);font-size:.85rem;margin-bottom:10px">Поставщиков: ${suppliers.total || 0}</div>
+    <div style="color:var(--muted);font-size:.85rem;margin-bottom:10px">Поставщиков: ${suppliers.total || 0}${supplierSearch ? ` · поиск: ${escapeHtml(supplierSearch)}` : ""}</div>
     <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:12px">
       ${items.length ? items.map((s) => {
         const rating = s.rating != null ? Number(s.rating).toFixed(1) : "—";
@@ -6710,15 +6712,28 @@ async function initMarketplace() {
   });
 
   // Supplier search
-  document.getElementById("mp-supplier-search-btn")?.addEventListener("click", async () => {
-    const s = (document.getElementById("mp-supplier-search")?.value || "").trim();
+  async function refreshMarketplaceSuppliers(search) {
     if (!state.ui.marketplaceFilter) state.ui.marketplaceFilter = {};
-    state.ui.marketplaceFilter.supplierSearch = s;
+    state.ui.marketplaceFilter.supplierSearch = search;
     try {
-      state.data.marketplaceSuppliers = await request(`/marketplace/suppliers?limit=50${s ? `&search=${encodeURIComponent(s)}` : ""}`);
+      state.data.marketplaceSuppliers = await request(`/marketplace/suppliers?limit=50${search ? `&search=${encodeURIComponent(search)}` : ""}`);
     } catch (_) { state.data.marketplaceSuppliers = { items: [], total: 0 }; }
     render();
     if (state.view === "marketplace") initMarketplace();
+  }
+
+  document.getElementById("mp-supplier-search-btn")?.addEventListener("click", async () => {
+    const s = (document.getElementById("mp-supplier-search")?.value || "").trim();
+    await refreshMarketplaceSuppliers(s);
+  });
+  document.getElementById("mp-supplier-search")?.addEventListener("keydown", async (event) => {
+    if (event.key !== "Enter") return;
+    event.preventDefault();
+    const s = (event.target?.value || "").trim();
+    await refreshMarketplaceSuppliers(s);
+  });
+  document.getElementById("mp-supplier-search-reset")?.addEventListener("click", async () => {
+    await refreshMarketplaceSuppliers("");
   });
 
   // Browse supplier catalog
