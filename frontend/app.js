@@ -5748,6 +5748,13 @@ function focusQpartnerPendingInquiries() {
   state.ui.marketplaceInquiryStatusFilter = "pending";
 }
 
+function marketplaceCreatedInquiryCount(created) {
+  if (Array.isArray(created)) return created.length;
+  if (created && Array.isArray(created.items)) return created.items.length;
+  if (created && Number.isFinite(Number(created.total))) return Number(created.total);
+  return 0;
+}
+
 function renderMyInquiries(items) {
   const STATUS = {
     pending: { label: "Ожидает ответа", cls: "warning" },
@@ -6653,7 +6660,7 @@ async function initMarketplace() {
       focusQpartnerPendingInquiries();
       state.data.myInquiries = await request(myInquiriesPath()).catch(() => ({ items: [], total: 0 }));
       state.ui.marketplaceTab = "my-inquiries";
-      showAlert(`Заказ оформлен: создано запросов — ${created.length}`);
+      showAlert(`Заказ оформлен: создано запросов — ${marketplaceCreatedInquiryCount(created)}`);
       render();
       if (state.view === "marketplace") initMarketplace();
     } catch (err) {
