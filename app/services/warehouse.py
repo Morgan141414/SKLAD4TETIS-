@@ -128,6 +128,13 @@ class WarehouseService:
             raise ValidationError("Marketplace inquiry source must be marqet, qpartner, or api")
         return source
 
+    def _validate_marketplace_inquiry_status(self, status: str | None) -> str | None:
+        if status is None:
+            return None
+        if status not in {"pending", "responded", "ordered", "closed"}:
+            raise ValidationError("Marketplace inquiry status must be pending, responded, ordered, or closed")
+        return status
+
     def create_category(self, data: CategoryCreate, actor_id: str = "system") -> dict[str, Any]:
         with self.database.transaction() as connection:
             category_id = insert_and_get_id(
@@ -1468,6 +1475,7 @@ class WarehouseService:
         offset: int = 0,
     ) -> dict[str, Any]:
         source = self._validate_marketplace_inquiry_source(source)
+        status = self._validate_marketplace_inquiry_status(status)
         where = []
         params: list[Any] = []
         if supplier_id is not None:
