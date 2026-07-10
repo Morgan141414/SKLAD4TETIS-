@@ -470,7 +470,9 @@ const state = {
     catalogSearch: "",
     catalogStatusFilter: "all",
     marketplaceInquirySourceFilter: "all",
+    marketplaceInquiryStatusFilter: "all",
     supplierInquirySourceFilter: "all",
+    supplierInquiryStatusFilter: "all",
     compareItems: [],
   },
   data: {
@@ -5665,6 +5667,10 @@ function marketplaceInquirySourceQuery(source) {
   return source && source !== "all" ? `&source=${encodeURIComponent(source)}` : "";
 }
 
+function marketplaceInquiryStatusQuery(status) {
+  return status && status !== "all" ? `&status=${encodeURIComponent(status)}` : "";
+}
+
 function marketplaceInquirySourceFilter(value, id) {
   const options = [
     ["all", "Все источники"],
@@ -5681,12 +5687,36 @@ function marketplaceInquirySourceFilter(value, id) {
     </label>`;
 }
 
+function marketplaceInquiryStatusFilter(value, id) {
+  const options = [
+    ["all", "Все статусы"],
+    ["pending", "Ожидает ответа"],
+    ["responded", "Получен ответ"],
+    ["ordered", "Заказано"],
+    ["closed", "Закрыт"],
+  ];
+  return `
+    <label style="display:inline-flex;align-items:center;gap:6px;font-size:.84rem;color:var(--muted);margin-bottom:10px">
+      Статус
+      <select id="${escapeAttr(id)}" style="padding:4px 8px;border:1px solid var(--line,#ddd);border-radius:6px;background:var(--surface,#fff);font-size:.84rem">
+        ${options.map(([key, label]) => `<option value="${key}" ${value === key ? "selected" : ""}>${label}</option>`).join("")}
+      </select>
+    </label>`;
+}
+
+function marketplaceInquiryFilterBar(sourceValue, sourceId, statusValue, statusId) {
+  return `<div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+    ${marketplaceInquirySourceFilter(sourceValue, sourceId)}
+    ${marketplaceInquiryStatusFilter(statusValue, statusId)}
+  </div>`;
+}
+
 function myInquiriesPath() {
-  return `/marketplace/my-inquiries?limit=50${marketplaceInquirySourceQuery(state.ui.marketplaceInquirySourceFilter || "all")}`;
+  return `/marketplace/my-inquiries?limit=50${marketplaceInquirySourceQuery(state.ui.marketplaceInquirySourceFilter || "all")}${marketplaceInquiryStatusQuery(state.ui.marketplaceInquiryStatusFilter || "all")}`;
 }
 
 function supplierInquiriesPath() {
-  return `/supplier/inquiries?limit=50${marketplaceInquirySourceQuery(state.ui.supplierInquirySourceFilter || "all")}`;
+  return `/supplier/inquiries?limit=50${marketplaceInquirySourceQuery(state.ui.supplierInquirySourceFilter || "all")}${marketplaceInquiryStatusQuery(state.ui.supplierInquiryStatusFilter || "all")}`;
 }
 
 function renderMyInquiries(items) {
@@ -5697,15 +5727,16 @@ function renderMyInquiries(items) {
     closed: { label: "Закрыт", cls: "" },
   };
   const sourceFilter = state.ui.marketplaceInquirySourceFilter || "all";
-  const sourceControl = marketplaceInquirySourceFilter(sourceFilter, "mp-inquiry-source-filter");
+  const statusFilter = state.ui.marketplaceInquiryStatusFilter || "all";
+  const filterBar = marketplaceInquiryFilterBar(sourceFilter, "mp-inquiry-source-filter", statusFilter, "mp-inquiry-status-filter");
   if (!items.length) return `
-    ${sourceControl}
+    ${filterBar}
     <div class="panel" style="text-align:center;padding:40px 16px">
       <div style="font-size:2.5rem;margin-bottom:8px">📋</div>
       <div style="color:var(--muted)">Вы ещё не отправляли запросы поставщикам.<br>Найдите нужный товар в каталоге и нажмите «Запросить».</div>
       <button class="primary" style="margin-top:16px" data-mp-tab="catalog">Перейти в каталог</button>
     </div>`;
-  return sourceControl + items.map((inq) => {
+  return filterBar + items.map((inq) => {
     const st = STATUS[inq.status] || { label: inq.status, cls: "" };
     const totalPrice = inq.unit_price ? (inq.quantity * inq.unit_price).toFixed(2) : null;
     return `
@@ -6504,6 +6535,12 @@ async function initMarketplace() {
 
   el("mp-inquiry-source-filter")?.addEventListener("change", async (event) => {
     state.ui.marketplaceInquirySourceFilter = event.target.value || "all";
+    state.data.myInquiries = await request(myInquiriesPath()).catch(() => ({ items: [], total: 0 }));
+    render();
+    if (state.view === "marketplace") initMarketplace();
+  });
+  el("mp-inquiry-status-filter")?.addEventListener("change", async (event) => {
+    state.ui.marketplaceInquiryStatusFilter = event.target.value || "all";
     state.data.myInquiries = await request(myInquiriesPath()).catch(() => ({ items: [], total: 0 }));
     render();
     if (state.view === "marketplace") initMarketplace();
@@ -7678,14 +7715,15 @@ function renderSupplierInquiries() {
     closed: { label: "Закрыт", cls: "" },
   };
   const sourceFilter = state.ui.supplierInquirySourceFilter || "all";
-  const sourceControl = marketplaceInquirySourceFilter(sourceFilter, "supplier-inquiry-source-filter");
+  const statusFilter = state.ui.supplierInquiryStatusFilter || "all";
+  const filterBar = marketplaceInquiryFilterBar(sourceFilter, "supplier-inquiry-source-filter", statusFilter, "supplier-inquiry-status-filter");
   if (!items.length) return `
-    ${sourceControl}
+    ${filterBar}
     <div class="panel" style="text-align:center;padding:32px 16px">
       <div style="font-size:2rem;margin-bottom:8px">📨</div>
       <div style="color:var(--muted)">Входящих запросов нет.<br>Они появятся, когда склад запросит ваш товар из каталога.</div>
     </div>`;
-  return sourceControl + items.map((inq) => {
+  return filterBar + items.map((inq) => {
     const st = STATUS[inq.status] || { label: inq.status, cls: "" };
     return `
     <div class="panel" style="margin-bottom:12px" id="inquiry-card-${inq.id}">
@@ -8442,6 +8480,11 @@ function bindSupplierActions() {
   // Respond to marketplace inquiries
   el("supplier-inquiry-source-filter")?.addEventListener("change", async (event) => {
     state.ui.supplierInquirySourceFilter = event.target.value || "all";
+    state.data.supplierPortal.inquiries = (await request(supplierInquiriesPath()).catch(() => ({ items: [] }))).items || [];
+    render();
+  });
+  el("supplier-inquiry-status-filter")?.addEventListener("change", async (event) => {
+    state.ui.supplierInquiryStatusFilter = event.target.value || "all";
     state.data.supplierPortal.inquiries = (await request(supplierInquiriesPath()).catch(() => ({ items: [] }))).items || [];
     render();
   });
