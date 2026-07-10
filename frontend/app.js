@@ -5704,10 +5704,16 @@ function marketplaceInquiryStatusFilter(value, id) {
     </label>`;
 }
 
-function marketplaceInquiryFilterBar(sourceValue, sourceId, statusValue, statusId) {
+function marketplaceInquiryFiltersActive(sourceValue, statusValue) {
+  return (sourceValue && sourceValue !== "all") || (statusValue && statusValue !== "all");
+}
+
+function marketplaceInquiryFilterBar(sourceValue, sourceId, statusValue, statusId, resetId) {
+  const hasActiveFilters = marketplaceInquiryFiltersActive(sourceValue, statusValue);
   return `<div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
     ${marketplaceInquirySourceFilter(sourceValue, sourceId)}
     ${marketplaceInquiryStatusFilter(statusValue, statusId)}
+    ${hasActiveFilters && resetId ? `<button class="secondary" id="${escapeAttr(resetId)}" style="font-size:.82rem;margin-bottom:10px">Сбросить фильтры</button>` : ""}
   </div>`;
 }
 
@@ -5728,13 +5734,14 @@ function renderMyInquiries(items) {
   };
   const sourceFilter = state.ui.marketplaceInquirySourceFilter || "all";
   const statusFilter = state.ui.marketplaceInquiryStatusFilter || "all";
-  const filterBar = marketplaceInquiryFilterBar(sourceFilter, "mp-inquiry-source-filter", statusFilter, "mp-inquiry-status-filter");
+  const hasActiveFilters = marketplaceInquiryFiltersActive(sourceFilter, statusFilter);
+  const filterBar = marketplaceInquiryFilterBar(sourceFilter, "mp-inquiry-source-filter", statusFilter, "mp-inquiry-status-filter", "mp-inquiry-filter-reset");
   if (!items.length) return `
     ${filterBar}
     <div class="panel" style="text-align:center;padding:40px 16px">
       <div style="font-size:2.5rem;margin-bottom:8px">📋</div>
-      <div style="color:var(--muted)">Вы ещё не отправляли запросы поставщикам.<br>Найдите нужный товар в каталоге и нажмите «Запросить».</div>
-      <button class="primary" style="margin-top:16px" data-mp-tab="catalog">Перейти в каталог</button>
+      <div style="color:var(--muted)">${hasActiveFilters ? "По выбранным фильтрам заявок нет.<br>Сбросьте фильтры или выберите другой источник/статус." : "Вы ещё не отправляли запросы поставщикам.<br>Найдите нужный товар в каталоге и нажмите «Запросить»."}</div>
+      ${hasActiveFilters ? `<button class="secondary" style="margin-top:16px" id="mp-inquiry-empty-reset">Сбросить фильтры</button>` : `<button class="primary" style="margin-top:16px" data-mp-tab="catalog">Перейти в каталог</button>`}
     </div>`;
   return filterBar + items.map((inq) => {
     const st = STATUS[inq.status] || { label: inq.status, cls: "" };
@@ -6544,6 +6551,15 @@ async function initMarketplace() {
     state.data.myInquiries = await request(myInquiriesPath()).catch(() => ({ items: [], total: 0 }));
     render();
     if (state.view === "marketplace") initMarketplace();
+  });
+  ["mp-inquiry-filter-reset", "mp-inquiry-empty-reset"].forEach((id) => {
+    el(id)?.addEventListener("click", async () => {
+      state.ui.marketplaceInquirySourceFilter = "all";
+      state.ui.marketplaceInquiryStatusFilter = "all";
+      state.data.myInquiries = await request(myInquiriesPath()).catch(() => ({ items: [], total: 0 }));
+      render();
+      if (state.view === "marketplace") initMarketplace();
+    });
   });
 
   // Open product detail modal
@@ -7716,12 +7732,14 @@ function renderSupplierInquiries() {
   };
   const sourceFilter = state.ui.supplierInquirySourceFilter || "all";
   const statusFilter = state.ui.supplierInquiryStatusFilter || "all";
-  const filterBar = marketplaceInquiryFilterBar(sourceFilter, "supplier-inquiry-source-filter", statusFilter, "supplier-inquiry-status-filter");
+  const hasActiveFilters = marketplaceInquiryFiltersActive(sourceFilter, statusFilter);
+  const filterBar = marketplaceInquiryFilterBar(sourceFilter, "supplier-inquiry-source-filter", statusFilter, "supplier-inquiry-status-filter", "supplier-inquiry-filter-reset");
   if (!items.length) return `
     ${filterBar}
     <div class="panel" style="text-align:center;padding:32px 16px">
       <div style="font-size:2rem;margin-bottom:8px">📨</div>
-      <div style="color:var(--muted)">Входящих запросов нет.<br>Они появятся, когда склад запросит ваш товар из каталога.</div>
+      <div style="color:var(--muted)">${hasActiveFilters ? "По выбранным фильтрам входящих запросов нет.<br>Сбросьте фильтры или выберите другой источник/статус." : "Входящих запросов нет.<br>Они появятся, когда склад запросит ваш товар из каталога."}</div>
+      ${hasActiveFilters ? `<button class="secondary" style="margin-top:16px" id="supplier-inquiry-empty-reset">Сбросить фильтры</button>` : ""}
     </div>`;
   return filterBar + items.map((inq) => {
     const st = STATUS[inq.status] || { label: inq.status, cls: "" };
@@ -8487,6 +8505,14 @@ function bindSupplierActions() {
     state.ui.supplierInquiryStatusFilter = event.target.value || "all";
     state.data.supplierPortal.inquiries = (await request(supplierInquiriesPath()).catch(() => ({ items: [] }))).items || [];
     render();
+  });
+  ["supplier-inquiry-filter-reset", "supplier-inquiry-empty-reset"].forEach((id) => {
+    el(id)?.addEventListener("click", async () => {
+      state.ui.supplierInquirySourceFilter = "all";
+      state.ui.supplierInquiryStatusFilter = "all";
+      state.data.supplierPortal.inquiries = (await request(supplierInquiriesPath()).catch(() => ({ items: [] }))).items || [];
+      render();
+    });
   });
 
   document.querySelectorAll(".inquiry-respond-form").forEach((form) => {
