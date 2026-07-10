@@ -5671,6 +5671,15 @@ function marketplaceInquiryStatusQuery(status) {
   return status && status !== "all" ? `&status=${encodeURIComponent(status)}` : "";
 }
 
+function marketplaceInquiryStatusMeta(status) {
+  return {
+    pending: "Ожидает ответа",
+    responded: "Получен ответ",
+    ordered: "Заказано",
+    closed: "Закрыт",
+  }[status] || status;
+}
+
 function marketplaceInquirySourceFilter(value, id) {
   const options = [
     ["all", "Все источники"],
@@ -5708,12 +5717,21 @@ function marketplaceInquiryFiltersActive(sourceValue, statusValue) {
   return (sourceValue && sourceValue !== "all") || (statusValue && statusValue !== "all");
 }
 
+function marketplaceInquiryFilterSummary(sourceValue, statusValue) {
+  const parts = [];
+  if (sourceValue && sourceValue !== "all") parts.push(`Источник: ${marketplaceInquirySourceMeta(sourceValue).label}`);
+  if (statusValue && statusValue !== "all") parts.push(`Статус: ${marketplaceInquiryStatusMeta(statusValue)}`);
+  return parts.join(" · ");
+}
+
 function marketplaceInquiryFilterBar(sourceValue, sourceId, statusValue, statusId, resetId) {
   const hasActiveFilters = marketplaceInquiryFiltersActive(sourceValue, statusValue);
+  const summary = marketplaceInquiryFilterSummary(sourceValue, statusValue);
   return `<div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
     ${marketplaceInquirySourceFilter(sourceValue, sourceId)}
     ${marketplaceInquiryStatusFilter(statusValue, statusId)}
     ${hasActiveFilters && resetId ? `<button class="secondary" id="${escapeAttr(resetId)}" style="font-size:.82rem;margin-bottom:10px">Сбросить фильтры</button>` : ""}
+    ${summary ? `<span style="font-size:.82rem;color:var(--muted);margin-bottom:10px">${escapeHtml(summary)}</span>` : ""}
   </div>`;
 }
 
