@@ -904,6 +904,13 @@ class FrontendStaticTest(TestCase):
             'body: JSON.stringify({ source: "qpartner" })',
             "function marketplaceInquirySourceBadge",
             "marketplaceInquirySourceBadge(inq.source)",
+            "function marketplaceInquirySourceQuery",
+            "function myInquiriesPath",
+            "function supplierInquiriesPath",
+            "mp-inquiry-source-filter",
+            "supplier-inquiry-source-filter",
+            "state.ui.marketplaceInquirySourceFilter",
+            "state.ui.supplierInquirySourceFilter",
             'label: "marqet.kz"',
             'label: "qpartner"',
         ):

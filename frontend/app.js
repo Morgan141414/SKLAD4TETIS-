@@ -469,6 +469,8 @@ const state = {
     catalogSubTab: "items",
     catalogSearch: "",
     catalogStatusFilter: "all",
+    marketplaceInquirySourceFilter: "all",
+    supplierInquirySourceFilter: "all",
     compareItems: [],
   },
   data: {
@@ -5659,6 +5661,34 @@ function marketplaceInquirySourceBadge(source) {
   return `<span title="${escapeAttr(meta.hint)}" style="display:inline-flex;align-items:center;border:1px solid ${meta.color};color:${meta.color};border-radius:999px;padding:1px 7px;font-size:.72rem;font-weight:600;line-height:1.4;white-space:nowrap">${escapeHtml(meta.label)}</span>`;
 }
 
+function marketplaceInquirySourceQuery(source) {
+  return source && source !== "all" ? `&source=${encodeURIComponent(source)}` : "";
+}
+
+function marketplaceInquirySourceFilter(value, id) {
+  const options = [
+    ["all", "Все источники"],
+    ["marqet", "marqet.kz"],
+    ["qpartner", "qpartner"],
+    ["api", "API"],
+  ];
+  return `
+    <label style="display:inline-flex;align-items:center;gap:6px;font-size:.84rem;color:var(--muted);margin-bottom:10px">
+      Источник
+      <select id="${escapeAttr(id)}" style="padding:4px 8px;border:1px solid var(--line,#ddd);border-radius:6px;background:var(--surface,#fff);font-size:.84rem">
+        ${options.map(([key, label]) => `<option value="${key}" ${value === key ? "selected" : ""}>${label}</option>`).join("")}
+      </select>
+    </label>`;
+}
+
+function myInquiriesPath() {
+  return `/marketplace/my-inquiries?limit=50${marketplaceInquirySourceQuery(state.ui.marketplaceInquirySourceFilter || "all")}`;
+}
+
+function supplierInquiriesPath() {
+  return `/supplier/inquiries?limit=50${marketplaceInquirySourceQuery(state.ui.supplierInquirySourceFilter || "all")}`;
+}
+
 function renderMyInquiries(items) {
   const STATUS = {
     pending: { label: "Ожидает ответа", cls: "warning" },
@@ -5666,13 +5696,16 @@ function renderMyInquiries(items) {
     ordered: { label: "Заказано", cls: "ok" },
     closed: { label: "Закрыт", cls: "" },
   };
+  const sourceFilter = state.ui.marketplaceInquirySourceFilter || "all";
+  const sourceControl = marketplaceInquirySourceFilter(sourceFilter, "mp-inquiry-source-filter");
   if (!items.length) return `
+    ${sourceControl}
     <div class="panel" style="text-align:center;padding:40px 16px">
       <div style="font-size:2.5rem;margin-bottom:8px">📋</div>
       <div style="color:var(--muted)">Вы ещё не отправляли запросы поставщикам.<br>Найдите нужный товар в каталоге и нажмите «Запросить».</div>
       <button class="primary" style="margin-top:16px" data-mp-tab="catalog">Перейти в каталог</button>
     </div>`;
-  return items.map((inq) => {
+  return sourceControl + items.map((inq) => {
     const st = STATUS[inq.status] || { label: inq.status, cls: "" };
     const totalPrice = inq.unit_price ? (inq.quantity * inq.unit_price).toFixed(2) : null;
     return `
@@ -5962,7 +5995,7 @@ function showBulkInquiryModal(productName) {
         ? `✓ Запрос отправлен ${count} поставщик${count === 1 ? "у" : count < 5 ? "ам" : "ам"}! Ответы появятся в «Мои запросы».`
         : "Поставщики с таким товаром не найдены в каталоге.";
       if (count > 0) {
-        request("/marketplace/my-inquiries?limit=50").then((d) => { state.data.myInquiries = d; }).catch(() => {});
+        request(myInquiriesPath()).then((d) => { state.data.myInquiries = d; }).catch(() => {});
         if (btn) { btn.disabled = true; btn.textContent = "Отправлено"; }
         setTimeout(() => overlay.remove(), 3000);
       } else {
@@ -6106,7 +6139,7 @@ function showInquiryModal(item, purchaseRequestId = null) {
       if (btn) { btn.disabled = true; btn.textContent = "Отправляю..."; }
       const created = await request(`/marketplace/inquire/${item.id}`, { method: "POST", body: JSON.stringify(body) });
       // Refresh my-inquiries so the new entry appears immediately
-      request("/marketplace/my-inquiries?limit=50").then((d) => { state.data.myInquiries = d; }).catch(() => {});
+      request(myInquiriesPath()).then((d) => { state.data.myInquiries = d; }).catch(() => {});
       result.style.display = "block";
       result.style.background = "var(--success-bg,#f0fff4)";
       result.style.color = "var(--success,#16a34a)";
@@ -6459,7 +6492,7 @@ async function initMarketplace() {
         } catch (_) { state.data.marketplaceSuppliers = { items: [], total: 0 }; }
       }
       if (state.ui.marketplaceTab === "my-inquiries") {
-        state.data.myInquiries = await request("/marketplace/my-inquiries?limit=50").catch(() => ({ items: [], total: 0 }));
+        state.data.myInquiries = await request(myInquiriesPath()).catch(() => ({ items: [], total: 0 }));
       }
       if (state.ui.marketplaceTab === "cart") {
         state.data.cart = await request("/marketplace/cart").catch(() => ({ items: [], total_items: 0, total_amount: 0 }));
@@ -6467,6 +6500,13 @@ async function initMarketplace() {
       render();
       if (state.view === "marketplace") initMarketplace();
     });
+  });
+
+  el("mp-inquiry-source-filter")?.addEventListener("change", async (event) => {
+    state.ui.marketplaceInquirySourceFilter = event.target.value || "all";
+    state.data.myInquiries = await request(myInquiriesPath()).catch(() => ({ items: [], total: 0 }));
+    render();
+    if (state.view === "marketplace") initMarketplace();
   });
 
   // Open product detail modal
@@ -6532,7 +6572,7 @@ async function initMarketplace() {
       if (btn) { btn.disabled = true; btn.textContent = "Оформляю..."; }
       const created = await request("/marketplace/cart/checkout", { method: "POST", body: JSON.stringify({ source: "qpartner" }) });
       state.data.cart = await request("/marketplace/cart").catch(() => ({ items: [], total_items: 0, total_amount: 0 }));
-      state.data.myInquiries = await request("/marketplace/my-inquiries?limit=50").catch(() => ({ items: [], total: 0 }));
+      state.data.myInquiries = await request(myInquiriesPath()).catch(() => ({ items: [], total: 0 }));
       state.ui.marketplaceTab = "my-inquiries";
       showAlert(`Заказ оформлен: создано запросов — ${created.length}`);
       render();
@@ -7637,12 +7677,15 @@ function renderSupplierInquiries() {
     ordered: { label: "Заказано", cls: "ok" },
     closed: { label: "Закрыт", cls: "" },
   };
+  const sourceFilter = state.ui.supplierInquirySourceFilter || "all";
+  const sourceControl = marketplaceInquirySourceFilter(sourceFilter, "supplier-inquiry-source-filter");
   if (!items.length) return `
+    ${sourceControl}
     <div class="panel" style="text-align:center;padding:32px 16px">
       <div style="font-size:2rem;margin-bottom:8px">📨</div>
       <div style="color:var(--muted)">Входящих запросов нет.<br>Они появятся, когда склад запросит ваш товар из каталога.</div>
     </div>`;
-  return items.map((inq) => {
+  return sourceControl + items.map((inq) => {
     const st = STATUS[inq.status] || { label: inq.status, cls: "" };
     return `
     <div class="panel" style="margin-bottom:12px" id="inquiry-card-${inq.id}">
@@ -8397,6 +8440,12 @@ function bindSupplierActions() {
   });
 
   // Respond to marketplace inquiries
+  el("supplier-inquiry-source-filter")?.addEventListener("change", async (event) => {
+    state.ui.supplierInquirySourceFilter = event.target.value || "all";
+    state.data.supplierPortal.inquiries = (await request(supplierInquiriesPath()).catch(() => ({ items: [] }))).items || [];
+    render();
+  });
+
   document.querySelectorAll(".inquiry-respond-form").forEach((form) => {
     form.addEventListener("submit", async (e) => {
       e.preventDefault();
@@ -8497,7 +8546,7 @@ async function loadSupplierPortalData() {
     state.data.supplierPortal.reviews = await request(`/suppliers/${supplierId}/reviews`).catch(() => []);
     state.data.supplierPortal.profile = await request(`/supplier/me`).catch(() => null);
     state.data.supplierPortal.myCatalog = (await request(`/supplier/catalog`).catch(() => ({ items: [] }))).items || [];
-    state.data.supplierPortal.inquiries = (await request(`/supplier/inquiries`).catch(() => ({ items: [] }))).items || [];
+    state.data.supplierPortal.inquiries = (await request(supplierInquiriesPath()).catch(() => ({ items: [] }))).items || [];
     state.data.supplierPortal.stats = await request(`/supplier/stats`).catch(() => null);
     state.data.supplierPortal.orders = await request(`/supplier/orders?limit=100`).catch(() => ({ items: [], total: 0 }));
     state.data.supplierPortal.catalogAnalytics = await request(`/supplier/catalog/analytics`).catch(() => []);
@@ -8695,7 +8744,7 @@ async function loadAll() {
       state.data.marketplaceCategories = [];
     }
     // Load my sent inquiries
-    state.data.myInquiries = await request("/marketplace/my-inquiries?limit=50").catch(() => ({ items: [], total: 0 }));
+    state.data.myInquiries = await request(myInquiriesPath()).catch(() => ({ items: [], total: 0 }));
     // Load cart
     state.data.cart = await request("/marketplace/cart").catch(() => ({ items: [], total_items: 0, total_amount: 0 }));
     // Load users if manager
@@ -9529,7 +9578,7 @@ function bindActions() {
           body: JSON.stringify({ action }),
         });
         showAlert(action === "release" ? "Escrow освобождён. Средства перечислены поставщику." : action === "reserve" ? "Средства зарезервированы." : "Средства возвращены.", "ok");
-        state.data.myInquiries = await request("/marketplace/my-inquiries?limit=50").catch(() => state.data.myInquiries);
+        state.data.myInquiries = await request(myInquiriesPath()).catch(() => state.data.myInquiries);
         render();
       } catch (err) { showAlert(err.message, "error"); }
       finally { setPending(btn, false); }
