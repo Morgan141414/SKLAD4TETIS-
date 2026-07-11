@@ -8548,6 +8548,7 @@ function applyDensity() {
 async function loadAll() {
   // Standalone (non-tetis, non-/sklad) требует логин перед загрузкой
   const _isStandaloneGuard = !(
+    window.location.pathname.startsWith("/sklad") ||
     window.location.hostname === "tetis1.kz" ||
     window.location.hostname === "www.tetis1.kz"
   );
