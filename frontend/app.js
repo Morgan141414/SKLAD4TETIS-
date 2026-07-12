@@ -5537,6 +5537,7 @@ function renderMarketplaceSuppliers(suppliers, filter) {
 
 function renderCart(cart) {
   const items = cart.items || [];
+  const hasInactiveItems = cartHasInactiveItems(items);
   if (!items.length) return `
     <div class="panel" style="text-align:center;padding:40px 16px">
       <div style="font-size:2.5rem;margin-bottom:8px">🛒</div>
@@ -5558,9 +5559,10 @@ function renderCart(cart) {
         <div style="font-weight:700;color:var(--accent);min-width:110px;text-align:right">${fmtMoneyKzt(Number(it.unit_price) * Number(it.quantity))} тг</div>
         <button class="secondary" style="font-size:.82rem" data-cart-remove="${it.id}">✕</button>
       </div>`).join("")}
+    ${hasInactiveItems ? `<div class="panel" style="border-color:var(--danger,#dc2626);color:var(--danger,#dc2626);font-size:.88rem;margin-bottom:10px">Удалите неактивные товары из корзины перед оформлением заказа.</div>` : ""}
     <div class="panel" style="display:flex;justify-content:space-between;align-items:center;margin-top:8px">
       <div style="font-size:1.05rem">Итого (${cart.total_items} поз.): <strong style="color:var(--accent)">${fmtMoneyKzt(cart.total_amount)} тг</strong></div>
-      <button class="primary" id="cart-checkout-btn">Оформить заказ →</button>
+      <button class="primary" id="cart-checkout-btn" ${hasInactiveItems ? `disabled title="Удалите неактивные товары из корзины"` : ""}>Оформить заказ →</button>
     </div>`;
 }
 
@@ -5755,6 +5757,10 @@ function marketplaceCreatedInquiryCount(created) {
   if (created && Array.isArray(created.items)) return created.items.length;
   if (created && Number.isFinite(Number(created.total))) return Number(created.total);
   return 0;
+}
+
+function cartHasInactiveItems(items) {
+  return (items || []).some((item) => item.is_active === false);
 }
 
 function renderMyInquiries(items) {
@@ -6655,6 +6661,10 @@ async function initMarketplace() {
   // Cart: checkout
   el("cart-checkout-btn")?.addEventListener("click", async () => {
     const btn = el("cart-checkout-btn");
+    if (cartHasInactiveItems(state.data.cart?.items || [])) {
+      showAlert("Удалите неактивные товары из корзины перед оформлением заказа", "error");
+      return;
+    }
     try {
       if (btn) { btn.disabled = true; btn.textContent = "Оформляю..."; }
       const created = await request("/marketplace/cart/checkout", { method: "POST", body: JSON.stringify({ source: "qpartner" }) });
