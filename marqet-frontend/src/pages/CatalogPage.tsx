@@ -23,7 +23,7 @@ const css = `
 .trust-strip { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:10px; margin-bottom:20px; }
 .trust-item { min-height:58px; display:flex; align-items:center; gap:10px; padding:11px 13px; border:1px solid #DCE5F3; background:#fff; border-radius:14px; color:#334155; font-size:13px; font-weight:700; box-shadow:0 8px 24px rgba(15,23,42,.04); }
 .trust-dot { width:10px; height:10px; border-radius:999px; background:linear-gradient(135deg,#10B981,#3B82F6); flex-shrink:0; }
-.cats-strip { display:flex; gap:8px; overflow-x:auto; padding-bottom:4px; margin-bottom:20px; scrollbar-width:none; -webkit-overflow-scrolling:touch; }
+.cats-strip { width:100%; max-width:100%; display:flex; gap:8px; overflow-x:auto; overflow-y:hidden; padding-bottom:4px; margin-bottom:20px; scrollbar-width:none; -webkit-overflow-scrolling:touch; }
 .cats-strip::-webkit-scrollbar { display:none; }
 .cat-chip { flex-shrink:0; padding:8px 18px; border-radius:22px; border:1.5px solid #E2E8F0; background:#fff; font-size:13px; font-weight:600; color:#475569; cursor:pointer; transition:all .18s; white-space:nowrap; }
 .cat-chip:hover { border-color:#5B4FE8; color:#5B4FE8; }

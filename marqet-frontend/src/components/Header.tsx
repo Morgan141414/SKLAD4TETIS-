@@ -48,7 +48,12 @@ const css = `
 .dd a, .dd button { display:block; width:100%; padding:11px 16px; font-size:14px; color:#334155; background:none; border:none; text-align:left; transition:background .15s; cursor:pointer; }
 .dd a:hover, .dd button:hover { background:#F8FAFC; }
 .dd .danger { color:#EF4444; }
-@media(max-width:640px){.uname,.btn-login,.btn-post span{display:none}}
+@media(max-width:640px){
+  .hdr-inner{padding:0 12px;gap:8px}
+  .search-wrap{min-width:0}
+  .uname,.btn-login,.btn-reg,.btn-post span{display:none}
+  .btn-post,.btn-icon{width:40px;padding:0;justify-content:center}
+}
 .verified-badge { display:inline-flex;align-items:center;gap:3px;background:#D1FAE5;color:#065F46;padding:2px 6px;border-radius:8px;font-size:10px;font-weight:700;margin-left:4px; }
 `
 
