@@ -34,7 +34,9 @@ class DatabaseFoundationStaticTest(TestCase):
             'revision = "0046_merge_supplier_offers_marketplace_inquiry_source"',
             merge,
         )
-        self.assertIn('down_revision = ("0018_supplier_offers", "0045_marketplace_inquiry_source")', merge)
+        self.assertIn('"0018_supplier_offers"', merge)
+        self.assertIn('"0045_marketplace_inquiry_source"', merge)
+        self.assertIn('"0047_listing_expiry_promotion"', merge)
         self.assertIn("def upgrade() -> None:", merge)
         self.assertIn("def downgrade() -> None:", merge)
 
