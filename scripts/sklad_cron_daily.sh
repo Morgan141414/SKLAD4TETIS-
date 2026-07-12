@@ -1,16 +1,21 @@
 #!/bin/bash
 # Daily maintenance: low stock, expiry, quarantine notifications
-API="http://127.0.0.1:8120/api/v1"
+set -euo pipefail
+
+API="${SKLAD_API_URL:-http://127.0.0.1:8120/api/v1}"
+: "${SKLAD_JWT_HMAC_SECRET:?Set SKLAD_JWT_HMAC_SECRET for cron token signing}"
+
 TOKEN=$(python3 -c "
+import os
 import jwt, datetime
 payload = {
   \"sub\": \"system\",
-  \"iss\": \"tetis\",
-  \"aud\": \"sklad\",
+  \"iss\": os.getenv(\"SKLAD_JWT_ISSUER\") or \"tetis\",
+  \"aud\": os.getenv(\"SKLAD_JWT_AUDIENCE\") or \"sklad\",
   \"roles\": [\"warehouse_manager\"],
   \"exp\": int((datetime.datetime.utcnow() + datetime.timedelta(hours=1)).timestamp()),
 }
-print(jwt.encode(payload, \"finalboss2-staging-secret-key-change-before-prod\", algorithm=\"HS256\"))
+print(jwt.encode(payload, os.environ[\"SKLAD_JWT_HMAC_SECRET\"], algorithm=\"HS256\"))
 " 2>/dev/null)
 
 if [ -z "$TOKEN" ]; then

@@ -7,10 +7,10 @@ set -euo pipefail
 BACKUP_DIR="/opt/backups/postgres"
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
 RETAIN_DAYS=30
-POSTGRES_CONTAINER="36e33509aaac_qtrix_postgres_1"
+POSTGRES_CONTAINER="${POSTGRES_CONTAINER:?Set POSTGRES_CONTAINER}"
 LOG_FILE="/var/log/sklad_backup.log"
-PGUSER="finalboss"
-PGPASSWORD="finalboss_pass"
+PGUSER="${PGUSER:?Set PGUSER}"
+PGPASSWORD="${PGPASSWORD:?Set PGPASSWORD}"
 
 log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" | tee -a "$LOG_FILE"; }
 

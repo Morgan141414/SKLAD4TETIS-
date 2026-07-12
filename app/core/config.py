@@ -64,8 +64,13 @@ class Settings(BaseSettings):
             return "SKLAD_DATABASE_BACKEND does not match SKLAD_DATABASE_URL"
         if not self.database_backend_allowed_for_mode():
             return "SQLite is allowed only in SKLAD_DEPLOYMENT_MODE=demo"
-        if self.deployment_mode == "production" and self.dev_auth_enabled:
-            return "SKLAD_DEV_AUTH_ENABLED must be false in production"
+        if self.deployment_mode == "production":
+            if self.public_access_enabled:
+                return "SKLAD_PUBLIC_ACCESS_ENABLED must be false in production"
+            if self.dev_auth_enabled:
+                return "SKLAD_DEV_AUTH_ENABLED must be false in production"
+            if not self.oidc_enabled and not self.jwt_hmac_secret:
+                return "Production requires SKLAD_JWT_HMAC_SECRET or SKLAD_OIDC_ENABLED=true"
         return None
 
     @property

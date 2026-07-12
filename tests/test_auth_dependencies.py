@@ -43,6 +43,36 @@ class AuthDependencyTest(TestCase):
         self.assertEqual(raised.exception.status_code, 401)
         self.assertEqual(raised.exception.detail["code"], "unauthorized")
 
+    def test_production_runtime_rejects_public_or_missing_auth_config(self) -> None:
+        from app.core.config import Settings
+
+        public_settings = Settings(
+            deployment_mode="production",
+            database_backend="postgresql",
+            database_url="postgresql+psycopg://user:pass@db:5432/sklad",
+            public_access_enabled=True,
+            dev_auth_enabled=False,
+            jwt_hmac_secret="secret",
+        )
+        self.assertEqual(
+            public_settings.runtime_configuration_error(),
+            "SKLAD_PUBLIC_ACCESS_ENABLED must be false in production",
+        )
+
+        missing_auth_settings = Settings(
+            deployment_mode="production",
+            database_backend="postgresql",
+            database_url="postgresql+psycopg://user:pass@db:5432/sklad",
+            public_access_enabled=False,
+            dev_auth_enabled=False,
+            jwt_hmac_secret=None,
+            oidc_enabled=False,
+        )
+        self.assertEqual(
+            missing_auth_settings.runtime_configuration_error(),
+            "Production requires SKLAD_JWT_HMAC_SECRET or SKLAD_OIDC_ENABLED=true",
+        )
+
     def test_production_mode_uses_bearer_token_for_actor_context(self) -> None:
         from app.api.dependencies import get_actor_context
         from app.core.config import Settings
