@@ -5315,13 +5315,20 @@ function renderMarketplace() {
   const myInquiries = state.data.myInquiries || { items: [], total: 0 };
   const pendingMyCount = (myInquiries.items || []).filter((i) => i.status === "responded").length;
   const cart = state.data.cart || { items: [], total_items: 0, total_amount: 0 };
+  const marketplaceItems = [...(mp.items || [])];
+  const verifiedCount = marketplaceItems.filter((item) => item.supplier_is_verified).length;
+  const bestPrice = marketplaceItems.reduce((min, item) => {
+    const price = Number(item.unit_price || 0);
+    return price > 0 && (min === null || price < min) ? price : min;
+  }, null);
+  const fastDeliveryCount = marketplaceItems.filter((item) => Number(item.delivery_days || item.supplier_delivery_days || 99) <= 2).length;
 
   const tabBar = `
-    <div style="display:flex;gap:4px;margin-bottom:16px;border-bottom:2px solid var(--line,#eee);padding-bottom:0;flex-wrap:wrap">
-      <button class="${tab === "catalog" ? "active" : "secondary"}" style="border-radius:6px 6px 0 0;border-bottom:none;font-size:.9rem" data-mp-tab="catalog">🛍️ Каталог товаров</button>
-      <button class="${tab === "suppliers" ? "active" : "secondary"}" style="border-radius:6px 6px 0 0;border-bottom:none;font-size:.9rem" data-mp-tab="suppliers">🏢 Поставщики</button>
-      <button class="${tab === "cart" ? "active" : "secondary"}" style="border-radius:6px 6px 0 0;border-bottom:none;font-size:.9rem" data-mp-tab="cart">🛒 Корзина${cart.total_items > 0 ? ` <span style="background:var(--accent,#2563eb);color:#fff;border-radius:10px;padding:0 6px;font-size:.75rem;margin-left:4px">${cart.total_items}</span>` : ""}</button>
-      <button class="${tab === "my-inquiries" ? "active" : "secondary"}" style="border-radius:6px 6px 0 0;border-bottom:none;font-size:.9rem" data-mp-tab="my-inquiries">📋 Мои заказы${pendingMyCount > 0 ? ` <span style="background:var(--success,#16a34a);color:#fff;border-radius:10px;padding:0 6px;font-size:.75rem;margin-left:4px">${pendingMyCount}</span>` : ""}</button>
+    <div class="marketplace-tabs">
+      <button class="${tab === "catalog" ? "active" : "secondary"}" data-mp-tab="catalog">Каталог товаров</button>
+      <button class="${tab === "suppliers" ? "active" : "secondary"}" data-mp-tab="suppliers">Поставщики</button>
+      <button class="${tab === "cart" ? "active" : "secondary"}" data-mp-tab="cart">Корзина${cart.total_items > 0 ? ` <span class="marketplace-tab-count">${cart.total_items}</span>` : ""}</button>
+      <button class="${tab === "my-inquiries" ? "active" : "secondary"}" data-mp-tab="my-inquiries">Мои заказы${pendingMyCount > 0 ? ` <span class="marketplace-tab-count ok">${pendingMyCount}</span>` : ""}</button>
     </div>`;
 
   if (tab === "suppliers") {
@@ -5336,60 +5343,92 @@ function renderMarketplace() {
 
   function itemCard(item) {
     const rating = item.supplier_rating != null ? `${"★".repeat(Math.round(item.supplier_rating))}${"☆".repeat(5 - Math.round(item.supplier_rating))}` : "";
-    const itemRating = item.avg_rating != null ? `<span style="color:var(--warning,#f59e0b);font-size:.8rem">★ ${item.avg_rating} (${item.review_count})</span>` : "";
+    const itemRating = item.avg_rating != null ? `<span class="marketplace-rating">★ ${item.avg_rating} (${item.review_count})</span>` : "";
+    const deliveryDays = item.delivery_days || item.supplier_delivery_days;
+    const installment = item.unit_price ? Math.ceil(Number(item.unit_price) / 12) : null;
+    const isBestPrice = bestPrice != null && Number(item.unit_price) === bestPrice;
     return `
-    <div class="panel" style="display:flex;flex-direction:column;gap:6px">
-      ${item.image_url ? `<img src="${escapeAttr(item.image_url)}" alt="" style="width:100%;height:160px;object-fit:cover;border-radius:6px;margin-bottom:2px;cursor:pointer" loading="lazy" data-mp-detail="${item.id}" />` : ""}
-      <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px">
-        <div style="flex:1">
-          <div style="font-weight:700;font-size:1rem;cursor:pointer" data-mp-detail="${item.id}">${escapeHtml(item.product_name)}</div>
+    <div class="panel marketplace-card">
+      <div class="marketplace-card-media" data-mp-detail="${item.id}">
+        ${item.image_url ? `<img src="${escapeAttr(item.image_url)}" alt="${escapeAttr(item.product_name || "Товар")}" loading="lazy" />` : `<div class="marketplace-card-placeholder">Marqet</div>`}
+        <div class="marketplace-card-badges">
+          ${isBestPrice ? `<span class="marketplace-pill accent">Лучшая цена</span>` : ""}
+          ${item.supplier_is_verified ? `<span class="marketplace-pill ok">Проверен</span>` : ""}
+          ${deliveryDays ? `<span class="marketplace-pill">Доставка ${escapeHtml(String(deliveryDays))} дн.</span>` : ""}
+        </div>
+      </div>
+      <div class="marketplace-card-main">
+        <div class="marketplace-card-title" data-mp-detail="${item.id}">${escapeHtml(item.product_name)}</div>
+        <div class="marketplace-card-meta">
           ${itemRating ? `<div style="margin:2px 0">${itemRating}</div>` : ""}
           ${item.sku ? `<div style="font-size:.78rem;color:var(--muted)">Артикул: ${escapeHtml(item.sku)}</div>` : ""}
-          ${item.category ? `<span style="font-size:.78rem;background:var(--surface-2,#eef);padding:1px 7px;border-radius:10px;color:var(--accent)">${escapeHtml(item.category)}</span>` : ""}
-        </div>
-        <div style="text-align:right">
-          <div style="font-size:1.3rem;font-weight:700;color:var(--accent)">${fmtMoneyKzt(item.unit_price)} тг</div>
-          <div style="font-size:.78rem;color:var(--muted)">за ${escapeHtml(item.unit)}</div>
+          ${item.category ? `<span class="marketplace-pill muted">${escapeHtml(item.category)}</span>` : ""}
         </div>
       </div>
-      <div style="border-top:1px solid var(--line,#eee);padding-top:6px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">
-        <div style="flex:1">
-          <div style="font-weight:600;font-size:.9rem;cursor:pointer" data-mp-supplier-profile="${item.supplier_id}">${escapeHtml(item.supplier_name || "")}${item.supplier_is_verified ? ` <span title="Поставщик проверен" style="color:var(--success,#16a34a)">✓</span>` : ""}</div>
-          <div style="font-size:.78rem;color:var(--muted)">${escapeHtml(item.supplier_city || "")} ${rating ? `· <span style="color:var(--warning)">${rating}</span>` : ""}</div>
+      <div class="marketplace-price-row">
+        <div>
+          <div class="marketplace-price">${fmtMoneyKzt(item.unit_price)} тг</div>
+          <div class="marketplace-unit">за ${escapeHtml(item.unit)}</div>
         </div>
-        <div style="font-size:.82rem;color:var(--muted);text-align:right">
-          ${item.stock_qty != null ? `<div>В наличии: <strong>${item.stock_qty}</strong></div>` : ""}
-          ${item.delivery_days || item.supplier_delivery_days ? `<div>Доставка: <strong>${item.delivery_days || item.supplier_delivery_days} дн.</strong></div>` : ""}
-          ${item.min_order_qty > 1 ? `<div>Мин. заказ: <strong>${item.min_order_qty}</strong></div>` : ""}
-          ${item.condition === "used" ? `<div><span class="badge warning" style="font-size:.72rem">Б/У</span></div>` : item.condition === "refurbished" ? `<div><span class="badge" style="font-size:.72rem">Восстановлен</span></div>` : ""}
-          ${item.delivery_price && !item.delivery_included ? `<div style="font-size:.78rem">Доставка: <strong>${fmtMoneyKzt(item.delivery_price)} тг</strong></div>` : ""}
-          ${item.delivery_included ? `<div style="font-size:.78rem;color:var(--success,#16a34a)">Доставка включена</div>` : ""}
+        ${installment ? `<div class="marketplace-installment">≈ ${fmtMoneyKzt(installment)} тг/мес</div>` : ""}
+      </div>
+      <div class="marketplace-seller-row">
+        <div>
+          <div class="marketplace-seller-name" data-mp-supplier-profile="${item.supplier_id}">${escapeHtml(item.supplier_name || "")}${item.supplier_is_verified ? ` <span title="Поставщик проверен">✓</span>` : ""}</div>
+          <div class="marketplace-seller-meta">${escapeHtml(item.supplier_city || "Казахстан")} ${rating ? `· <span>${rating}</span>` : ""}</div>
+        </div>
+        <div class="marketplace-stock">
+          ${item.stock_qty != null ? `<span>В наличии: <strong>${item.stock_qty}</strong></span>` : ""}
+          ${item.min_order_qty > 1 ? `<span>Мин. заказ: <strong>${item.min_order_qty}</strong></span>` : ""}
         </div>
       </div>
-      ${item.description ? `<div style="font-size:.83rem;color:var(--muted)">${escapeHtml(item.description)}</div>` : ""}
-      <div style="display:flex;gap:8px;margin-top:2px;flex-wrap:wrap">
-        <button class="secondary" style="font-size:.82rem" data-mp-detail="${item.id}">Подробнее</button>
-        <button class="primary" style="font-size:.82rem" data-mp-cart-add="${item.id}">🛒 В корзину</button>
-        <button class="primary" style="font-size:.82rem" data-mp-order="${item.id}" data-supplier-id="${item.supplier_id}">Запросить</button>
-        <button class="${(state.ui.compareItems||[]).includes(item.id) ? "primary" : "secondary"}" style="font-size:.82rem" data-mp-compare="${item.id}">
+      <div class="marketplace-fulfillment">
+        ${item.delivery_included ? `<span>Доставка включена</span>` : item.delivery_price ? `<span>Доставка ${fmtMoneyKzt(item.delivery_price)} тг</span>` : `<span>Доставка по договоренности</span>`}
+        ${item.condition === "used" ? `<span>Б/У</span>` : item.condition === "refurbished" ? `<span>Восстановлен</span>` : `<span>Новый товар</span>`}
+      </div>
+      ${item.description ? `<div class="marketplace-card-description">${escapeHtml(item.description)}</div>` : ""}
+      <div class="marketplace-card-actions">
+        <button class="secondary" data-mp-detail="${item.id}">Подробнее</button>
+        <button class="primary" data-mp-cart-add="${item.id}">В корзину</button>
+        <button class="primary" data-mp-order="${item.id}" data-supplier-id="${item.supplier_id}">Запросить</button>
+        <button class="${(state.ui.compareItems||[]).includes(item.id) ? "primary" : "secondary"}" data-mp-compare="${item.id}">
           ${(state.ui.compareItems||[]).includes(item.id) ? "✓ В сравнении" : "Сравнить"}
         </button>
-        ${item.supplier_phone ? `<a href="tel:${escapeAttr(item.supplier_phone)}" class="secondary" style="font-size:.82rem;padding:.35rem .9rem;border-radius:6px;text-decoration:none;border:1px solid var(--line)">📞</a>` : ""}
+        ${item.supplier_phone ? `<a href="tel:${escapeAttr(item.supplier_phone)}" class="secondary marketplace-phone-link">Позвонить</a>` : ""}
       </div>
     </div>`;
   }
 
   const sortVal = filter.sort || "";
   return tabBar + `
-    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;align-items:center">
-      <input type="text" id="mp-search" placeholder="Поиск по названию, артикулу..." value="${escapeAttr(filter.search)}" style="flex:1;min-width:160px" />
-      <select id="mp-category" style="padding:.35rem .5rem;border:1px solid var(--line);border-radius:6px">
+    <section class="marketplace-hero">
+      <div>
+        <p class="eyebrow">marqet.kz marketplace</p>
+        <h2>Покупайте у проверенных поставщиков для qpartner и прямых заказов</h2>
+        <p>Поиск, сравнение цен, корзина, заявки поставщикам и прозрачные условия доставки в одном рабочем экране.</p>
+      </div>
+      <div class="marketplace-hero-stats">
+        <div><span>Позиций</span><strong>${mp.total || marketplaceItems.length}</strong></div>
+        <div><span>Проверенных</span><strong>${verifiedCount}</strong></div>
+        <div><span>Быстрая доставка</span><strong>${fastDeliveryCount}</strong></div>
+        <div><span>От</span><strong>${bestPrice ? `${fmtMoneyKzt(bestPrice)} тг` : "—"}</strong></div>
+      </div>
+    </section>
+    <div class="marketplace-trust-strip" aria-label="Преимущества marketplace">
+      <span>Оплата по счету и условиям договора</span>
+      <span>Рассрочка/кредитный сценарий готов к подключению</span>
+      <span>Поставщики, отзывы и статусы заявок</span>
+      <span>Интеграция с qpartner складом</span>
+    </div>
+    <div class="marketplace-searchbar">
+      <input type="text" id="mp-search" placeholder="Поиск по названию, артикулу, поставщику..." value="${escapeAttr(filter.search)}" />
+      <select id="mp-category">
         <option value="">Все категории</option>
         ${(state.data.catalogTaxonomy||[]).length
           ? (state.data.catalogTaxonomy||[]).map((c) => `<option value="${escapeAttr(c.name)}" ${filter.category === c.name ? "selected" : ""}>${c.icon || ""} ${escapeHtml(c.name)}</option>`).join("")
           : categories.map((c) => `<option value="${escapeAttr(c)}" ${filter.category === c ? "selected" : ""}>${escapeHtml(c)}</option>`).join("")}
       </select>
-      <select id="mp-sort" style="padding:.35rem .5rem;border:1px solid var(--line);border-radius:6px">
+      <select id="mp-sort">
         <option value="">По умолчанию</option>
         <option value="price_asc" ${sortVal === "price_asc" ? "selected" : ""}>Цена ↑</option>
         <option value="price_desc" ${sortVal === "price_desc" ? "selected" : ""}>Цена ↓</option>
@@ -5398,16 +5437,16 @@ function renderMarketplace() {
       </select>
       <button class="primary" id="mp-search-btn">Найти</button>
     </div>
-    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+    <div class="marketplace-results-row">
       <div style="color:var(--muted);font-size:.85rem">Найдено позиций: ${mp.total}</div>
       ${filter.search ? `<button class="secondary" style="font-size:.82rem" id="mp-bulk-inquire-btn" title="Отправить запрос всем поставщикам у которых есть этот товар">📤 Запросить у всех поставщиков</button>` : ""}
     </div>
     ${(state.data.catalogTaxonomy||[]).length ? `
-      <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px">
-        <button class="${!filter.category ? 'active' : 'secondary'}" style="font-size:.8rem;padding:.25rem .8rem;border-radius:20px" data-mp-cat="">Все</button>
-        ${(state.data.catalogTaxonomy||[]).map((c) => `<button class="${filter.category === c.name ? 'active' : 'secondary'}" style="font-size:.8rem;padding:.25rem .8rem;border-radius:20px" data-mp-cat="${escapeAttr(c.name)}">${c.icon||""} ${escapeHtml(c.name)}</button>`).join("")}
+      <div class="marketplace-category-rail">
+        <button class="${!filter.category ? 'active' : 'secondary'}" data-mp-cat="">Все</button>
+        ${(state.data.catalogTaxonomy||[]).map((c) => `<button class="${filter.category === c.name ? 'active' : 'secondary'}" data-mp-cat="${escapeAttr(c.name)}">${c.icon||""} ${escapeHtml(c.name)}</button>`).join("")}
       </div>` : ""}
-    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:12px">
+    <div class="marketplace-grid">
       ${mp.items.length ? mp.items.map(itemCard).join("") : `
         <div style="grid-column:1/-1;text-align:center;padding:40px 16px;color:var(--muted)">
           <div style="font-size:2.5rem;margin-bottom:8px">🛒</div>
@@ -8914,7 +8953,7 @@ async function loadAll() {
     el("api-status").textContent = t("Система доступна");
   } catch (error) {
     if (error instanceof AuthRequiredError) {
-      state.auth.blockedMessage = "";
+      state.auth.blockedMessage = error.message || "Сервер требует вход";
       el("api-status").className = "status-dot bad";
       el("api-status").textContent = "Ошибка входа";
       if (state.auth.source === "login") {

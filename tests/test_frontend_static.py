@@ -821,7 +821,8 @@ class FrontendStaticTest(TestCase):
             'window.sessionStorage',
             'storage.getItem("org-storage")',
             "org_id: orgId",
-            'fetch("/api/v1/sklad/token"',
+            '"/api/v1/sklad/token"',
+            "fetch(url",
             'credentials: "include"',
             "state.auth.blockedMessage = \"\"",
             "renderAuthBlocked",
@@ -948,3 +949,28 @@ class FrontendStaticTest(TestCase):
         ):
             with self.subTest(snippet=snippet):
                 self.assertIn(snippet, app)
+
+    def test_marketplace_catalog_uses_retail_trust_layout(self) -> None:
+        app = (ROOT / "frontend" / "app.js").read_text()
+        styles = (ROOT / "frontend" / "styles.css").read_text()
+
+        for snippet in (
+            "marketplace-hero",
+            "marketplace-hero-stats",
+            "marketplace-trust-strip",
+            "marketplace-searchbar",
+            "marketplace-category-rail",
+            "marketplace-grid",
+            "marketplace-card-media",
+            "marketplace-card-badges",
+            "marketplace-installment",
+            "marketplace-fulfillment",
+            "marketplace-card-actions",
+            "Покупайте у проверенных поставщиков",
+            "Рассрочка/кредитный сценарий готов к подключению",
+            "Интеграция с qpartner складом",
+            "Лучшая цена",
+            "≈ ${fmtMoneyKzt(installment)} тг/мес",
+        ):
+            with self.subTest(snippet=snippet):
+                self.assertIn(snippet, app + styles)
