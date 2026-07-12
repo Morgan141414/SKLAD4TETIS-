@@ -56,8 +56,19 @@ class AuthDependencyTest(TestCase):
         )
         self.assertEqual(
             public_settings.runtime_configuration_error(),
-            "SKLAD_PUBLIC_ACCESS_ENABLED must be false in production",
+            "Production public access requires SKLAD_PRODUCTION_PUBLIC_ACCESS_ACKNOWLEDGED=true",
         )
+
+        acknowledged_public_settings = Settings(
+            deployment_mode="production",
+            database_backend="postgresql",
+            database_url="postgresql+psycopg://user:pass@db:5432/sklad",
+            public_access_enabled=True,
+            production_public_access_acknowledged=True,
+            dev_auth_enabled=False,
+            jwt_hmac_secret="secret",
+        )
+        self.assertIsNone(acknowledged_public_settings.runtime_configuration_error())
 
         missing_auth_settings = Settings(
             deployment_mode="production",
