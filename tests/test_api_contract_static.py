@@ -917,6 +917,42 @@ class APIContractStaticTest(TestCase):
             with self.subTest(snippet=snippet):
                 self.assertIn(snippet, routes_source + service_source + migration_source)
 
+    def test_purchase_order_persists_delivery_and_escrow_terms(self) -> None:
+        routes_source = ROUTES_PATH.read_text()
+        service_source = (ROOT / "app" / "services" / "warehouse.py").read_text()
+
+        for snippet in (
+            'delivery_type: str | None = Field(default=None, pattern="^(pickup|courier|freight|postal|buyer_arranges)$")',
+            "delivery_price: float | None = Field(default=None, ge=0)",
+            "escrow_amount: float | None = Field(default=None, ge=0)",
+            "delivery_type, delivery_price, delivery_included, escrow_amount",
+            'buyer_data.get("delivery_type")',
+            'buyer_data.get("delivery_price")',
+            'buyer_data.get("delivery_included", False)',
+            'buyer_data.get("escrow_amount")',
+            "SELECT id, escrow_status FROM purchase_orders WHERE inquiry_id = ?",
+            "Тип доставки",
+            "Стоимость доставки",
+            "Доставка включена",
+            "Эскроу",
+        ):
+            with self.subTest(snippet=snippet):
+                self.assertIn(snippet, routes_source + service_source)
+
+    def test_supplier_login_builds_token_after_authentication(self) -> None:
+        routes_source = ROUTES_PATH.read_text()
+        login_start = routes_source.index("def supplier_login")
+        login_end = routes_source.index("@router.post(\n    \"/suppliers/{supplier_id}/portal-access\"", login_start)
+        login_source = routes_source[login_start:login_end]
+
+        self.assertIn("supplier = svc.get_supplier_by_email(body.email)", login_source)
+        self.assertIn("verify_password(body.password, supplier[\"password_hash\"])", login_source)
+        self.assertIn("\"sub\": f\"supplier:{supplier['id']}\"", login_source)
+        self.assertIn("\"roles\": [\"supplier\"]", login_source)
+        self.assertIn("\"supplier_id\": supplier[\"id\"]", login_source)
+        self.assertNotIn("tetis_user_id", login_source)
+        self.assertNotIn("user is not None", login_source)
+
     def _has_decorator_keyword(self, node: ast.AST, keyword_name: str) -> bool:
         decorators = getattr(node, "decorator_list", [])
         for decorator in decorators:

@@ -618,8 +618,9 @@ class WarehouseService:
                 conn,
                 """INSERT INTO purchase_orders
                    (po_number, inquiry_id, buyer_name, buyer_bin, buyer_address,
-                    buyer_contact, delivery_address, payment_terms, notes, status)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'draft')""",
+                    buyer_contact, delivery_address, payment_terms, notes, status,
+                    delivery_type, delivery_price, delivery_included, escrow_amount)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'draft', ?, ?, ?, ?)""",
                 (
                     po_number,
                     inquiry_id,
@@ -630,6 +631,10 @@ class WarehouseService:
                     buyer_data.get("delivery_address"),
                     buyer_data.get("payment_terms", "По договорённости"),
                     buyer_data.get("notes"),
+                    buyer_data.get("delivery_type"),
+                    buyer_data.get("delivery_price"),
+                    buyer_data.get("delivery_included", False),
+                    buyer_data.get("escrow_amount"),
                 ),
             )
             # Also mark inquiry as ordered if pending/responded
@@ -1082,7 +1087,7 @@ class WarehouseService:
             if inq is None or inq["actor_id"] != actor_id:
                 raise PermissionError("Inquiry not found or not yours")
             po = conn.execute(
-                "SELECT id FROM purchase_orders WHERE inquiry_id = ?", (inquiry_id,)
+                "SELECT id, escrow_status FROM purchase_orders WHERE inquiry_id = ?", (inquiry_id,)
             ).fetchone()
             if po is None:
                 raise NotFoundError("Purchase order not found")

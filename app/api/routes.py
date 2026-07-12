@@ -419,21 +419,6 @@ def supplier_login(body: SupplierLoginRequest) -> TokenResponse:
     supplier = svc.get_supplier_by_email(body.email)
     if supplier is None or not verify_password(body.password, supplier["password_hash"]):
         raise HTTPException(status_code=401, detail={"code": "unauthorized", "message": "Invalid credentials", "details": {}})
-    # Store buyer email from JWT payload so we can notify them later
-    _tetis_email = payload.get("email") or payload.get("e") or ""
-    if _tetis_email and user is not None:
-        try:
-            _svc2 = get_warehouse_service()
-            _conn_e = _svc2.database.connect()
-            try:
-                _conn_e.execute(
-                    "UPDATE sklad_users SET email = ? WHERE username = ? AND (email IS NULL OR email = '')",
-                    (_tetis_email, f"tetis:{tetis_user_id}"),
-                )
-            finally:
-                _svc2._close_connection(_conn_e)
-        except Exception:
-            pass
     import time
     now = int(time.time())
     payload = {
@@ -5899,10 +5884,10 @@ class PurchaseOrderCreate(BaseModel):
     delivery_address: str | None = None
     payment_terms: str | None = None
     notes: str | None = None
-    delivery_type: str | None = None
-    delivery_price: float | None = None
+    delivery_type: str | None = Field(default=None, pattern="^(pickup|courier|freight|postal|buyer_arranges)$")
+    delivery_price: float | None = Field(default=None, ge=0)
     delivery_included: bool = False
-    escrow_amount: float | None = None
+    escrow_amount: float | None = Field(default=None, ge=0)
 
 
 class EscrowActionBody(BaseModel):
@@ -5912,8 +5897,8 @@ class EscrowActionBody(BaseModel):
 class DeliveryUpdateBody(BaseModel):
     delivery_status: str | None = Field(default=None, pattern="^(pending|preparing|shipped|in_transit|delivered|returned)$")
     delivery_tracking_number: str | None = None
-    delivery_type: str | None = None
-    delivery_price: float | None = None
+    delivery_type: str | None = Field(default=None, pattern="^(pickup|courier|freight|postal|buyer_arranges)$")
+    delivery_price: float | None = Field(default=None, ge=0)
     delivery_included: bool | None = None
 
 
@@ -5997,6 +5982,10 @@ def get_po_html(
     total_price_str = f'{total:,.2f} тг' if total else "—"
 
     delivery_address_row = f'<strong>Адрес доставки:</strong> {esc(po["delivery_address"])}<br>' if po and po.get("delivery_address") else ""
+    delivery_type_row = f'<strong>Тип доставки:</strong> {esc(po["delivery_type"])}<br>' if po and po.get("delivery_type") else ""
+    delivery_price_row = f'<strong>Стоимость доставки:</strong> {float(po["delivery_price"]):,.2f} тг<br>' if po and po.get("delivery_price") is not None else ""
+    delivery_included_row = f'<strong>Доставка включена:</strong> {"Да" if po.get("delivery_included") else "Нет"}<br>' if po else ""
+    escrow_amount_row = f'<strong>Эскроу:</strong> {float(po["escrow_amount"]):,.2f} тг<br>' if po and po.get("escrow_amount") is not None else ""
     notes_row = f'<strong>Примечания:</strong> {esc(po["notes"] if po else inq.get("notes"))}<br>' if (po and po.get("notes")) or inq.get("notes") else ""
     sup_verified = ' <span style="background:#16a34a;color:#fff;padding:1px 6px;border-radius:8px;font-size:10px">✅</span>' if inq.get("supplier_verified") else ""
     payment_terms = esc(po["payment_terms"] if po else None) if po else "По договорённости"
@@ -6045,7 +6034,7 @@ def get_po_html(
   <tr><td>{product_name}</td><td>{quantity}</td><td>{unit}</td><td>{unit_price}</td><td>{total_price}</td></tr>
 </table>
 <div class="total">ИТОГО: {total_price}</div>
-<div class="terms"><strong>Условия оплаты:</strong> {payment_terms}<br>{delivery_address_row}{notes_row}</div>
+<div class="terms"><strong>Условия оплаты:</strong> {payment_terms}<br>{delivery_address_row}{delivery_type_row}{delivery_price_row}{delivery_included_row}{escrow_amount_row}{notes_row}</div>
 <div class="sign">
   <div class="sign-block">Покупатель: __________________ / ____________________</div>
   <div class="sign-block">Поставщик: __________________ / ____________________</div>
@@ -6068,6 +6057,10 @@ def get_po_html(
         total_price=total_price_str,
         payment_terms=payment_terms,
         delivery_address_row=delivery_address_row,
+        delivery_type_row=delivery_type_row,
+        delivery_price_row=delivery_price_row,
+        delivery_included_row=delivery_included_row,
+        escrow_amount_row=escrow_amount_row,
         notes_row=notes_row,
     )
     return _HR(content=html)
