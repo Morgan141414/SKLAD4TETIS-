@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="description" content="marqet.kz — всё, что нужно. В одном месте." />
+    <title>marqet.kz — Всё, что нужно. В одном месте.</title>
+    <style>
+      *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+      :root {
+        --brand: #5B4FE8;
+        --brand2: #3B82F6;
+        --brand-dark: #4338CA;
+        --brand-light: #EEF2FF;
+        --brand-grad: linear-gradient(135deg, #5B4FE8 0%, #3B82F6 100%);
+        --dark: #1E1B4B;
+        --gray-50: #F8FAFC;
+        --gray-100: #F1F5F9;
+        --gray-200: #E2E8F0;
+        --gray-300: #CBD5E1;
+        --gray-400: #94A3B8;
+        --gray-600: #475569;
+        --gray-700: #334155;
+        --gray-900: #0F172A;
+        --red: #EF4444;
+        --green: #10B981;
+        --radius: 12px;
+        --shadow: 0 1px 3px rgba(0,0,0,.08), 0 4px 16px rgba(0,0,0,.06);
+        --shadow-lg: 0 8px 24px rgba(91,79,232,.15);
+      }
+      body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #F5F5FA; color: var(--gray-900); min-height: 100vh; }
+      #root { min-height: 100vh; }
+      a { color: inherit; text-decoration: none; }
+      button { cursor: pointer; font-family: inherit; }
+      img { max-width: 100%; }
+      input, textarea, select { font-family: inherit; }
+      ::-webkit-scrollbar { width: 5px; }
+      ::-webkit-scrollbar-thumb { background: var(--gray-200); border-radius: 3px; }
+    </style>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
