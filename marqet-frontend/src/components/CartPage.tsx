@@ -21,10 +21,10 @@ const css = `
 .ci-seller { font-size:12px; color:#94A3B8; margin-bottom:8px; }
 .ci-price { font-size:17px; font-weight:800; color:#5B4FE8; }
 .ci-qty { display:flex; align-items:center; gap:8px; }
-.qty-btn { width:30px; height:30px; border-radius:8px; border:1.5px solid #E2E8F0; background:#fff; font-size:16px; font-weight:700; color:#475569; cursor:pointer; display:flex; align-items:center; justify-content:center; transition:all .15s; }
+.qty-btn { width:44px; height:44px; border-radius:12px; border:1.5px solid #E2E8F0; background:#fff; font-size:18px; font-weight:700; color:#475569; cursor:pointer; display:flex; align-items:center; justify-content:center; transition:all .15s; }
 .qty-btn:hover { border-color:#5B4FE8; color:#5B4FE8; }
 .qty-val { font-size:14px; font-weight:700; color:#1E1B4B; min-width:24px; text-align:center; }
-.ci-del { width:32px; height:32px; border:none; background:#FEF2F2; color:#EF4444; border-radius:8px; cursor:pointer; display:flex; align-items:center; justify-content:center; flex-shrink:0; transition:all .15s; }
+.ci-del { width:44px; height:44px; border:none; background:#FEF2F2; color:#EF4444; border-radius:12px; cursor:pointer; display:flex; align-items:center; justify-content:center; flex-shrink:0; transition:all .15s; }
 .ci-del:hover { background:#FEE2E2; }
 .cart-summary { background:#fff; border:1.5px solid #E2E8F0; border-radius:16px; padding:24px; position:sticky; top:80px; }
 .cs-title { font-size:16px; font-weight:800; color:#1E1B4B; margin-bottom:16px; }
@@ -50,14 +50,21 @@ export default function CartPage() {
 
   async function remove(id: number) {
     const c = await apiRemoveCartItem(id).catch(() => null)
-    if (c) { setCart(c); show('Удалено из корзины') }
+    if (c) {
+      setCart(c)
+      window.dispatchEvent(new CustomEvent('marqet:cart-updated'))
+      show('Удалено из корзины')
+    }
   }
 
   async function changeQty(item: CartItem, delta: number) {
     const newQty = item.quantity + delta
     if (newQty <= 0) { remove(item.id); return }
     const c = await apiUpdateCartItem(item.id, newQty).catch(() => null)
-    if (c) setCart(c)
+    if (c) {
+      setCart(c)
+      window.dispatchEvent(new CustomEvent('marqet:cart-updated'))
+    }
   }
 
   const fmt = (n: number | null) => n !== null ? n.toLocaleString('ru-KZ') + ' ₸' : '—'
@@ -77,7 +84,9 @@ export default function CartPage() {
           <div style={{textAlign:'center',padding:'60px 0',color:'#94A3B8'}}>Загрузка...</div>
         ) : !cart || cart.items.length === 0 ? (
           <div className="cart-empty">
-            <div style={{fontSize:56,marginBottom:12}}>🛒</div>
+            <div style={{width:56,height:56,margin:'0 auto 12px',borderRadius:18,background:'#EEF2FF',color:'#5B4FE8',display:'flex',alignItems:'center',justifyContent:'center'}}>
+              <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M6 2 3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4z"/><line x1="3" y1="6" x2="21" y2="6"/><path d="M16 10a4 4 0 0 1-8 0"/></svg>
+            </div>
             <h3>Корзина пуста</h3>
             <p>Добавьте товары из каталога</p>
             <Link to="/" style={{display:'inline-flex',alignItems:'center',gap:8,padding:'12px 24px',borderRadius:14,background:'var(--brand-grad)',color:'#fff',fontWeight:700,fontSize:14}}>
@@ -103,14 +112,14 @@ export default function CartPage() {
                     <div style={{display:'flex',alignItems:'center',gap:12,flexWrap:'wrap'}}>
                       <div className="ci-price">{fmt(item.unit_price ? item.unit_price * item.quantity : null)}</div>
                       <div className="ci-qty">
-                        <button className="qty-btn" onClick={() => changeQty(item, -1)}>−</button>
+                        <button className="qty-btn" onClick={() => changeQty(item, -1)} aria-label={`Уменьшить количество ${item.product_name}`}>−</button>
                         <span className="qty-val">{item.quantity}</span>
-                        <button className="qty-btn" onClick={() => changeQty(item, +1)}>+</button>
+                        <button className="qty-btn" onClick={() => changeQty(item, +1)} aria-label={`Увеличить количество ${item.product_name}`}>+</button>
                         <span style={{fontSize:12,color:'#94A3B8'}}>{item.unit}</span>
                       </div>
                     </div>
                   </div>
-                  <button className="ci-del" onClick={() => remove(item.id)}>
+                  <button className="ci-del" onClick={() => remove(item.id)} aria-label={`Удалить ${item.product_name} из корзины`}>
                     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg>
                   </button>
                 </div>
@@ -121,7 +130,7 @@ export default function CartPage() {
               <div className="cs-title">Итого</div>
               <div className="cs-row"><span>Товаров</span><span>{cart.total_items} шт.</span></div>
               <div className="cs-total"><span>Сумма</span><span>{fmt(cart.total_amount)}</span></div>
-              <button className="btn-checkout" onClick={() => show('Оформление заказа — скоро')}>
+              <button className="btn-checkout" onClick={() => nav('/checkout')}>
                 Оформить заказ
               </button>
               <Link to="/" style={{display:'block',textAlign:'center',marginTop:12,fontSize:13,color:'#5B4FE8',fontWeight:600}}>

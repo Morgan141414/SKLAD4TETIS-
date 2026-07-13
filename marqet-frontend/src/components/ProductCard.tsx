@@ -110,7 +110,12 @@ export default function ProductCard({ p, onContact }: { p: Product; onContact?: 
     e.preventDefault()
     e.stopPropagation()
     if (!user) { openAuth('login'); return }
-    await apiAddToCart(p.id, 1).catch(() => null)
+    const cart = await apiAddToCart(p.id, 1).catch(() => null)
+    if (!cart) {
+      show('Не удалось добавить товар')
+      return
+    }
+    window.dispatchEvent(new CustomEvent('marqet:cart-updated'))
     setCartAdded(true)
     show('Добавлено в корзину')
     setTimeout(() => setCartAdded(false), 3000)
@@ -154,7 +159,7 @@ export default function ProductCard({ p, onContact }: { p: Product; onContact?: 
           </div>
         </Link>
 
-        <button className={`pcard-fav ${favorited ? 'active' : ''}`} onClick={handleFav}>
+        <button className={`pcard-fav ${favorited ? 'active' : ''}`} onClick={handleFav} aria-label={favorited ? 'Убрать из избранного' : 'Добавить в избранное'}>
           <svg width="16" height="16" viewBox="0 0 24 24" fill={favorited ? '#EF4444' : 'none'} stroke={favorited ? '#EF4444' : '#94A3B8'} strokeWidth="2">
             <path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/>
           </svg>
@@ -200,14 +205,14 @@ export default function ProductCard({ p, onContact }: { p: Product; onContact?: 
               </div>
             )}
             <div className="pcard-actions">
-              <button className={`btn-cart ${cartAdded ? 'added' : ''}`} onClick={handleCart}>
+              <button className={`btn-cart ${cartAdded ? 'added' : ''}`} onClick={handleCart} aria-label={`Добавить ${p.name} в корзину`}>
                 {cartAdded
                   ? <><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><polyline points="20 6 9 17 4 12"/></svg>В корзине</>
                   : <><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M6 2 3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4z"/><line x1="3" y1="6" x2="21" y2="6"/><path d="M16 10a4 4 0 0 1-8 0"/></svg>В корзину</>
                 }
               </button>
               <Link to={`/product/${p.id}`} className="btn-detail">Подробнее →</Link>
-              <button className="btn-share-card" onClick={handleShare}>
+              <button className="btn-share-card" onClick={handleShare} aria-label={`Поделиться товаром ${p.name}`}>
                 {copied && <span className="share-tip">Скопировано!</span>}
                 <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/></svg>
               </button>

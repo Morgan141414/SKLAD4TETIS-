@@ -73,7 +73,10 @@ export default function Header({ onSearch }: { onSearch?: (q: string) => void })
 
   useEffect(() => {
     if (!user) { setCartCount(0); return }
-    apiGetCart().then(c => setCartCount(c.total_items)).catch(() => {})
+    const refreshCart = () => apiGetCart().then(c => setCartCount(c.total_items)).catch(() => {})
+    refreshCart()
+    window.addEventListener('marqet:cart-updated', refreshCart)
+    return () => window.removeEventListener('marqet:cart-updated', refreshCart)
   }, [user])
 
   function search(e: React.FormEvent) {

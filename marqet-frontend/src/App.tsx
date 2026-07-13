@@ -16,6 +16,7 @@ import SellerPage from './pages/SellerPage'
 import MessagesPage from './pages/MessagesPage'
 import CartPage from './components/CartPage'
 import FavoritesPage from './pages/FavoritesPage'
+import CheckoutPage from './pages/CheckoutPage'
 
 const css = `
 * { margin:0; padding:0; box-sizing:border-box; }
@@ -70,6 +71,7 @@ export default function App() {
           <Route path="/post" element={<PostListingPage />} />
           <Route path="/account" element={<AccountPage />} />
           <Route path="/cart" element={<CartPage />} />
+          <Route path="/checkout" element={<CheckoutPage />} />
           <Route path="/favorites" element={<FavoritesPage />} />
           <Route path="/messages" element={<MessagesPage />} />
           <Route path="/messages/:id" element={<MessagesPage />} />

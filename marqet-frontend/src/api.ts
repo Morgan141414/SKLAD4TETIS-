@@ -222,6 +222,27 @@ export const apiUpdateCartItem = (cartItemId: number, quantity: number): Promise
 export const apiRemoveCartItem = (cartItemId: number): Promise<Cart> =>
   authReq<Cart>(`/marketplace/cart/items/${cartItemId}`, { method: 'DELETE' })
 
+export interface CheckoutInquiry {
+  id: number
+  catalog_item_id?: number
+  product_name?: string
+  quantity?: number
+  status?: string
+  supplier_id?: number | null
+  supplier_name?: string | null
+}
+
+export const apiCheckoutCart = (body: { notes?: string; warehouse_id?: number | null; source?: 'marqet' | 'qpartner' | 'api' }): Promise<CheckoutInquiry[]> =>
+  authReq<CheckoutInquiry[]>('/marketplace/cart/checkout', {
+    method: 'POST',
+    body: JSON.stringify({
+      source: 'marqet',
+      warehouse_id: body.warehouse_id ?? null,
+      notes: body.notes ?? null,
+      ...body,
+    }),
+  })
+
 // ── Favorites ────────────────────────────────────────────────────────────────
 
 export const apiToggleFavorite = (itemId: number): Promise<{ favorited: boolean; likes_count: number }> =>
