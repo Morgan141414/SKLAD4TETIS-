@@ -4,9 +4,10 @@ services:
     environment:
       SKLAD_DEPLOYMENT_MODE: staging
       SKLAD_DATABASE_BACKEND: postgresql
-      SKLAD_DATABASE_URL: postgresql+psycopg://sklad:sklad_dev_password@postgres:5432/sklad
+      SKLAD_DATABASE_URL: ${SKLAD_DATABASE_URL:?Set SKLAD_DATABASE_URL for the target database}
+      SKLAD_PUBLIC_ACCESS_ENABLED: "false"
       SKLAD_DEV_AUTH_ENABLED: "false"
-      SKLAD_JWT_HMAC_SECRET: ${SKLAD_JWT_HMAC_SECRET:-change-this-staging-secret}
+      SKLAD_JWT_HMAC_SECRET: ${SKLAD_JWT_HMAC_SECRET:?Set SKLAD_JWT_HMAC_SECRET or configure OIDC}
       SKLAD_BACKGROUND_JOBS_ENABLED: "true"
     ports:
       - "8120:8000"
@@ -24,7 +25,7 @@ services:
     environment:
       POSTGRES_DB: sklad
       POSTGRES_USER: sklad
-      POSTGRES_PASSWORD: sklad_dev_password
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}
     ports:
       - "5433:5432"
     volumes:

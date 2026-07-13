@@ -10,6 +10,7 @@ class Settings(BaseSettings):
     database_backend: Literal["sqlite", "postgresql"] = "sqlite"
     database_url: str = "sqlite:///./sklad.db"
     public_access_enabled: bool = True
+    production_public_access_acknowledged: bool = False
     dev_auth_enabled: bool = False
     jwt_hmac_secret: str | None = None
     jwt_algorithm: Literal["HS256"] = "HS256"
@@ -64,8 +65,16 @@ class Settings(BaseSettings):
             return "SKLAD_DATABASE_BACKEND does not match SKLAD_DATABASE_URL"
         if not self.database_backend_allowed_for_mode():
             return "SQLite is allowed only in SKLAD_DEPLOYMENT_MODE=demo"
-        if self.deployment_mode == "production" and self.dev_auth_enabled:
-            return "SKLAD_DEV_AUTH_ENABLED must be false in production"
+        if self.deployment_mode == "production":
+            if self.public_access_enabled and not self.production_public_access_acknowledged:
+                return (
+                    "Production public access requires "
+                    "SKLAD_PRODUCTION_PUBLIC_ACCESS_ACKNOWLEDGED=true"
+                )
+            if self.dev_auth_enabled:
+                return "SKLAD_DEV_AUTH_ENABLED must be false in production"
+            if not self.oidc_enabled and not self.jwt_hmac_secret:
+                return "Production requires SKLAD_JWT_HMAC_SECRET or SKLAD_OIDC_ENABLED=true"
         return None
 
     @property

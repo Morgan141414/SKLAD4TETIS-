@@ -821,7 +821,8 @@ class FrontendStaticTest(TestCase):
             'window.sessionStorage',
             'storage.getItem("org-storage")',
             "org_id: orgId",
-            'fetch("/api/v1/sklad/token"',
+            '"/api/v1/sklad/token"',
+            "fetch(url",
             'credentials: "include"',
             "state.auth.blockedMessage = \"\"",
             "renderAuthBlocked",
@@ -894,3 +895,82 @@ class FrontendStaticTest(TestCase):
         ):
             with self.subTest(snippet=snippet):
                 self.assertIn(snippet, worker)
+
+    def test_qpartner_marketplace_actions_mark_source_channel(self) -> None:
+        app = (ROOT / "frontend" / "app.js").read_text()
+
+        for snippet in (
+            'const body = { quantity: Number(fd.get("quantity")), source: "qpartner" };',
+            'const body = { product_name: productName, quantity: Number(fd.get("quantity")), source: "qpartner" };',
+            'body: JSON.stringify({ source: "qpartner" })',
+            "function marketplaceInquirySourceBadge",
+            "marketplaceInquirySourceBadge(inq.source)",
+            "function marketplaceInquirySourceQuery",
+            "function marketplaceInquiryStatusQuery",
+            "function marketplaceInquiryStatusMeta",
+            "function marketplaceInquiryStatusFilter",
+            "function marketplaceInquiryFiltersActive",
+            "function marketplaceInquiryFilterSummary",
+            "function marketplaceInquiryFilterBar",
+            "function myInquiriesPath",
+            "function supplierInquiriesPath",
+            "function focusQpartnerPendingInquiries",
+            "function marketplaceCreatedInquiryCount",
+            "function cartHasInactiveItems",
+            "Array.isArray(created)",
+            "marketplaceCreatedInquiryCount(created)",
+            "Удалите неактивные товары из корзины перед оформлением заказа",
+            'disabled title="Удалите неактивные товары из корзины"',
+            'state.ui.marketplaceInquirySourceFilter = "qpartner";',
+            'state.ui.marketplaceInquiryStatusFilter = "pending";',
+            "focusQpartnerPendingInquiries();",
+            "mp-inquiry-filter-reset",
+            "mp-inquiry-empty-reset",
+            "mp-inquiry-source-filter",
+            "mp-inquiry-status-filter",
+            "supplier-inquiry-filter-reset",
+            "supplier-inquiry-empty-reset",
+            "supplier-inquiry-source-filter",
+            "supplier-inquiry-status-filter",
+            "По выбранным фильтрам заявок нет",
+            "По выбранным фильтрам входящих запросов нет",
+            "Источник: ${marketplaceInquirySourceMeta(sourceValue).label}",
+            "Статус: ${marketplaceInquiryStatusMeta(statusValue)}",
+            "state.ui.marketplaceInquirySourceFilter",
+            "state.ui.marketplaceInquiryStatusFilter",
+            "state.ui.supplierInquirySourceFilter",
+            "state.ui.supplierInquiryStatusFilter",
+            'label: "marqet.kz"',
+            'label: "qpartner"',
+            "mp-supplier-search-reset",
+            "refreshMarketplaceSuppliers",
+            'event.key !== "Enter"',
+            "поиск: ${escapeHtml(supplierSearch)}",
+        ):
+            with self.subTest(snippet=snippet):
+                self.assertIn(snippet, app)
+
+    def test_marketplace_catalog_uses_retail_trust_layout(self) -> None:
+        app = (ROOT / "frontend" / "app.js").read_text()
+        styles = (ROOT / "frontend" / "styles.css").read_text()
+
+        for snippet in (
+            "marketplace-hero",
+            "marketplace-hero-stats",
+            "marketplace-trust-strip",
+            "marketplace-searchbar",
+            "marketplace-category-rail",
+            "marketplace-grid",
+            "marketplace-card-media",
+            "marketplace-card-badges",
+            "marketplace-installment",
+            "marketplace-fulfillment",
+            "marketplace-card-actions",
+            "Покупайте у проверенных поставщиков",
+            "Рассрочка/кредитный сценарий готов к подключению",
+            "Интеграция с qpartner складом",
+            "Лучшая цена",
+            "≈ ${fmtMoneyKzt(installment)} тг/мес",
+        ):
+            with self.subTest(snippet=snippet):
+                self.assertIn(snippet, app + styles)

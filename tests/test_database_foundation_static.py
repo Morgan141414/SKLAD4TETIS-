@@ -20,6 +20,26 @@ class DatabaseFoundationStaticTest(TestCase):
         self.assertIn("get_settings", env)
         self.assertIn('config.set_main_option("sqlalchemy.url", settings.database_url)', env)
 
+    def test_alembic_heads_are_merged_for_marketplace_branch(self) -> None:
+        merge = (
+            ROOT
+            / "app"
+            / "db"
+            / "migrations"
+            / "versions"
+            / "0046_merge_supplier_offers_marketplace_inquiry_source.py"
+        ).read_text()
+
+        self.assertIn(
+            'revision = "0046_merge_supplier_offers_marketplace_inquiry_source"',
+            merge,
+        )
+        self.assertIn('"0018_supplier_offers"', merge)
+        self.assertIn('"0045_marketplace_inquiry_source"', merge)
+        self.assertIn('"0047_listing_expiry_promotion"', merge)
+        self.assertIn("def upgrade() -> None:", merge)
+        self.assertIn("def downgrade() -> None:", merge)
+
     def test_unit_of_work_has_commit_rollback_boundary(self) -> None:
         uow = (ROOT / "app" / "db" / "uow.py").read_text()
 
@@ -91,7 +111,12 @@ class DatabaseFoundationStaticTest(TestCase):
 
         self.assertIn("SKLAD_DEPLOYMENT_MODE: staging", compose)
         self.assertIn("SKLAD_DATABASE_BACKEND: postgresql", compose)
-        self.assertIn("postgresql+psycopg://sklad:sklad_dev_password@postgres:5432/sklad", compose)
+        self.assertIn("SKLAD_DATABASE_URL: ${SKLAD_DATABASE_URL:?", compose)
+        self.assertIn('SKLAD_PUBLIC_ACCESS_ENABLED: "false"', compose)
+        self.assertIn("SKLAD_JWT_HMAC_SECRET: ${SKLAD_JWT_HMAC_SECRET:?", compose)
+        self.assertIn("POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?", compose)
+        self.assertNotIn("sklad" + "_dev_password", compose)
+        self.assertNotIn("change-this" + "-staging-secret", compose)
         self.assertIn("alembic upgrade head", compose)
         self.assertNotIn("sqlite:////data/sklad.db", compose)
         self.assertIn("SKLAD_DEPLOYMENT_MODE: demo", demo_compose)

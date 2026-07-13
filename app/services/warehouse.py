@@ -121,6 +121,20 @@ class WarehouseService:
                 return allowed_unit
         raise ValidationError(f"Unsupported product unit: {unit}")
 
+    def _validate_marketplace_inquiry_source(self, source: str | None) -> str | None:
+        if source is None:
+            return None
+        if source not in {"marqet", "qpartner", "api"}:
+            raise ValidationError("Marketplace inquiry source must be marqet, qpartner, or api")
+        return source
+
+    def _validate_marketplace_inquiry_status(self, status: str | None) -> str | None:
+        if status is None:
+            return None
+        if status not in {"pending", "responded", "ordered", "closed"}:
+            raise ValidationError("Marketplace inquiry status must be pending, responded, ordered, or closed")
+        return status
+
     def create_category(self, data: CategoryCreate, actor_id: str = "system") -> dict[str, Any]:
         with self.database.transaction() as connection:
             category_id = insert_and_get_id(
@@ -604,8 +618,9 @@ class WarehouseService:
                 conn,
                 """INSERT INTO purchase_orders
                    (po_number, inquiry_id, buyer_name, buyer_bin, buyer_address,
-                    buyer_contact, delivery_address, payment_terms, notes, status)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'draft')""",
+                    buyer_contact, delivery_address, payment_terms, notes, status,
+                    delivery_type, delivery_price, delivery_included, escrow_amount)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'draft', ?, ?, ?, ?)""",
                 (
                     po_number,
                     inquiry_id,
@@ -616,6 +631,10 @@ class WarehouseService:
                     buyer_data.get("delivery_address"),
                     buyer_data.get("payment_terms", "По договорённости"),
                     buyer_data.get("notes"),
+                    buyer_data.get("delivery_type"),
+                    buyer_data.get("delivery_price"),
+                    buyer_data.get("delivery_included", False),
+                    buyer_data.get("escrow_amount"),
                 ),
             )
             # Also mark inquiry as ordered if pending/responded
@@ -1068,7 +1087,7 @@ class WarehouseService:
             if inq is None or inq["actor_id"] != actor_id:
                 raise PermissionError("Inquiry not found or not yours")
             po = conn.execute(
-                "SELECT id FROM purchase_orders WHERE inquiry_id = ?", (inquiry_id,)
+                "SELECT id, escrow_status FROM purchase_orders WHERE inquiry_id = ?", (inquiry_id,)
             ).fetchone()
             if po is None:
                 raise NotFoundError("Purchase order not found")
@@ -1332,8 +1351,15 @@ class WarehouseService:
             )
         return self.get_cart(actor_id)
 
-    def checkout_cart(self, actor_id: str, warehouse_id: int | None, notes: str | None) -> list[dict[str, Any]]:
+    def checkout_cart(
+        self,
+        actor_id: str,
+        warehouse_id: int | None,
+        notes: str | None,
+        source: str = "qpartner",
+    ) -> list[dict[str, Any]]:
         """Create one marketplace inquiry per cart item (grouped per supplier offer) and clear the cart."""
+        source = self._validate_marketplace_inquiry_source(source) or "qpartner"
         cart = self.get_cart(actor_id)
         if not cart["items"]:
             raise ValidationError("Cart is empty")
@@ -1347,6 +1373,7 @@ class WarehouseService:
                     quantity=float(entry["quantity"]),
                     notes=notes,
                     warehouse_id=warehouse_id,
+                    source=source,
                 )
                 created.append(inquiry)
                 with self.database.transaction() as conn:
@@ -1361,7 +1388,9 @@ class WarehouseService:
         self, catalog_item_id: int, actor_id: str, quantity: float,
         notes: str | None, warehouse_id: int | None,
         purchase_request_id: int | None = None,
+        source: str = "marqet",
     ) -> dict[str, Any]:
+        source = self._validate_marketplace_inquiry_source(source) or "marqet"
         connection = self.database.connect()
         try:
             item = connection.execute(
@@ -1385,9 +1414,19 @@ class WarehouseService:
             row_id = insert_and_get_id(
                 conn,
                 """INSERT INTO marketplace_inquiries
-                   (catalog_item_id, supplier_id, warehouse_id, actor_id, quantity, unit_price, notes, purchase_request_id)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-                (catalog_item_id, item["supplier_id"], warehouse_id, actor_id, quantity, item["unit_price"], notes, purchase_request_id),
+                   (catalog_item_id, supplier_id, warehouse_id, actor_id, quantity, unit_price, notes, purchase_request_id, source)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    catalog_item_id,
+                    item["supplier_id"],
+                    warehouse_id,
+                    actor_id,
+                    quantity,
+                    item["unit_price"],
+                    notes,
+                    purchase_request_id,
+                    source,
+                ),
             )
             # Auto-link purchase request status if provided
             if purchase_request_id:
@@ -1436,9 +1475,12 @@ class WarehouseService:
         supplier_id: int | None = None,
         actor_id: str | None = None,
         status: str | None = None,
+        source: str | None = None,
         limit: int = 50,
         offset: int = 0,
     ) -> dict[str, Any]:
+        source = self._validate_marketplace_inquiry_source(source)
+        status = self._validate_marketplace_inquiry_status(status)
         where = []
         params: list[Any] = []
         if supplier_id is not None:
@@ -1450,6 +1492,9 @@ class WarehouseService:
         if status:
             where.append("mi.status = ?")
             params.append(status)
+        if source:
+            where.append("mi.source = ?")
+            params.append(source)
         where_clause = f"WHERE {' AND '.join(where)}" if where else ""
         connection = self.database.connect()
         try:
@@ -1699,8 +1744,10 @@ class WarehouseService:
         quantity: float,
         notes: str | None,
         warehouse_id: int | None,
+        source: str = "qpartner",
     ) -> dict[str, Any]:
         """Send inquiry to all suppliers that have matching catalog items."""
+        source = self._validate_marketplace_inquiry_source(source) or "qpartner"
         connection = self.database.connect()
         try:
             items = connection.execute(
@@ -1728,9 +1775,9 @@ class WarehouseService:
                 row_id = insert_and_get_id(
                     conn,
                     """INSERT INTO marketplace_inquiries
-                       (catalog_item_id, supplier_id, warehouse_id, actor_id, quantity, unit_price, notes)
-                       VALUES (?, ?, ?, ?, ?, ?, ?)""",
-                    (item["id"], sid, warehouse_id, actor_id, quantity, item["unit_price"], notes),
+                       (catalog_item_id, supplier_id, warehouse_id, actor_id, quantity, unit_price, notes, source)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (item["id"], sid, warehouse_id, actor_id, quantity, item["unit_price"], notes, source),
                 )
                 row = conn.execute("SELECT * FROM marketplace_inquiries WHERE id = ?", (row_id,)).fetchone()
                 if row:
