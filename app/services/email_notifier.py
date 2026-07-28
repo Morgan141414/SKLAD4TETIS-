@@ -2,6 +2,7 @@
 from __future__ import annotations
 import smtplib
 import logging
+from html import escape
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from email.utils import formataddr
@@ -115,3 +116,32 @@ def notify_inquiry_response(
         log.info("Email sent to buyer %s for inquiry %d response", buyer_email, inquiry_id)
     except Exception as exc:
         log.warning("Failed to send response email to %s: %s", buyer_email, exc)
+
+
+def notify_marketplace_password_reset(
+    settings: "Settings",
+    to_email: str,
+    reset_token: str,
+    base_url: str = "https://marqet.kz",
+) -> None:
+    if not to_email:
+        return
+    safe_token = escape(reset_token)
+    link = f"{base_url}/?reset_token={safe_token}"
+    html = f"""
+<div style="font-family:Arial,sans-serif;max-width:560px;margin:0 auto">
+  <h2 style="color:#2563eb">Восстановление пароля marqet.kz</h2>
+  <p>Вы запросили смену пароля. Код действует 30 минут.</p>
+  <p style="font-size:24px;font-weight:700;letter-spacing:2px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:10px;padding:14px 18px">
+    {safe_token}
+  </p>
+  <p>
+    <a href="{link}" style="background:#2563eb;color:#fff;padding:10px 20px;border-radius:8px;text-decoration:none;display:inline-block">
+      Открыть marqet.kz
+    </a>
+  </p>
+  <p style="color:#64748b;font-size:12px;margin-top:24px">
+    Если вы не запрашивали восстановление, просто игнорируйте это письмо.
+  </p>
+</div>"""
+    _send(settings, to_email, "Восстановление пароля marqet.kz", html)

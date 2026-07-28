@@ -1,11 +1,20 @@
+import hashlib
+import hmac
+from io import BytesIO
 import logging
-from datetime import date
+from pathlib import Path
+import re
+import secrets
+import uuid
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Any
 
-from fastapi import APIRouter, Body, Depends, File, Header, HTTPException, Response, UploadFile, WebSocket, WebSocketDisconnect, status
+from fastapi import APIRouter, Body, Depends, File, Header, HTTPException, Query, Request, Response, UploadFile, WebSocket, WebSocketDisconnect, status
 from fastapi.responses import HTMLResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator, model_validator
+from PIL import Image, ImageOps, UnidentifiedImageError
+from starlette.concurrency import run_in_threadpool
 
 from app.core.config import get_settings
 from app.domain.errors import (
@@ -120,6 +129,10 @@ from app.domain.schemas import (
     ShipmentPage,
 )
 from app.services.idempotency import IdempotencyStore, run_idempotent
+from app.services.marketplace_jobs import (
+    expire_marketplace_buy_requests as _expire_marketplace_buy_requests,
+    is_buy_request_status_transition_allowed,
+)
 from app.services.warehouse import WarehouseService
 from app.realtime.manager import manager
 from app.security.rbac import (
@@ -147,6 +160,66 @@ from .dependencies import (
 
 router = APIRouter(prefix="/api/v1")
 logger = logging.getLogger(__name__)
+
+MARKETPLACE_IMAGE_MAX_BYTES = 8 * 1024 * 1024
+MARKETPLACE_IMAGE_MAX_PIXELS = 25_000_000
+MARKETPLACE_IMAGE_MAX_SIDE = 8_192
+MARKETPLACE_IMAGE_MIN_SIDE = 32
+MARKETPLACE_IMAGE_FORMATS = {
+    "JPEG": (".jpg", "JPEG"),
+    "PNG": (".png", "PNG"),
+    "WEBP": (".webp", "WEBP"),
+}
+
+
+def _decode_marketplace_image(content: bytes) -> tuple[bytes, str]:
+    """Decode and normalize an uploaded image before it reaches public storage.
+
+    Re-encoding drops appended payloads and untrusted metadata, and ensures the
+    extension always matches the bytes served by the application.
+    """
+    if not content:
+        raise ValueError("empty")
+
+    try:
+        with Image.open(BytesIO(content)) as source:
+            source.verify()
+
+        with Image.open(BytesIO(content)) as source:
+            source.load()
+            image_format = (source.format or "").upper()
+            dimensions = source.size
+            if image_format not in MARKETPLACE_IMAGE_FORMATS:
+                raise ValueError("format")
+            width, height = dimensions
+            if (
+                width < MARKETPLACE_IMAGE_MIN_SIDE
+                or height < MARKETPLACE_IMAGE_MIN_SIDE
+                or width > MARKETPLACE_IMAGE_MAX_SIDE
+                or height > MARKETPLACE_IMAGE_MAX_SIDE
+                or width * height > MARKETPLACE_IMAGE_MAX_PIXELS
+            ):
+                raise ValueError("dimensions")
+
+            normalized = ImageOps.exif_transpose(source)
+            extension, output_format = MARKETPLACE_IMAGE_FORMATS[image_format]
+            output = BytesIO()
+            if output_format == "JPEG":
+                if normalized.mode not in ("RGB", "L"):
+                    background = Image.new("RGB", normalized.size, "white")
+                    if normalized.mode in ("RGBA", "LA"):
+                        background.paste(normalized, mask=normalized.getchannel("A"))
+                    else:
+                        background.paste(normalized.convert("RGB"))
+                    normalized = background
+                normalized.save(output, format="JPEG", quality=90, optimize=True)
+            elif output_format == "PNG":
+                normalized.save(output, format="PNG", optimize=True)
+            else:
+                normalized.save(output, format="WEBP", quality=90, method=4)
+            return output.getvalue(), extension
+    except (Image.DecompressionBombError, UnidentifiedImageError, OSError, ValueError):
+        raise ValueError("invalid_image") from None
 
 
 @router.get("/health")
@@ -360,6 +433,10 @@ class RegisterRequest(BaseModel):
 @router.post("/auth/register", response_model=TokenResponse, status_code=201, tags=["auth"])
 def register(body: RegisterRequest) -> TokenResponse:
     """Self-registration for standalone sklad. Creates a new user and returns a JWT."""
+    raise HTTPException(
+        status_code=403,
+        detail={"code": "forbidden", "message": "Служебная самостоятельная регистрация отключена", "details": {}},
+    )
     allowed_roles = {"warehouse_manager", "supplier"}
     if body.role not in allowed_roles:
         raise HTTPException(status_code=400, detail={"code": "bad_request", "message": "Invalid role", "details": {}})
@@ -406,6 +483,1245 @@ def register(body: RegisterRequest) -> TokenResponse:
     from app.security.tokens import encode_jwt_hs256
     token = encode_jwt_hs256(payload, settings.jwt_hmac_secret)
     return TokenResponse(access_token=token)
+
+
+class MarketplaceRegisterRequest(BaseModel):
+    name: str
+    email: str
+    phone: str | None = None
+    password: str
+
+
+class MarketplaceLoginRequest(BaseModel):
+    email: str
+    password: str
+
+
+class MarketplaceForgotPasswordRequest(BaseModel):
+    email: str
+
+
+class MarketplaceResetPasswordRequest(BaseModel):
+    token: str = Field(min_length=20, max_length=200)
+    password: str = Field(min_length=8, max_length=200)
+
+
+def _marketplace_email(value: str) -> str:
+    email = value.strip().lower()
+    if len(email) < 5 or "@" not in email or email.startswith("@") or email.endswith("@"):
+        raise HTTPException(status_code=400, detail={"code": "bad_request", "message": "Введите корректный email", "details": {}})
+    return email
+
+
+def _password_reset_hash(token: str) -> str:
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+
+def _password_reset_response(*, reset_token: str | None = None) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "sent": True,
+        "message": "Если аккаунт с таким email существует, мы отправили код восстановления.",
+    }
+    if reset_token:
+        payload["reset_token"] = reset_token
+    return payload
+
+
+def _marketplace_token(user: dict) -> TokenResponse:
+    import json as _json
+    import time
+    settings = get_settings()
+    if not settings.jwt_hmac_secret:
+        raise HTTPException(status_code=500, detail={"code": "server_error", "message": "JWT not configured", "details": {}})
+    roles = [role.strip() for role in user["roles"].split(",") if role.strip()]
+    warehouse_ids = user.get("warehouse_ids") or []
+    if isinstance(warehouse_ids, str):
+        warehouse_ids = _json.loads(warehouse_ids)
+    now = int(time.time())
+    payload = {
+        "sub": str(user["id"]), "iss": settings.jwt_issuer or "sklad",
+        "aud": settings.jwt_audience or "sklad", "iat": now, "exp": now + 8 * 3600,
+        "roles": roles, "warehouse_ids": warehouse_ids, "full_name": user["full_name"],
+        "username": user["username"],
+    }
+    from app.security.tokens import encode_jwt_hs256
+    return TokenResponse(access_token=encode_jwt_hs256(payload, settings.jwt_hmac_secret))
+
+
+@router.post("/marketplace/auth/register", response_model=TokenResponse, status_code=201, tags=["marketplace-auth"])
+def marketplace_register(body: MarketplaceRegisterRequest) -> TokenResponse:
+    email = _marketplace_email(body.email)
+    name = body.name.strip()
+    if len(name) < 2:
+        raise HTTPException(status_code=400, detail={"code": "bad_request", "message": "Имя должно содержать минимум 2 символа", "details": {}})
+    if len(body.password) < 8:
+        raise HTTPException(status_code=400, detail={"code": "bad_request", "message": "Пароль должен содержать минимум 8 символов", "details": {}})
+    svc = get_warehouse_service()
+    if svc.get_user_by_username(email):
+        raise HTTPException(status_code=409, detail={"code": "conflict", "message": "Пользователь с таким email уже существует", "details": {}})
+    # Marketplace customers must not inherit the warehouse permissions of Role.OTHER.
+    user = svc.create_user(email, name, hash_password(body.password), ["buyer"], [], None, None)
+    return _marketplace_token(user)
+
+
+@router.post("/marketplace/auth/login", response_model=TokenResponse, tags=["marketplace-auth"])
+def marketplace_login(body: MarketplaceLoginRequest) -> TokenResponse:
+    email = _marketplace_email(body.email)
+    user = get_warehouse_service().get_user_by_username(email)
+    if user is None or not verify_password(body.password, user["password_hash"]):
+        raise HTTPException(status_code=401, detail={"code": "unauthorized", "message": "Неверный email или пароль", "details": {}})
+    return _marketplace_token(user)
+
+
+@router.post("/marketplace/auth/forgot-password", tags=["marketplace-auth"])
+def marketplace_forgot_password(body: MarketplaceForgotPasswordRequest, request: Request) -> Any:
+    email = _marketplace_email(body.email)
+    settings = get_settings()
+    user = get_warehouse_service().get_user_by_username(email)
+    if user is None:
+        return _password_reset_response()
+
+    database = get_database()
+    connection = database.connect()
+    try:
+        cutoff = datetime.now(timezone.utc) - timedelta(hours=1)
+        recent = connection.execute(
+            """
+            SELECT COUNT(*) AS n
+            FROM marketplace_password_reset_tokens
+            WHERE user_id = ? AND created_at >= ?
+            """,
+            (int(user["id"]), cutoff),
+        ).fetchone()
+    finally:
+        connection.close()
+    if recent and int(recent["n"]) >= 5:
+        logger.warning("Password reset throttled for user_id=%s", user["id"])
+        return _password_reset_response()
+
+    reset_token = secrets.token_urlsafe(32)
+    expires_at = datetime.now(timezone.utc) + timedelta(minutes=30)
+    client_ip = request.client.host if request.client else None
+    with database.transaction() as connection:
+        connection.execute(
+            "UPDATE marketplace_password_reset_tokens SET used_at = CURRENT_TIMESTAMP WHERE user_id = ? AND used_at IS NULL",
+            (int(user["id"]),),
+        )
+        connection.execute(
+            """
+            INSERT INTO marketplace_password_reset_tokens(user_id, token_hash, expires_at, request_ip)
+            VALUES (?, ?, ?, ?)
+            """,
+            (int(user["id"]), _password_reset_hash(reset_token), expires_at, client_ip),
+        )
+
+    if settings.smtp_host and settings.smtp_from:
+        try:
+            from app.services.email_notifier import notify_marketplace_password_reset
+            notify_marketplace_password_reset(settings, email, reset_token)
+        except Exception as exc:
+            logger.warning("Failed to send password reset email to %s: %s", email, exc)
+    elif settings.deployment_mode != "production":
+        return _password_reset_response(reset_token=reset_token)
+    else:
+        logger.warning("SMTP is not configured; password reset email was not sent")
+
+    return _password_reset_response()
+
+
+@router.post("/marketplace/auth/reset-password", tags=["marketplace-auth"])
+def marketplace_reset_password(body: MarketplaceResetPasswordRequest) -> Any:
+    token_hash = _password_reset_hash(body.token.strip())
+    database = get_database()
+    with database.transaction() as connection:
+        row = connection.execute(
+            """
+            SELECT t.id, t.user_id
+            FROM marketplace_password_reset_tokens t
+            JOIN sklad_users u ON u.id = t.user_id
+            WHERE t.token_hash = ?
+              AND t.used_at IS NULL
+              AND t.expires_at > CURRENT_TIMESTAMP
+              AND u.is_active = TRUE
+            """,
+            (token_hash,),
+        ).fetchone()
+        if row is None:
+            raise HTTPException(status_code=400, detail={"code": "bad_request", "message": "Код недействителен или срок истёк", "details": {}})
+        connection.execute(
+            "UPDATE sklad_users SET password_hash = ? WHERE id = ?",
+            (hash_password(body.password), int(row["user_id"])),
+        )
+        connection.execute(
+            "UPDATE marketplace_password_reset_tokens SET used_at = CURRENT_TIMESTAMP WHERE user_id = ? AND used_at IS NULL",
+            (int(row["user_id"]),),
+        )
+    return {"reset": True, "message": "Пароль обновлён. Теперь можно войти."}
+
+
+@router.get("/marketplace/auth/me", tags=["marketplace-auth"])
+def marketplace_me(actor_ctx: ActorContext = Depends(get_actor_context)) -> Any:
+    if not actor_ctx.actor_id or not actor_ctx.actor_id.isdigit():
+        raise HTTPException(status_code=401, detail={"code": "unauthorized", "message": "Требуется авторизация", "details": {}})
+    user = get_warehouse_service().get_user_by_id(int(actor_ctx.actor_id))
+    if user is None:
+        raise HTTPException(status_code=404, detail={"code": "not_found", "message": "Пользователь не найден", "details": {}})
+    roles = [role.strip() for role in user["roles"].split(",") if role.strip()]
+    return {"id": user["id"], "name": user["full_name"], "email": user["username"], "phone": None, "roles": roles, "is_nca_verified": False}
+
+
+@router.get("/marketplace/public/stats", tags=["marketplace"])
+def marketplace_public_stats() -> Any:
+    database = get_database()
+    connection = database.connect()
+    try:
+        users = connection.execute(
+            "SELECT COUNT(*) AS total FROM sklad_users WHERE is_active = TRUE"
+        ).fetchone()
+        listings = connection.execute(
+            "SELECT COUNT(*) AS total FROM supplier_catalog_items WHERE is_active = TRUE"
+        ).fetchone()
+        return {
+            "total_users": int(users["total"] if users else 0),
+            "online_users": 0,
+            "active_listings": int(listings["total"] if listings else 0),
+        }
+    finally:
+        connection.close()
+
+
+class MarketplaceListingCreate(BaseModel):
+    title: str = Field(min_length=1, max_length=200)
+    description: str | None = Field(default=None, max_length=2000)
+    price: float = Field(ge=0)
+    unit: str = Field(default="шт", min_length=1, max_length=20)
+    category: str | None = Field(default=None, max_length=120)
+    condition: str = Field(default="new", pattern="^(new|used|refurbished)$")
+    phone: str | None = Field(default=None, max_length=32)
+    image_url: str | None = Field(default=None, max_length=2048)
+    city: str | None = Field(default=None, max_length=120)
+
+
+class MarketplaceBuyRequestCreate(BaseModel):
+    title: str = Field(min_length=2, max_length=180)
+    description: str | None = Field(default=None, max_length=3000)
+    category: str | None = Field(default=None, max_length=120)
+    city: str | None = Field(default=None, max_length=120)
+    budget_min: float | None = Field(default=None, ge=0, allow_inf_nan=False)
+    budget_max: float | None = Field(default=None, ge=0, allow_inf_nan=False)
+    quantity: int = Field(default=1, ge=1, le=100000)
+    unit: str = Field(default="шт", min_length=1, max_length=20)
+    contact_phone: str | None = Field(default=None, max_length=32)
+    expires_in_days: int = Field(default=30, ge=1, le=90)
+
+    @field_validator("title")
+    @classmethod
+    def validate_title(cls, value: str) -> str:
+        value = value.strip()
+        if len(value) < 2:
+            raise ValueError("Название должно содержать минимум 2 символа")
+        return value
+
+    @field_validator("unit")
+    @classmethod
+    def validate_unit(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("Единица измерения не может быть пустой")
+        return value
+
+    @field_validator("description", "category", "city", mode="before")
+    @classmethod
+    def normalize_optional_text(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        value = value.strip()
+        return value or None
+
+    @model_validator(mode="after")
+    def validate_budget_range(self):
+        for field in ("title", "quantity", "unit", "expires_in_days"):
+            if field in self.model_fields_set and getattr(self, field) is None:
+                raise ValueError(f"Поле {field} не может быть null")
+        if self.budget_min is not None and self.budget_max is not None and self.budget_max < self.budget_min:
+            raise ValueError("Максимальный бюджет не может быть меньше минимального")
+        return self
+
+
+class MarketplaceBuyRequestStatus(BaseModel):
+    status: str = Field(pattern="^(open|closed|fulfilled)$")
+
+
+class MarketplaceBuyRequestUpdate(BaseModel):
+    title: str | None = Field(default=None, min_length=2, max_length=180)
+    description: str | None = Field(default=None, max_length=3000)
+    category: str | None = Field(default=None, max_length=120)
+    city: str | None = Field(default=None, max_length=120)
+    budget_min: float | None = Field(default=None, ge=0, allow_inf_nan=False)
+    budget_max: float | None = Field(default=None, ge=0, allow_inf_nan=False)
+    quantity: int | None = Field(default=None, ge=1, le=100000)
+    unit: str | None = Field(default=None, min_length=1, max_length=20)
+    contact_phone: str | None = Field(default=None, max_length=32)
+    expires_in_days: int | None = Field(default=None, ge=1, le=90)
+
+    @field_validator("title", "unit")
+    @classmethod
+    def validate_required_text(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        value = value.strip()
+        if not value:
+            raise ValueError("Значение не может быть пустым")
+        return value
+
+    @field_validator("description", "category", "city", mode="before")
+    @classmethod
+    def normalize_optional_text(cls, value: str | None) -> str | None:
+        return value.strip() or None if value else None
+
+    @model_validator(mode="after")
+    def validate_budget_range(self):
+        for field in ("title", "quantity", "unit", "expires_in_days"):
+            if field in self.model_fields_set and getattr(self, field) is None:
+                raise ValueError(f"Поле {field} не может быть null")
+        if self.budget_min is not None and self.budget_max is not None and self.budget_max < self.budget_min:
+            raise ValueError("Максимальный бюджет не может быть меньше минимального")
+        if not self.model_fields_set:
+            raise ValueError("Не передано ни одного поля для изменения")
+        return self
+
+
+class MarketplaceBuyResponseCreate(BaseModel):
+    message: str = Field(min_length=2, max_length=2000)
+    offered_price: float | None = Field(default=None, ge=0, allow_inf_nan=False)
+    contact_phone: str | None = Field(default=None, max_length=32)
+
+    @field_validator("message")
+    @classmethod
+    def validate_message(cls, value: str) -> str:
+        value = value.strip()
+        if len(value) < 2:
+            raise ValueError("Сообщение должно содержать минимум 2 символа")
+        return value
+
+
+class MarketplaceBuyRequestReportCreate(BaseModel):
+    reason: str = Field(pattern="^(spam|fraud|prohibited|offensive|other)$")
+    details: str | None = Field(default=None, max_length=500)
+
+    @field_validator("details")
+    @classmethod
+    def normalize_details(cls, value: str | None) -> str | None:
+        return value.strip() or None if value else None
+
+
+class MarketplaceBuyRequestMatchCreate(BaseModel):
+    catalog_item_id: int = Field(gt=0)
+
+
+class MarketplaceBuyRequestModerationUpdate(BaseModel):
+    moderation_status: str = Field(pattern="^(approved|rejected)$")
+    note: str | None = Field(default=None, max_length=500)
+
+
+class MarketplaceOrderStatusCompat(BaseModel):
+    status: str = Field(pattern="^(confirmed|shipped|delivered|cancelled)$")
+
+
+class SellerPaymentDetailsUpdate(BaseModel):
+    kaspi_phone: str | None = Field(default=None, max_length=32)
+    bank_iban: str | None = Field(default=None, max_length=40)
+    bank_name: str | None = Field(default=None, max_length=120)
+
+
+class MarketplaceTrackingUpdate(BaseModel):
+    tracking_number: str = Field(min_length=3, max_length=100)
+    tracking_carrier: str = Field(min_length=2, max_length=100)
+    estimated_delivery: date | None = None
+    seller_note: str | None = Field(default=None, max_length=500)
+
+
+class MarketplacePaymentStatusCompat(BaseModel):
+    payment_status: str = Field(pattern="^(awaiting|paid)$")
+
+
+def _normalize_kz_phone(value: str | None) -> str | None:
+    if not value or not value.strip():
+        return None
+    digits = re.sub(r"\D", "", value)
+    if len(digits) != 11 or digits[0] not in {"7", "8"}:
+        raise HTTPException(status_code=422, detail={"code": "validation_error", "message": "Введите корректный номер телефона Казахстана", "details": {}})
+    return "+7" + digits[1:]
+
+
+def _normalize_kz_iban(value: str | None) -> str | None:
+    if not value or not value.strip():
+        return None
+    iban = re.sub(r"\s", "", value).upper()
+    if not re.fullmatch(r"KZ\d{2}[A-Z0-9]{16}", iban):
+        raise HTTPException(status_code=422, detail={"code": "validation_error", "message": "Введите корректный IBAN Казахстана", "details": {}})
+    rearranged = iban[4:] + iban[:4]
+    numeric = "".join(str(ord(ch) - 55) if ch.isalpha() else ch for ch in rearranged)
+    if int(numeric) % 97 != 1:
+        raise HTTPException(status_code=422, detail={"code": "validation_error", "message": "Контрольная сумма IBAN неверна", "details": {}})
+    return iban
+
+
+def _marketplace_order_compat(order: dict[str, Any]) -> dict[str, Any]:
+    status_map = {
+        "pending": "pending", "pending_payment": "pending", "paid": "paid",
+        "accepted": "confirmed", "preparing": "confirmed", "shipped": "shipped",
+        "delivered": "delivered", "completed": "delivered",
+        "cancelled": "cancelled", "refunded": "cancelled",
+    }
+    payment_map = {
+        None: "pending", "pending": "awaiting", "authorized": "awaiting",
+        "paid": "paid", "refunded": "refunded", "failed": "pending", "cancelled": "pending",
+    }
+    data = dict(order)
+    data["order_number"] = data.get("order_number") or data.get("number")
+    data["status"] = status_map.get(str(data.get("status")), str(data.get("status") or "pending"))
+    data["payment_status"] = payment_map.get(data.get("payment_status"), "pending")
+    data["items"] = data.get("items") or []
+    return data
+
+
+@router.get("/marketplace/my-orders", tags=["marketplace-orders"])
+def list_my_orders_compat(
+    status_filter: str | None = Query(default=None, alias="status"),
+    limit: int = Query(default=50, ge=1, le=100), offset: int = Query(default=0, ge=0),
+    actor_ctx: ActorContext = Depends(get_actor_context),
+) -> Any:
+    svc = get_warehouse_service()
+    page = svc.list_marketplace_orders(actor_ctx.actor_id, limit=limit, offset=offset)
+    items = [_marketplace_order_compat(svc.get_marketplace_order(actor_ctx.actor_id, row["id"])) for row in page["items"]]
+    if status_filter:
+        items = [item for item in items if item["status"] == status_filter]
+    return {"items": items, "total": len(items) if status_filter else page["total"]}
+
+
+@router.get("/marketplace/seller/orders", tags=["marketplace-orders"])
+def list_seller_orders_compat(
+    status_filter: str | None = Query(default=None, alias="status"),
+    limit: int = Query(default=50, ge=1, le=100), offset: int = Query(default=0, ge=0),
+    actor_ctx: ActorContext = Depends(get_actor_context),
+) -> Any:
+    if actor_ctx.supplier_id is None:
+        raise HTTPException(status_code=403, detail={"code": "forbidden", "message": "Профиль продавца не найден", "details": {}})
+    svc = get_warehouse_service()
+    page = svc.list_supplier_marketplace_orders(actor_ctx.supplier_id, limit=limit, offset=offset)
+    items = [_marketplace_order_compat(svc.get_supplier_marketplace_order(actor_ctx.supplier_id, row["id"])) for row in page["items"]]
+    if status_filter:
+        items = [item for item in items if item["status"] == status_filter]
+    return {"items": items, "total": len(items) if status_filter else page["total"]}
+
+
+@router.get("/marketplace/seller/payment-details", tags=["marketplace-payments"])
+def get_seller_payment_details(actor_ctx: ActorContext = Depends(get_actor_context)) -> Any:
+    if actor_ctx.supplier_id is None:
+        raise HTTPException(status_code=403, detail={"code": "forbidden", "message": "Профиль продавца не найден", "details": {}})
+    return get_warehouse_service().get_supplier_payment_details(actor_ctx.supplier_id)
+
+
+@router.patch("/marketplace/seller/payment-details", tags=["marketplace-payments"])
+def update_seller_payment_details(
+    body: SellerPaymentDetailsUpdate, actor_ctx: ActorContext = Depends(get_actor_context),
+) -> Any:
+    if actor_ctx.supplier_id is None:
+        raise HTTPException(status_code=403, detail={"code": "forbidden", "message": "Профиль продавца не найден", "details": {}})
+    return get_warehouse_service().update_supplier_payment_details(
+        actor_ctx.supplier_id,
+        kaspi_phone=_normalize_kz_phone(body.kaspi_phone),
+        bank_iban=_normalize_kz_iban(body.bank_iban),
+        bank_name=body.bank_name.strip() if body.bank_name and body.bank_name.strip() else None,
+    )
+
+
+@router.patch("/marketplace/orders/{order_id}/tracking", tags=["marketplace-orders"])
+def update_marketplace_tracking(
+    order_id: int, body: MarketplaceTrackingUpdate,
+    actor_ctx: ActorContext = Depends(get_actor_context),
+) -> Any:
+    if actor_ctx.supplier_id is None:
+        raise HTTPException(status_code=403, detail={"code": "forbidden", "message": "Изменять доставку может только продавец", "details": {}})
+    number = " ".join(body.tracking_number.split())
+    carrier = " ".join(body.tracking_carrier.split())
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._/\- ]{1,98}[A-Za-z0-9]", number):
+        raise HTTPException(status_code=422, detail={"code": "validation_error", "message": "Недопустимый трек-номер", "details": {}})
+    try:
+        result = get_warehouse_service().update_marketplace_order_tracking(
+            actor_ctx.supplier_id, order_id, tracking_number=number,
+            tracking_carrier=carrier, estimated_delivery=body.estimated_delivery,
+            seller_note=body.seller_note.strip() if body.seller_note else None,
+        )
+        return _marketplace_order_compat(result)
+    except Exception as error:
+        raise map_error(error) from error
+
+
+@router.patch("/marketplace/orders/{order_id}/payment-status", tags=["marketplace-payments"])
+def update_manual_payment_status(
+    order_id: int, body: MarketplacePaymentStatusCompat,
+    actor_ctx: ActorContext = Depends(get_actor_context),
+) -> Any:
+    try:
+        result = get_warehouse_service().update_manual_marketplace_payment_status(
+            actor_ctx.actor_id, actor_ctx.supplier_id, order_id, body.payment_status,
+        )
+        return _marketplace_order_compat(result)
+    except Exception as error:
+        raise map_error(error) from error
+
+
+@router.patch("/marketplace/orders/{order_id}/status", tags=["marketplace-orders"])
+def update_marketplace_order_status_compat(
+    order_id: int, body: MarketplaceOrderStatusCompat,
+    actor_ctx: ActorContext = Depends(get_actor_context),
+) -> Any:
+    svc = get_warehouse_service()
+    if body.status == "cancelled":
+        if actor_ctx.supplier_id is not None:
+            try:
+                result = svc.update_supplier_marketplace_order_status(
+                    actor_ctx.supplier_id, order_id, status="cancelled", cancel_reason="Отменено продавцом",
+                )
+                return _marketplace_order_compat(result)
+            except NotFoundError:
+                pass
+        return _marketplace_order_compat(
+            svc.cancel_marketplace_order(actor_ctx.actor_id, order_id, reason="Отменено покупателем")
+        )
+    if actor_ctx.supplier_id is None:
+        raise HTTPException(status_code=403, detail={"code": "forbidden", "message": "Изменять статус может только продавец", "details": {}})
+    target = {"confirmed": "accepted", "delivered": "delivered"}.get(body.status)
+    if body.status == "shipped":
+        current = svc.get_supplier_marketplace_order(actor_ctx.supplier_id, order_id)
+        if current["status"] in {"pending", "paid"}:
+            svc.update_supplier_marketplace_order_status(actor_ctx.supplier_id, order_id, status="accepted")
+        current = svc.get_supplier_marketplace_order(actor_ctx.supplier_id, order_id)
+        if current["status"] == "accepted":
+            svc.update_supplier_marketplace_order_status(actor_ctx.supplier_id, order_id, status="preparing")
+        target = "shipped"
+    result = svc.update_supplier_marketplace_order_status(actor_ctx.supplier_id, order_id, status=target)
+    return _marketplace_order_compat(result)
+
+
+def _marketplace_user_and_supplier(
+    actor_ctx: ActorContext, *, phone: str | None = None, city: str | None = None,
+    ensure_supplier: bool = False,
+):
+    if not actor_ctx.actor_id or not actor_ctx.actor_id.isdigit():
+        raise HTTPException(status_code=401, detail={"code": "unauthorized", "message": "Требуется авторизация", "details": {}})
+    svc = get_warehouse_service()
+    user = svc.get_user_by_id(int(actor_ctx.actor_id))
+    if user is None:
+        raise HTTPException(status_code=404, detail={"code": "not_found", "message": "Пользователь не найден", "details": {}})
+    supplier_id = user.get("supplier_id")
+    if supplier_id is None and ensure_supplier:
+        supplier = svc.create_supplier(
+            SupplierCreate(
+                name=user["full_name"], email=user["username"],
+                phone=phone.strip() if phone else None, city=city.strip() if city else None,
+            ),
+            actor_id=actor_ctx.actor_id,
+        )
+        supplier_id = supplier["id"]
+        roles = [role.strip() for role in user["roles"].split(",") if role.strip()]
+        if "supplier" not in roles:
+            roles.append("supplier")
+        svc.update_user(user["id"], {"supplier_id": supplier_id, "roles": roles})
+    return svc, user, supplier_id
+
+
+@router.post("/marketplace/listings", status_code=201, tags=["marketplace-listings"])
+def create_marketplace_listing(body: MarketplaceListingCreate, actor_ctx: ActorContext = Depends(get_actor_context)) -> Any:
+    svc, _, supplier_id = _marketplace_user_and_supplier(
+        actor_ctx, phone=body.phone, city=body.city, ensure_supplier=True,
+    )
+    image_url = body.image_url.strip() if body.image_url else None
+    if image_url and not image_url.startswith("/uploads/"):
+        raise HTTPException(status_code=400, detail={"code": "bad_request", "message": "Недопустимый адрес изображения", "details": {}})
+    item = svc.create_catalog_item(supplier_id, {
+        "product_name": body.title.strip(), "description": body.description,
+        "unit_price": body.price, "unit": body.unit.strip(), "category": body.category,
+        "condition": body.condition, "image_url": image_url, "is_active": True,
+    })
+    # A newly published listing can satisfy existing demand. Keep matching
+    # conservative (same category when specified + trigram threshold) and let
+    # the buyer decide; no contact details are disclosed to the seller.
+    database = get_database()
+    with database.transaction() as connection:
+        matches = connection.execute(
+            """INSERT INTO marketplace_buy_request_matches(request_id, catalog_item_id, matched_by_user_id, source)
+               SELECT br.id, ?, ?, 'automatic'
+               FROM marketplace_buy_requests br
+               WHERE br.status = 'open' AND br.moderation_status = 'approved'
+                 AND (br.category IS NULL OR br.category = ?)
+                 AND similarity(LOWER(br.title), LOWER(?)) >= 0.45
+                 AND (br.budget_max IS NULL OR br.budget_max >= ?)
+               ON CONFLICT (request_id, catalog_item_id) DO NOTHING
+               RETURNING request_id""",
+            (item["id"], int(actor_ctx.actor_id), body.category.strip() if body.category else None,
+             body.title.strip(), body.price),
+        ).fetchall()
+        for match in matches:
+            owner = connection.execute("SELECT user_id FROM marketplace_buy_requests WHERE id = ?", (match["request_id"],)).fetchone()
+            if owner:
+                _marketplace_notify(
+                    connection, int(owner["user_id"]), "buy_match", "Появился подходящий товар",
+                    body.title.strip()[:500], "buy_request", int(match["request_id"]),
+                )
+    return {**item, "message": "Объявление опубликовано"}
+
+
+@router.get("/marketplace/my-listings", tags=["marketplace-listings"])
+def list_my_marketplace_listings(
+    limit: int = Query(default=100, ge=1, le=200), offset: int = Query(default=0, ge=0),
+    actor_ctx: ActorContext = Depends(get_actor_context),
+) -> Any:
+    svc, _, supplier_id = _marketplace_user_and_supplier(actor_ctx)
+    if supplier_id is None:
+        return {"items": [], "total": 0}
+    return svc.list_supplier_catalog(supplier_id=supplier_id, active_only=False, limit=limit, offset=offset)
+
+
+def _marketplace_user_id(actor_ctx: ActorContext) -> int:
+    if not actor_ctx.actor_id or not actor_ctx.actor_id.isdigit():
+        raise HTTPException(status_code=401, detail={"code": "unauthorized", "message": "Требуется авторизация", "details": {}})
+    return int(actor_ctx.actor_id)
+
+
+def _marketplace_rate_limit(connection, *, table: str, user_column: str, user_id: int,
+                            window: str, maximum: int, message: str) -> None:
+    # table/column/window are constants owned by this module, never request input.
+    row = connection.execute(
+        f"SELECT COUNT(*) AS total FROM {table} WHERE {user_column} = ? AND created_at >= NOW() - INTERVAL '{window}'",
+        (user_id,),
+    ).fetchone()
+    if row and int(row["total"]) >= maximum:
+        raise HTTPException(status_code=429, detail={"code": "rate_limited", "message": message, "details": {}})
+
+
+def _marketplace_notify(connection, user_id: int, notification_type: str, title: str,
+                        body: str | None, entity_type: str, entity_id: int) -> None:
+    connection.execute(
+        """INSERT INTO marketplace_user_notifications
+           (user_id, notification_type, title, body, entity_type, entity_id)
+           VALUES (?, ?, ?, ?, ?, ?)""",
+        (user_id, notification_type, title, body, entity_type, entity_id),
+    )
+
+
+def _buy_request_select(*, include_contact: bool = False, include_owner_id: bool = False) -> str:
+    contact = "br.contact_phone" if include_contact else "NULL::VARCHAR AS contact_phone"
+    owner_id = "br.user_id" if include_owner_id else "NULL::BIGINT AS user_id"
+    return f"""
+        SELECT br.id, {owner_id}, br.title, br.description, br.category, br.city,
+               br.budget_min, br.budget_max, br.quantity, br.unit, {contact},
+               br.status, br.moderation_status, br.view_count,
+               br.matched_catalog_item_id, br.expires_at, br.fulfilled_at,
+               br.created_at, br.updated_at, u.full_name AS author_name,
+               (SELECT COUNT(*) FROM marketplace_buy_responses rr WHERE rr.request_id = br.id) AS response_count
+        FROM marketplace_buy_requests br
+        JOIN sklad_users u ON u.id = br.user_id
+    """
+
+
+@router.get("/marketplace/buy-requests", tags=["marketplace-buy-requests"])
+def list_marketplace_buy_requests(
+    search: str | None = Query(default=None, max_length=120),
+    category: str | None = Query(default=None, max_length=120),
+    city: str | None = Query(default=None, max_length=120),
+    limit: int = Query(default=30, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+) -> Any:
+    filters = ["br.status = 'open'", "br.moderation_status = 'approved'"]
+    params: list[Any] = []
+    if search and search.strip():
+        filters.append("(br.title ILIKE ? OR COALESCE(br.description, '') ILIKE ?)")
+        pattern = f"%{search.strip()}%"
+        params.extend([pattern, pattern])
+    if category and category.strip():
+        filters.append("br.category = ?")
+        params.append(category.strip())
+    if city and city.strip():
+        filters.append("br.city ILIKE ?")
+        params.append(city.strip())
+    where = " AND ".join(filters)
+    database = get_database()
+    with database.transaction() as connection:
+        _expire_marketplace_buy_requests(connection)
+        total_row = connection.execute(f"SELECT COUNT(*) AS total FROM marketplace_buy_requests br WHERE {where}", tuple(params)).fetchone()
+        rows = connection.execute(
+            _buy_request_select() + f" WHERE {where} ORDER BY br.created_at DESC LIMIT ? OFFSET ?",
+            tuple([*params, limit, offset]),
+        ).fetchall()
+        return {"items": [dict(row) for row in rows], "total": int(total_row["total"] if total_row else 0)}
+
+
+@router.get("/marketplace/buy-requests/mine", tags=["marketplace-buy-requests"])
+def list_my_marketplace_buy_requests(
+    limit: int = Query(default=30, ge=1, le=100), offset: int = Query(default=0, ge=0),
+    actor_ctx: ActorContext = Depends(get_actor_context),
+) -> Any:
+    user_id = _marketplace_user_id(actor_ctx)
+    database = get_database()
+    with database.transaction() as connection:
+        _expire_marketplace_buy_requests(connection)
+        total_row = connection.execute(
+            "SELECT COUNT(*) AS total FROM marketplace_buy_requests WHERE user_id = ? AND status <> 'deleted'",
+            (user_id,),
+        ).fetchone()
+        rows = connection.execute(
+            _buy_request_select(include_contact=True, include_owner_id=True) +
+            " WHERE br.user_id = ? AND br.status <> 'deleted' ORDER BY br.created_at DESC LIMIT ? OFFSET ?",
+            (user_id, limit, offset)
+        ).fetchall()
+        return {"items": [dict(row) for row in rows], "total": int(total_row["total"] if total_row else 0)}
+
+
+@router.post("/marketplace/buy-requests", status_code=201, tags=["marketplace-buy-requests"])
+def create_marketplace_buy_request(
+    body: MarketplaceBuyRequestCreate,
+    actor_ctx: ActorContext = Depends(get_actor_context),
+) -> Any:
+    user_id = _marketplace_user_id(actor_ctx)
+    if body.budget_min is not None and body.budget_max is not None and body.budget_max < body.budget_min:
+        raise HTTPException(status_code=422, detail={"code": "validation_error", "message": "Максимальный бюджет не может быть меньше минимального", "details": {}})
+    phone = _normalize_kz_phone(body.contact_phone)
+    database = get_database()
+    with database.transaction() as connection:
+        _marketplace_rate_limit(
+            connection, table="marketplace_buy_requests", user_column="user_id", user_id=user_id,
+            window="24 hours", maximum=10, message="Можно разместить не более 10 запросов в сутки",
+        )
+        row = connection.execute(
+            """
+            INSERT INTO marketplace_buy_requests(
+                user_id, title, description, category, city, budget_min, budget_max,
+                quantity, unit, contact_phone, expires_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW() + (? * INTERVAL '1 day'))
+            RETURNING id, expires_at
+            """,
+            (user_id, body.title.strip(), body.description.strip() if body.description else None,
+             body.category.strip() if body.category else None, body.city.strip() if body.city else None,
+             body.budget_min, body.budget_max, body.quantity, body.unit.strip(), phone,
+             body.expires_in_days),
+        ).fetchone()
+    return {"id": int(row["id"]), "expires_at": row["expires_at"], "message": "Запрос «Куплю» опубликован"}
+
+
+@router.get("/marketplace/buy-requests/{request_id}", tags=["marketplace-buy-requests"])
+def get_marketplace_buy_request(
+    request_id: int, request: Request,
+    authorization: str | None = Header(default=None),
+) -> Any:
+    viewer_user_id: int | None = None
+    viewer_is_moderator = False
+    if authorization:
+        scheme, _, token = authorization.partition(" ")
+        settings = get_settings()
+        if scheme.lower() == "bearer" and token.strip() and settings.jwt_hmac_secret:
+            try:
+                viewer = actor_from_bearer_token(
+                    token.strip(), secret=settings.jwt_hmac_secret,
+                    issuer=settings.jwt_issuer, audience=settings.jwt_audience,
+                    leeway_seconds=settings.jwt_clock_skew_seconds,
+                )
+                if viewer.actor_id.isdigit():
+                    viewer_user_id = int(viewer.actor_id)
+                viewer_is_moderator = Role.WAREHOUSE_MANAGER in viewer.roles
+            except (AuthenticationError, ValidationError):
+                # The resource is public; an invalid optional token simply does
+                # not grant owner-only fields.
+                viewer_user_id = None
+    database = get_database()
+    with database.transaction() as connection:
+        _expire_marketplace_buy_requests(connection)
+        owner = connection.execute(
+            "SELECT user_id, moderation_status FROM marketplace_buy_requests WHERE id = ?", (request_id,)
+        ).fetchone()
+        status_row = connection.execute(
+            "SELECT status FROM marketplace_buy_requests WHERE id = ?", (request_id,),
+        ).fetchone()
+        if (owner is None or status_row is None or status_row["status"] == "deleted" or
+                (owner["moderation_status"] != "approved" and
+                 viewer_user_id != int(owner["user_id"]) and not viewer_is_moderator)):
+            raise HTTPException(status_code=404, detail={"code": "not_found", "message": "Запрос не найден", "details": {}})
+
+        forwarded = request.headers.get("x-forwarded-for", "").split(",", 1)[0].strip()
+        peer = forwarded or (request.client.host if request.client else "unknown")
+        identity = f"user:{viewer_user_id}" if viewer_user_id else f"guest:{peer}:{request.headers.get('user-agent', '')[:160]}"
+        salt = get_settings().jwt_hmac_secret or "marketplace-view-counter"
+        viewer_key = hashlib.sha256(f"{salt}:{identity}".encode()).hexdigest()
+        inserted = connection.execute(
+            """INSERT INTO marketplace_buy_request_views(request_id, viewer_key)
+               VALUES (?, ?) ON CONFLICT DO NOTHING RETURNING request_id""", (request_id, viewer_key),
+        ).fetchone()
+        if inserted:
+            connection.execute("UPDATE marketplace_buy_requests SET view_count = view_count + 1 WHERE id = ?", (request_id,))
+        row = connection.execute(
+            _buy_request_select(
+                include_contact=viewer_user_id == int(owner["user_id"]),
+                include_owner_id=viewer_user_id == int(owner["user_id"]),
+            ) + " WHERE br.id = ?", (request_id,)
+        ).fetchone()
+        result = dict(row)
+        result["is_owner"] = viewer_user_id == int(owner["user_id"])
+        return result
+
+
+@router.get("/marketplace/buy-requests/{request_id}/matches", tags=["marketplace-buy-requests"])
+def list_marketplace_buy_request_matches(request_id: int) -> Any:
+    database = get_database()
+    connection = database.connect()
+    try:
+        request_row = connection.execute(
+            """SELECT id FROM marketplace_buy_requests
+               WHERE id = ? AND moderation_status = 'approved' AND status <> 'deleted'""", (request_id,)
+        ).fetchone()
+        if request_row is None:
+            raise HTTPException(status_code=404, detail={"code": "not_found", "message": "Запрос не найден", "details": {}})
+        rows = connection.execute(
+            """SELECT m.id AS match_id, m.status AS match_status, m.source, m.created_at,
+                      ci.id, ci.product_name, ci.description, ci.category, ci.unit_price,
+                      ci.unit, ci.image_url, ci.supplier_id
+               FROM marketplace_buy_request_matches m
+               JOIN supplier_catalog_items ci ON ci.id = m.catalog_item_id
+               WHERE m.request_id = ? AND m.status = 'suggested' AND ci.is_active = TRUE
+               ORDER BY m.created_at DESC LIMIT 50""", (request_id,),
+        ).fetchall()
+        return {"items": [dict(row) for row in rows], "total": len(rows)}
+    finally:
+        connection.close()
+
+
+@router.patch("/marketplace/buy-requests/{request_id}", tags=["marketplace-buy-requests"])
+def update_marketplace_buy_request(
+    request_id: int, body: MarketplaceBuyRequestUpdate,
+    actor_ctx: ActorContext = Depends(get_actor_context),
+) -> Any:
+    user_id = _marketplace_user_id(actor_ctx)
+    database = get_database()
+    with database.transaction() as connection:
+        _expire_marketplace_buy_requests(connection)
+        current = connection.execute(
+            """SELECT id, budget_min, budget_max, status
+               FROM marketplace_buy_requests
+               WHERE id = ? AND user_id = ? FOR UPDATE""", (request_id, user_id),
+        ).fetchone()
+        if current is None or current["status"] == "deleted":
+            raise HTTPException(status_code=404, detail={"code": "not_found", "message": "Запрос не найден", "details": {}})
+        if current["status"] != "open":
+            raise HTTPException(status_code=409, detail={"code": "conflict", "message": "Изменять можно только открытый запрос", "details": {}})
+
+        supplied = body.model_fields_set
+        material_fields = {
+            "title", "description", "category", "city", "budget_min", "budget_max",
+            "quantity", "unit", "contact_phone",
+        }
+        budget_min = body.budget_min if "budget_min" in supplied else current["budget_min"]
+        budget_max = body.budget_max if "budget_max" in supplied else current["budget_max"]
+        if budget_min is not None and budget_max is not None and budget_max < budget_min:
+            raise HTTPException(status_code=422, detail={"code": "validation_error", "message": "Максимальный бюджет не может быть меньше минимального", "details": {}})
+
+        assignments: list[str] = []
+        params: list[Any] = []
+        for field in ("title", "description", "category", "city", "budget_min", "budget_max", "quantity", "unit"):
+            if field in supplied:
+                assignments.append(f"{field} = ?")
+                params.append(getattr(body, field))
+        if "contact_phone" in supplied:
+            assignments.append("contact_phone = ?")
+            params.append(_normalize_kz_phone(body.contact_phone))
+        if "expires_in_days" in supplied:
+            assignments.append("expires_at = NOW() + (? * INTERVAL '1 day')")
+            params.append(body.expires_in_days)
+        if supplied & material_fields:
+            # Previously approved content must be reviewed again after a
+            # substantive owner edit. Rejected requests remain rejected until
+            # explicitly reviewed by a moderator.
+            assignments.append(
+                "moderation_status = CASE WHEN moderation_status = 'approved' THEN 'pending' ELSE moderation_status END"
+            )
+            assignments.append(
+                "moderation_note = CASE WHEN moderation_status = 'approved' THEN NULL ELSE moderation_note END"
+            )
+        assignments.append("updated_at = NOW()")
+        row = connection.execute(
+            f"""UPDATE marketplace_buy_requests SET {', '.join(assignments)}
+                 WHERE id = ? AND user_id = ?
+                 RETURNING id, status, moderation_status, expires_at, updated_at""",
+            tuple([*params, request_id, user_id]),
+        ).fetchone()
+    return dict(row)
+
+
+@router.delete("/marketplace/buy-requests/{request_id}", status_code=204, tags=["marketplace-buy-requests"])
+def delete_marketplace_buy_request(
+    request_id: int, actor_ctx: ActorContext = Depends(get_actor_context),
+) -> Response:
+    user_id = _marketplace_user_id(actor_ctx)
+    database = get_database()
+    with database.transaction() as connection:
+        row = connection.execute(
+            """UPDATE marketplace_buy_requests
+               SET status = 'deleted', deleted_at = NOW(), updated_at = NOW()
+               WHERE id = ? AND user_id = ? AND status <> 'deleted' RETURNING id""",
+            (request_id, user_id),
+        ).fetchone()
+        if row is None:
+            raise HTTPException(status_code=404, detail={"code": "not_found", "message": "Запрос не найден", "details": {}})
+    return Response(status_code=204)
+
+
+@router.patch("/marketplace/buy-requests/{request_id}/status", tags=["marketplace-buy-requests"])
+def update_marketplace_buy_request_status(
+    request_id: int, body: MarketplaceBuyRequestStatus,
+    actor_ctx: ActorContext = Depends(get_actor_context),
+) -> Any:
+    user_id = _marketplace_user_id(actor_ctx)
+    database = get_database()
+    with database.transaction() as connection:
+        _expire_marketplace_buy_requests(connection)
+        current = connection.execute(
+            "SELECT status FROM marketplace_buy_requests WHERE id = ? AND user_id = ? FOR UPDATE",
+            (request_id, user_id),
+        ).fetchone()
+        if current is None or current["status"] == "deleted":
+            raise HTTPException(status_code=404, detail={"code": "not_found", "message": "Запрос не найден", "details": {}})
+        current_status = str(current["status"])
+        if not is_buy_request_status_transition_allowed(current_status, body.status):
+            raise HTTPException(status_code=409, detail={"code": "conflict", "message": "Недопустимый переход статуса запроса", "details": {}})
+        row = connection.execute(
+            """UPDATE marketplace_buy_requests
+               SET status = ?,
+                   fulfilled_at = CASE WHEN ? = 'fulfilled' THEN COALESCE(fulfilled_at, NOW()) ELSE NULL END,
+                   expires_at = CASE WHEN ? = 'open' AND expires_at <= NOW()
+                                     THEN NOW() + INTERVAL '30 days' ELSE expires_at END,
+                   updated_at = NOW()
+               WHERE id = ? AND user_id = ? RETURNING id, status""",
+            (body.status, body.status, body.status, request_id, user_id),
+        ).fetchone()
+        if row is None:
+            raise HTTPException(status_code=404, detail={"code": "not_found", "message": "Запрос не найден", "details": {}})
+    return dict(row)
+
+
+@router.post("/marketplace/buy-requests/{request_id}/responses", status_code=201, tags=["marketplace-buy-requests"])
+def respond_to_marketplace_buy_request(
+    request_id: int, body: MarketplaceBuyResponseCreate,
+    actor_ctx: ActorContext = Depends(get_actor_context),
+) -> Any:
+    user_id = _marketplace_user_id(actor_ctx)
+    phone = _normalize_kz_phone(body.contact_phone)
+    database = get_database()
+    with database.transaction() as connection:
+        _expire_marketplace_buy_requests(connection)
+        request_row = connection.execute(
+            "SELECT user_id, status FROM marketplace_buy_requests WHERE id = ? FOR UPDATE", (request_id,)
+        ).fetchone()
+        if request_row is None or request_row["status"] != "open":
+            raise HTTPException(status_code=404, detail={"code": "not_found", "message": "Открытый запрос не найден", "details": {}})
+        if int(request_row["user_id"]) == user_id:
+            raise HTTPException(status_code=400, detail={"code": "bad_request", "message": "Нельзя откликнуться на собственный запрос", "details": {}})
+        _marketplace_rate_limit(
+            connection, table="marketplace_buy_responses", user_column="responder_user_id", user_id=user_id,
+            window="1 hour", maximum=20, message="Слишком много откликов. Повторите позже",
+        )
+        existing_response = connection.execute(
+            """SELECT id FROM marketplace_buy_responses
+               WHERE request_id = ? AND responder_user_id = ?""", (request_id, user_id),
+        ).fetchone()
+        row = connection.execute(
+            """INSERT INTO marketplace_buy_responses
+                   (request_id, responder_user_id, message, offered_price, contact_phone)
+               VALUES (?, ?, ?, ?, ?)
+               ON CONFLICT (request_id, responder_user_id) DO UPDATE SET
+                 message = EXCLUDED.message, offered_price = EXCLUDED.offered_price,
+                 contact_phone = EXCLUDED.contact_phone, created_at = NOW()
+               RETURNING id""",
+            (request_id, user_id, body.message.strip(), body.offered_price, phone),
+        ).fetchone()
+        if existing_response is None:
+            _marketplace_notify(
+                connection, int(request_row["user_id"]), "buy_response", "Новый отклик на запрос",
+                body.message.strip()[:500], "buy_request", request_id,
+            )
+    return {"id": int(row["id"]), "message": "Отклик отправлен"}
+
+
+@router.get("/marketplace/buy-requests/{request_id}/responses", tags=["marketplace-buy-requests"])
+def list_marketplace_buy_responses(
+    request_id: int,
+    limit: int = Query(default=30, ge=1, le=100), offset: int = Query(default=0, ge=0),
+    actor_ctx: ActorContext = Depends(get_actor_context),
+) -> Any:
+    user_id = _marketplace_user_id(actor_ctx)
+    database = get_database()
+    connection = database.connect()
+    try:
+        owner = connection.execute("SELECT user_id FROM marketplace_buy_requests WHERE id = ?", (request_id,)).fetchone()
+        if owner is None or int(owner["user_id"]) != user_id:
+            raise HTTPException(status_code=404, detail={"code": "not_found", "message": "Запрос не найден", "details": {}})
+        total = connection.execute(
+            "SELECT COUNT(*) AS total FROM marketplace_buy_responses WHERE request_id = ?", (request_id,),
+        ).fetchone()
+        rows = connection.execute(
+            """
+            SELECT r.id, r.message, r.offered_price, r.contact_phone, r.created_at,
+                   u.full_name AS responder_name
+            FROM marketplace_buy_responses r JOIN sklad_users u ON u.id = r.responder_user_id
+            WHERE r.request_id = ? ORDER BY r.created_at DESC LIMIT ? OFFSET ?
+            """, (request_id, limit, offset),
+        ).fetchall()
+        return {"items": [dict(row) for row in rows], "total": int(total["total"] if total else 0)}
+    finally:
+        connection.close()
+
+
+@router.post("/marketplace/buy-requests/{request_id}/reports", status_code=201, tags=["marketplace-buy-requests"])
+def report_marketplace_buy_request(
+    request_id: int, body: MarketplaceBuyRequestReportCreate,
+    actor_ctx: ActorContext = Depends(get_actor_context),
+) -> Any:
+    user_id = _marketplace_user_id(actor_ctx)
+    database = get_database()
+    with database.transaction() as connection:
+        target = connection.execute(
+            """SELECT user_id FROM marketplace_buy_requests
+               WHERE id = ? AND moderation_status <> 'rejected' AND status <> 'deleted'""", (request_id,)
+        ).fetchone()
+        if target is None:
+            raise HTTPException(status_code=404, detail={"code": "not_found", "message": "Запрос не найден", "details": {}})
+        if int(target["user_id"]) == user_id:
+            raise HTTPException(status_code=400, detail={"code": "bad_request", "message": "Нельзя пожаловаться на свой запрос", "details": {}})
+        _marketplace_rate_limit(
+            connection, table="marketplace_buy_request_reports", user_column="reporter_user_id", user_id=user_id,
+            window="24 hours", maximum=10, message="Лимит жалоб исчерпан. Повторите завтра",
+        )
+        row = connection.execute(
+            """INSERT INTO marketplace_buy_request_reports(request_id, reporter_user_id, reason, details)
+               VALUES (?, ?, ?, ?) ON CONFLICT (request_id, reporter_user_id) DO NOTHING RETURNING id""",
+            (request_id, user_id, body.reason, body.details),
+        ).fetchone()
+        if row is None:
+            raise HTTPException(status_code=409, detail={"code": "conflict", "message": "Вы уже отправили жалобу", "details": {}})
+        report_count = connection.execute(
+            "SELECT COUNT(*) AS total FROM marketplace_buy_request_reports WHERE request_id = ? AND status = 'open'", (request_id,)
+        ).fetchone()
+        # Hide suspicious content pending human review; reports never permanently delete it.
+        if report_count and int(report_count["total"]) >= 3:
+            connection.execute(
+                "UPDATE marketplace_buy_requests SET moderation_status = 'pending', updated_at = NOW() WHERE id = ?", (request_id,)
+            )
+    return {"id": int(row["id"]), "message": "Жалоба принята"}
+
+
+@router.post("/marketplace/buy-requests/{request_id}/matches", status_code=201, tags=["marketplace-buy-requests"])
+def match_marketplace_buy_request(
+    request_id: int, body: MarketplaceBuyRequestMatchCreate,
+    actor_ctx: ActorContext = Depends(get_actor_context),
+) -> Any:
+    user_id = _marketplace_user_id(actor_ctx)
+    database = get_database()
+    with database.transaction() as connection:
+        target = connection.execute(
+            "SELECT user_id, status FROM marketplace_buy_requests WHERE id = ? AND moderation_status = 'approved' FOR UPDATE",
+            (request_id,),
+        ).fetchone()
+        item = connection.execute(
+            """SELECT ci.id, ci.product_name, s.id AS supplier_id
+               FROM supplier_catalog_items ci JOIN suppliers s ON s.id = ci.supplier_id
+               WHERE ci.id = ? AND ci.is_active = TRUE""", (body.catalog_item_id,),
+        ).fetchone()
+        if target is None or target["status"] != "open" or item is None:
+            raise HTTPException(status_code=404, detail={"code": "not_found", "message": "Запрос или товар не найден", "details": {}})
+        if actor_ctx.supplier_id != int(item["supplier_id"]) and Role.WAREHOUSE_MANAGER not in actor_ctx.roles:
+            raise HTTPException(status_code=403, detail={"code": "forbidden", "message": "Предлагать можно только собственный товар", "details": {}})
+        row = connection.execute(
+            """INSERT INTO marketplace_buy_request_matches(request_id, catalog_item_id, matched_by_user_id)
+               VALUES (?, ?, ?) ON CONFLICT (request_id, catalog_item_id) DO NOTHING RETURNING id""",
+            (request_id, body.catalog_item_id, user_id),
+        ).fetchone()
+        if row is None:
+            raise HTTPException(status_code=409, detail={"code": "conflict", "message": "Товар уже предложен", "details": {}})
+        _marketplace_notify(
+            connection, int(target["user_id"]), "buy_match", "Найден подходящий товар",
+            str(item["product_name"])[:500], "buy_request", request_id,
+        )
+    return {"id": int(row["id"]), "message": "Товар предложен"}
+
+
+@router.patch("/marketplace/admin/buy-requests/{request_id}/moderation", tags=["marketplace-buy-requests"])
+def moderate_marketplace_buy_request(
+    request_id: int, body: MarketplaceBuyRequestModerationUpdate,
+    actor_ctx: ActorContext = Depends(get_actor_context),
+) -> Any:
+    if Role.WAREHOUSE_MANAGER not in actor_ctx.roles:
+        raise HTTPException(status_code=403, detail={"code": "forbidden", "message": "Недостаточно прав", "details": {}})
+    user_id = _marketplace_user_id(actor_ctx)
+    database = get_database()
+    with database.transaction() as connection:
+        row = connection.execute(
+            """UPDATE marketplace_buy_requests
+               SET moderation_status = ?, moderation_note = ?, updated_at = NOW()
+               WHERE id = ? AND status <> 'deleted'
+               RETURNING id, user_id, moderation_status""",
+            (body.moderation_status, body.note.strip() if body.note else None, request_id),
+        ).fetchone()
+        if row is None:
+            raise HTTPException(status_code=404, detail={"code": "not_found", "message": "Запрос не найден", "details": {}})
+        connection.execute(
+            """UPDATE marketplace_buy_request_reports SET status = 'reviewed', reviewed_at = NOW(), reviewed_by = ?
+               WHERE request_id = ? AND status = 'open'""", (user_id, request_id),
+        )
+        _marketplace_notify(
+            connection, int(row["user_id"]), "buy_moderation", "Запрос проверен",
+            "Запрос опубликован" if body.moderation_status == "approved" else "Запрос отклонён модератором",
+            "buy_request", request_id,
+        )
+    return {"id": int(row["id"]), "moderation_status": row["moderation_status"]}
+
+
+@router.get("/marketplace/admin/buy-request-reports", tags=["marketplace-buy-requests"])
+def list_marketplace_buy_request_reports(
+    report_status: str = Query(default="open", alias="status", pattern="^(open|reviewed|dismissed)$"),
+    limit: int = Query(default=30, ge=1, le=100), offset: int = Query(default=0, ge=0),
+    actor_ctx: ActorContext = Depends(get_actor_context),
+) -> Any:
+    if Role.WAREHOUSE_MANAGER not in actor_ctx.roles:
+        raise HTTPException(status_code=403, detail={"code": "forbidden", "message": "Недостаточно прав", "details": {}})
+    database = get_database()
+    connection = database.connect()
+    try:
+        total = connection.execute(
+            "SELECT COUNT(*) AS total FROM marketplace_buy_request_reports WHERE status = ?", (report_status,)
+        ).fetchone()
+        rows = connection.execute(
+            """SELECT r.id, r.request_id, r.reason, r.details, r.status, r.created_at,
+                      br.title AS request_title, br.moderation_status,
+                      reporter.full_name AS reporter_name
+               FROM marketplace_buy_request_reports r
+               JOIN marketplace_buy_requests br ON br.id = r.request_id
+               JOIN sklad_users reporter ON reporter.id = r.reporter_user_id
+               WHERE r.status = ? ORDER BY r.created_at ASC LIMIT ? OFFSET ?""",
+            (report_status, limit, offset),
+        ).fetchall()
+        return {"items": [dict(row) for row in rows], "total": int(total["total"] if total else 0)}
+    finally:
+        connection.close()
+
+
+@router.get("/marketplace/notifications", tags=["marketplace-notifications"])
+def list_marketplace_notifications(
+    limit: int = Query(default=30, ge=1, le=100), offset: int = Query(default=0, ge=0),
+    unread_only: bool = Query(default=False),
+    actor_ctx: ActorContext = Depends(get_actor_context),
+) -> Any:
+    user_id = _marketplace_user_id(actor_ctx)
+    database = get_database()
+    connection = database.connect()
+    try:
+        unread = connection.execute(
+            "SELECT COUNT(*) AS total FROM marketplace_user_notifications WHERE user_id = ? AND is_read = FALSE",
+            (user_id,),
+        ).fetchone()
+        read_filter = " AND is_read = FALSE" if unread_only else ""
+        total = connection.execute(
+            f"SELECT COUNT(*) AS total FROM marketplace_user_notifications WHERE user_id = ?{read_filter}", (user_id,),
+        ).fetchone()
+        rows = connection.execute(
+            f"""SELECT id, notification_type, title, body, entity_type, entity_id, is_read, created_at
+                FROM marketplace_user_notifications WHERE user_id = ?{read_filter}
+                ORDER BY created_at DESC LIMIT ? OFFSET ?""", (user_id, limit, offset),
+        ).fetchall()
+        return {"items": [dict(row) for row in rows], "total": int(total["total"] if total else 0),
+                "unread_count": int(unread["total"] if unread else 0)}
+    finally:
+        connection.close()
+
+
+@router.get("/marketplace/notifications/unread-count", tags=["marketplace-notifications"])
+def count_unread_marketplace_notifications(
+    actor_ctx: ActorContext = Depends(get_actor_context),
+) -> Any:
+    user_id = _marketplace_user_id(actor_ctx)
+    database = get_database()
+    connection = database.connect()
+    try:
+        row = connection.execute(
+            "SELECT COUNT(*) AS unread_count FROM marketplace_user_notifications WHERE user_id = ? AND is_read = FALSE",
+            (user_id,),
+        ).fetchone()
+        return {"unread_count": int(row["unread_count"] if row else 0)}
+    finally:
+        connection.close()
+
+
+@router.patch("/marketplace/notifications/read-all", tags=["marketplace-notifications"])
+def read_all_marketplace_notifications(
+    actor_ctx: ActorContext = Depends(get_actor_context),
+) -> Any:
+    user_id = _marketplace_user_id(actor_ctx)
+    database = get_database()
+    with database.transaction() as connection:
+        rows = connection.execute(
+            """UPDATE marketplace_user_notifications SET is_read = TRUE
+               WHERE user_id = ? AND is_read = FALSE RETURNING id""", (user_id,),
+        ).fetchall()
+    return {"updated": len(rows), "unread_count": 0}
+
+
+@router.patch("/marketplace/notifications/{notification_id}/read", tags=["marketplace-notifications"])
+def read_marketplace_notification(
+    notification_id: int, actor_ctx: ActorContext = Depends(get_actor_context),
+) -> Any:
+    user_id = _marketplace_user_id(actor_ctx)
+    database = get_database()
+    with database.transaction() as connection:
+        row = connection.execute(
+            """UPDATE marketplace_user_notifications SET is_read = TRUE
+               WHERE id = ? AND user_id = ? RETURNING id, is_read""", (notification_id, user_id),
+        ).fetchone()
+        if row is None:
+            raise HTTPException(status_code=404, detail={"code": "not_found", "message": "Уведомление не найдено", "details": {}})
+    return dict(row)
+
+
+@router.post("/marketplace/admin/buy-requests/expire", tags=["marketplace-buy-requests"])
+def expire_marketplace_buy_requests(
+    actor_ctx: ActorContext = Depends(get_actor_context),
+) -> Any:
+    if Role.WAREHOUSE_MANAGER not in actor_ctx.roles:
+        raise HTTPException(status_code=403, detail={"code": "forbidden", "message": "Недостаточно прав", "details": {}})
+    database = get_database()
+    with database.transaction() as connection:
+        expired = _expire_marketplace_buy_requests(connection)
+    return {"expired": expired}
+
+
+@router.post("/marketplace/upload-image", tags=["marketplace-listings"])
+async def upload_marketplace_image(
+    file: UploadFile = File(...), actor_ctx: ActorContext = Depends(get_actor_context),
+) -> Any:
+    if not actor_ctx.actor_id or not actor_ctx.actor_id.isdigit():
+        raise HTTPException(status_code=401, detail={"code": "unauthorized", "message": "Требуется авторизация", "details": {}})
+    content = await file.read(MARKETPLACE_IMAGE_MAX_BYTES + 1)
+    await file.close()
+    if len(content) > MARKETPLACE_IMAGE_MAX_BYTES:
+        raise HTTPException(status_code=413, detail={"code": "too_large", "message": "Максимальный размер изображения — 8 МБ", "details": {}})
+    try:
+        normalized_content, extension = await run_in_threadpool(_decode_marketplace_image, content)
+    except ValueError:
+        raise HTTPException(status_code=415, detail={"code": "unsupported_media", "message": "Разрешены JPG, PNG и WebP", "details": {}})
+    upload_dir = Path(get_settings().marketplace_uploads_dir)
+    upload_dir.mkdir(parents=True, exist_ok=True, mode=0o750)
+    filename = f"listing-{uuid.uuid4().hex}{extension}"
+    destination = upload_dir / filename
+    with destination.open("xb") as output:
+        output.write(normalized_content)
+    return {"url": f"/uploads/{filename}"}
 
 
 @router.post("/auth/supplier-login", response_model=TokenResponse, tags=["auth"])
@@ -5192,7 +6508,6 @@ def browse_catalog(
     sort: str | None = None,
     limit: int = 100,
     offset: int = 0,
-    actor_ctx: ActorContext = Depends(get_actor_context),
 ) -> Any:
     """Browse all active supplier catalog items. Available to all authenticated users."""
     try:
@@ -5207,7 +6522,7 @@ def browse_catalog(
 
 
 @router.get("/marketplace/catalog/categories", tags=["marketplace"])
-def list_catalog_categories(actor_ctx: ActorContext = Depends(get_actor_context)) -> Any:
+def list_catalog_categories() -> Any:
     try:
         return get_warehouse_service().list_catalog_categories()
     except Exception as error:
@@ -5217,7 +6532,6 @@ def list_catalog_categories(actor_ctx: ActorContext = Depends(get_actor_context)
 @router.get("/marketplace/catalog/{item_id}", tags=["marketplace"])
 def get_catalog_item(
     item_id: int,
-    actor_ctx: ActorContext = Depends(get_actor_context),
 ) -> Any:
     try:
         svc = get_warehouse_service()
@@ -5231,9 +6545,45 @@ def get_catalog_item(
         raise map_error(error) from error
 
 
+@router.get("/marketplace/catalog/{item_id}/favorite", tags=["marketplace"])
+def get_catalog_item_favorite_endpoint(
+    item_id: int,
+    actor_ctx: ActorContext = Depends(get_actor_context),
+) -> Any:
+    try:
+        return get_warehouse_service().get_catalog_item_favorite_state(item_id, actor_ctx.actor_id)
+    except Exception as error:
+        raise map_error(error) from error
+
+
+@router.post("/marketplace/catalog/{item_id}/favorite", tags=["marketplace"])
+def toggle_catalog_item_favorite_endpoint(
+    item_id: int,
+    actor_ctx: ActorContext = Depends(get_actor_context),
+) -> Any:
+    try:
+        return get_warehouse_service().toggle_catalog_item_favorite(item_id, actor_ctx.actor_id)
+    except Exception as error:
+        raise map_error(error) from error
+
+
+@router.get("/marketplace/my-favorites", tags=["marketplace"])
+def list_my_catalog_favorites_endpoint(
+    limit: int = Query(100, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+    actor_ctx: ActorContext = Depends(get_actor_context),
+) -> Any:
+    try:
+        return get_warehouse_service().list_catalog_item_favorites(actor_ctx.actor_id, limit=limit, offset=offset)
+    except Exception as error:
+        raise map_error(error) from error
+
+
 class CatalogItemReviewCreate(BaseModel):
     rating: int = Field(ge=1, le=5)
     comment: str | None = None
+    image_url: str | None = Field(default=None, max_length=2048)
+    reviewer_name: str | None = Field(default=None, max_length=120)
 
 
 @router.post("/marketplace/catalog/{item_id}/reviews", status_code=201, tags=["marketplace"])
@@ -5244,7 +6594,14 @@ def create_catalog_item_review_endpoint(
 ) -> Any:
     try:
         svc = get_warehouse_service()
-        return svc.create_catalog_item_review(item_id, body.rating, body.comment, actor_ctx.actor_id)
+        return svc.create_catalog_item_review(
+            item_id,
+            body.rating,
+            body.comment,
+            actor_ctx.actor_id,
+            image_url=body.image_url,
+            reviewer_name=body.reviewer_name,
+        )
     except Exception as error:
         raise map_error(error) from error
 
@@ -5252,7 +6609,6 @@ def create_catalog_item_review_endpoint(
 @router.get("/marketplace/catalog/{item_id}/reviews", tags=["marketplace"])
 def list_catalog_item_reviews_endpoint(
     item_id: int,
-    actor_ctx: ActorContext = Depends(get_actor_context),
 ) -> Any:
     try:
         return get_warehouse_service().list_catalog_item_reviews(item_id)
@@ -5362,7 +6718,6 @@ def list_supplier_directory(
     search: str | None = None,
     limit: int = 50,
     offset: int = 0,
-    actor_ctx: ActorContext = Depends(get_actor_context),
 ) -> Any:
     try:
         return get_warehouse_service().list_suppliers_directory(
@@ -5375,7 +6730,6 @@ def list_supplier_directory(
 @router.get("/marketplace/suppliers/{supplier_id}", tags=["marketplace"])
 def get_supplier_profile_endpoint(
     supplier_id: int,
-    actor_ctx: ActorContext = Depends(get_actor_context),
 ) -> Any:
     """Public seller storefront: profile, rating, catalog and reviews."""
     try:
@@ -5383,6 +6737,39 @@ def get_supplier_profile_endpoint(
         if profile is None:
             raise HTTPException(status_code=404, detail={"code": "not_found", "message": "Supplier not found", "details": {}})
         return profile
+    except HTTPException:
+        raise
+    except Exception as error:
+        raise map_error(error) from error
+
+
+def _seller_profile_compat(profile: dict[str, Any]) -> dict[str, Any]:
+    data = dict(profile)
+    catalog_items = [dict(item) for item in data.get("catalog_items") or []]
+    active_listings = data.get("catalog_items_count") or len(catalog_items)
+    reviews_avg = data.get("reviews_avg")
+    data.update(
+        {
+            "seller_rating": float(reviews_avg) if reviews_avg is not None else 0,
+            "total_reviews": data.get("reviews_count") or 0,
+            "active_listings": active_listings,
+            "total_listings": active_listings,
+            "listings": catalog_items,
+        }
+    )
+    return data
+
+
+@router.get("/marketplace/seller/{supplier_id}", tags=["marketplace"])
+def get_seller_profile_compat_endpoint(
+    supplier_id: int,
+) -> Any:
+    """Compatibility storefront payload used by the marqet.kz seller page."""
+    try:
+        profile = get_warehouse_service().get_supplier_profile(supplier_id)
+        if profile is None:
+            raise HTTPException(status_code=404, detail={"code": "not_found", "message": "Supplier not found", "details": {}})
+        return _seller_profile_compat(profile)
     except HTTPException:
         raise
     except Exception as error:
@@ -5610,6 +6997,52 @@ class CartCheckout(BaseModel):
     source: str = Field(default="qpartner", pattern="^(marqet|qpartner|api)$")
 
 
+class MarketplaceOrderCheckout(BaseModel):
+    warehouse_id: int | None = None
+    source: str = Field(default="marqet", pattern="^(marqet|qpartner|api)$")
+    buyer_name: str | None = Field(default=None, max_length=255)
+    buyer_phone: str | None = Field(default=None, max_length=64)
+    buyer_email: str | None = Field(default=None, max_length=255)
+    delivery_address: str | None = Field(default=None, max_length=1000)
+    notes: str | None = Field(default=None, max_length=1000)
+    payment_method: str = Field(default="cod", pattern="^(cod|kaspi|bank|card_online)$")
+
+
+class PaymentMethodBind(BaseModel):
+    provider: str = Field(min_length=1, max_length=64)
+    provider_token: str = Field(min_length=8, max_length=512)
+    brand: str = Field(default="unknown", max_length=32)
+    last4: str = Field(min_length=4, max_length=32)
+    expiry_month: int | None = Field(default=None, ge=1, le=12)
+    expiry_year: int | None = Field(default=None, ge=2024, le=2100)
+    holder_name: str | None = Field(default=None, max_length=255)
+    is_default: bool = False
+
+
+class MarketplacePaymentCreate(BaseModel):
+    provider: str = Field(default="manual", max_length=64)
+    payment_method_id: int | None = None
+
+
+class MarketplacePaymentWebhook(BaseModel):
+    payment_id: int
+    status: str = Field(pattern="^(paid|failed|cancelled|refunded|authorized)$")
+    provider_event_id: str = Field(min_length=1, max_length=255)
+    provider_payment_id: str = Field(min_length=1, max_length=255)
+    amount: Decimal = Field(gt=0)
+    currency: str = Field(default="KZT", pattern="^[A-Z]{3}$")
+    payload: dict[str, Any] = Field(default_factory=dict)
+
+
+class MarketplaceOrderCancelRequest(BaseModel):
+    reason: str = Field(min_length=3, max_length=500)
+
+
+class SupplierMarketplaceOrderStatusUpdate(BaseModel):
+    status: str = Field(pattern="^(accepted|preparing|shipped|delivered|completed|cancelled)$")
+    cancel_reason: str | None = Field(default=None, max_length=500)
+
+
 @router.get("/marketplace/cart", tags=["marketplace"])
 def get_cart_endpoint(actor_ctx: ActorContext = Depends(get_actor_context)) -> Any:
     try:
@@ -5663,6 +7096,378 @@ def checkout_cart_endpoint(
         if warehouse_id is None and actor_ctx.warehouse_ids:
             warehouse_id = list(actor_ctx.warehouse_ids)[0]
         return svc.checkout_cart(actor_ctx.actor_id, warehouse_id, body.notes, body.source)
+    except Exception as error:
+        raise map_error(error) from error
+
+
+@router.post("/marketplace/orders/checkout", status_code=201, tags=["marketplace"])
+def checkout_marketplace_order_endpoint(
+    body: MarketplaceOrderCheckout,
+    actor_ctx: ActorContext = Depends(get_actor_context),
+    idempotency_store: IdempotencyStore = Depends(get_idempotency_store),
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+) -> Any:
+    try:
+        svc = get_warehouse_service()
+        warehouse_id = body.warehouse_id
+        if warehouse_id is None and actor_ctx.warehouse_ids:
+            warehouse_id = list(actor_ctx.warehouse_ids)[0]
+        result, _ = run_idempotent(
+            idempotency_key=idempotency_key,
+            store=idempotency_store,
+            actor_id=actor_ctx.actor_id,
+            method="POST",
+            path="/api/v1/marketplace/orders/checkout",
+            payload=body,
+            response_status=status.HTTP_201_CREATED,
+            resource_type="marketplace_order_checkout",
+            operation=lambda: {
+                "items": svc.create_marketplace_orders_from_cart(
+                    actor_ctx.actor_id,
+                    warehouse_id=warehouse_id,
+                    source=body.source,
+                    buyer_name=body.buyer_name,
+                    buyer_phone=body.buyer_phone,
+                    buyer_email=body.buyer_email,
+                    delivery_address=body.delivery_address,
+                    notes=body.notes,
+                    payment_method=body.payment_method,
+                )
+            },
+        )
+        items = result.get("items", [])
+        return {**result, "orders": items, "total_orders": len(items)}
+    except Exception as error:
+        raise map_error(error) from error
+
+
+@router.get("/marketplace/account/summary", tags=["marketplace"])
+def marketplace_account_summary(actor_ctx: ActorContext = Depends(get_actor_context)) -> Any:
+    try:
+        return get_warehouse_service().get_marketplace_account_summary(actor_ctx.actor_id)
+    except Exception as error:
+        raise map_error(error) from error
+
+
+@router.get("/marketplace/orders", tags=["marketplace"])
+def list_marketplace_orders_endpoint(
+    status_filter: str | None = Query(default=None, alias="status"),
+    limit: int = 50,
+    offset: int = 0,
+    actor_ctx: ActorContext = Depends(get_actor_context),
+) -> Any:
+    try:
+        safe_limit, safe_offset = pagination_meta(limit, offset)
+        return get_warehouse_service().list_marketplace_orders(
+            actor_ctx.actor_id, status=status_filter, limit=safe_limit, offset=safe_offset
+        )
+    except Exception as error:
+        raise map_error(error) from error
+
+
+@router.get("/marketplace/orders/{order_id}", tags=["marketplace"])
+def get_marketplace_order_endpoint(
+    order_id: int,
+    actor_ctx: ActorContext = Depends(get_actor_context),
+) -> Any:
+    try:
+        return get_warehouse_service().get_marketplace_order(actor_ctx.actor_id, order_id)
+    except Exception as error:
+        raise map_error(error) from error
+
+
+@router.post("/marketplace/orders/{order_id}/payments", status_code=201, tags=["marketplace"])
+def create_marketplace_payment_endpoint(
+    order_id: int,
+    body: MarketplacePaymentCreate,
+    actor_ctx: ActorContext = Depends(get_actor_context),
+    idempotency_store: IdempotencyStore = Depends(get_idempotency_store),
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+) -> Any:
+    try:
+        svc = get_warehouse_service()
+        payment, _ = run_idempotent(
+            idempotency_key=idempotency_key,
+            store=idempotency_store,
+            actor_id=actor_ctx.actor_id,
+            method="POST",
+            path=f"/api/v1/marketplace/orders/{order_id}/payments",
+            payload={"order_id": order_id, "body": body},
+            response_status=status.HTTP_201_CREATED,
+            resource_type="marketplace_payment",
+            operation=lambda: svc.create_marketplace_payment(
+                actor_ctx.actor_id,
+                order_id,
+                provider=body.provider,
+                payment_method_id=body.payment_method_id,
+                idempotency_key=idempotency_key,
+            ),
+        )
+        return payment
+    except Exception as error:
+        raise map_error(error) from error
+
+
+@router.post("/marketplace/orders/{order_id}/cancel", tags=["marketplace"])
+def cancel_marketplace_order_endpoint(
+    order_id: int,
+    body: MarketplaceOrderCancelRequest,
+    actor_ctx: ActorContext = Depends(get_actor_context),
+    idempotency_store: IdempotencyStore = Depends(get_idempotency_store),
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+) -> Any:
+    try:
+        svc = get_warehouse_service()
+        result, _ = run_idempotent(
+            idempotency_key=idempotency_key,
+            store=idempotency_store,
+            actor_id=actor_ctx.actor_id,
+            method="POST",
+            path=f"/api/v1/marketplace/orders/{order_id}/cancel",
+            payload={"order_id": order_id, "body": body},
+            response_status=status.HTTP_200_OK,
+            resource_type="marketplace_order_cancel",
+            operation=lambda: svc.cancel_marketplace_order(
+                actor_ctx.actor_id,
+                order_id,
+                reason=body.reason,
+            ),
+        )
+        return result
+    except Exception as error:
+        raise map_error(error) from error
+
+
+@router.post("/marketplace/orders/{order_id}/refund-request", tags=["marketplace"])
+def request_marketplace_order_refund_endpoint(
+    order_id: int,
+    body: MarketplaceOrderCancelRequest,
+    actor_ctx: ActorContext = Depends(get_actor_context),
+    idempotency_store: IdempotencyStore = Depends(get_idempotency_store),
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+) -> Any:
+    try:
+        svc = get_warehouse_service()
+        result, _ = run_idempotent(
+            idempotency_key=idempotency_key,
+            store=idempotency_store,
+            actor_id=actor_ctx.actor_id,
+            method="POST",
+            path=f"/api/v1/marketplace/orders/{order_id}/refund-request",
+            payload={"order_id": order_id, "body": body},
+            response_status=status.HTTP_200_OK,
+            resource_type="marketplace_order_refund_request",
+            operation=lambda: svc.request_marketplace_order_refund(
+                actor_ctx.actor_id,
+                order_id,
+                reason=body.reason,
+            ),
+        )
+        return result
+    except Exception as error:
+        raise map_error(error) from error
+
+
+@router.get("/marketplace/payment-methods", tags=["marketplace"])
+def list_marketplace_payment_methods_endpoint(
+    actor_ctx: ActorContext = Depends(get_actor_context),
+) -> Any:
+    try:
+        return get_warehouse_service().list_marketplace_payment_methods(actor_ctx.actor_id)
+    except Exception as error:
+        raise map_error(error) from error
+
+
+@router.post("/marketplace/payment-methods", status_code=201, tags=["marketplace"])
+def bind_marketplace_payment_method_endpoint(
+    body: PaymentMethodBind,
+    actor_ctx: ActorContext = Depends(get_actor_context),
+    idempotency_store: IdempotencyStore = Depends(get_idempotency_store),
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+) -> Any:
+    try:
+        svc = get_warehouse_service()
+        result, _ = run_idempotent(
+            idempotency_key=idempotency_key,
+            store=idempotency_store,
+            actor_id=actor_ctx.actor_id,
+            method="POST",
+            path="/api/v1/marketplace/payment-methods",
+            payload=body,
+            response_status=status.HTTP_201_CREATED,
+            resource_type="marketplace_payment_method",
+            operation=lambda: svc.bind_marketplace_payment_method(
+                actor_ctx.actor_id,
+                provider=body.provider,
+                provider_token=body.provider_token,
+                brand=body.brand,
+                last4=body.last4,
+                expiry_month=body.expiry_month,
+                expiry_year=body.expiry_year,
+                holder_name=body.holder_name,
+                is_default=body.is_default,
+            ),
+        )
+        return result
+    except Exception as error:
+        raise map_error(error) from error
+
+
+@router.patch("/marketplace/payment-methods/{method_id}/default", tags=["marketplace"])
+def set_default_marketplace_payment_method_endpoint(
+    method_id: int,
+    actor_ctx: ActorContext = Depends(get_actor_context),
+) -> Any:
+    try:
+        return get_warehouse_service().set_default_marketplace_payment_method(actor_ctx.actor_id, method_id)
+    except Exception as error:
+        raise map_error(error) from error
+
+
+@router.delete("/marketplace/payment-methods/{method_id}", status_code=204, tags=["marketplace"])
+def delete_marketplace_payment_method_endpoint(
+    method_id: int,
+    actor_ctx: ActorContext = Depends(get_actor_context),
+) -> Response:
+    try:
+        get_warehouse_service().delete_marketplace_payment_method(actor_ctx.actor_id, method_id)
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
+    except Exception as error:
+        raise map_error(error) from error
+
+
+@router.post("/marketplace/payments/webhook/{provider}", tags=["marketplace"])
+async def marketplace_payment_webhook_endpoint(
+    request: Request,
+    provider: str,
+    body: MarketplacePaymentWebhook,
+    webhook_secret: str | None = Header(default=None, alias="X-Payment-Webhook-Secret"),
+    webhook_signature: str | None = Header(default=None, alias="X-Payment-Signature"),
+) -> Any:
+    settings = get_settings()
+    if not settings.marketplace_payment_webhook_secret or webhook_secret != settings.marketplace_payment_webhook_secret:
+        raise HTTPException(status_code=403, detail={"code": "forbidden", "message": "Invalid payment webhook secret", "details": {}})
+    raw_body = await request.body()
+    expected_signature = hmac.new(
+        settings.marketplace_payment_webhook_secret.encode("utf-8"),
+        raw_body,
+        hashlib.sha256,
+    ).hexdigest()
+    provided_signature = (webhook_signature or "").removeprefix("sha256=").strip()
+    if not provided_signature or not hmac.compare_digest(provided_signature, expected_signature):
+        raise HTTPException(status_code=403, detail={"code": "forbidden", "message": "Invalid payment webhook signature", "details": {}})
+    try:
+        return get_warehouse_service().apply_marketplace_payment_event(
+            provider=provider,
+            provider_event_id=body.provider_event_id,
+            provider_payment_id=body.provider_payment_id,
+            payment_id=body.payment_id,
+            status=body.status,
+            amount=body.amount,
+            currency=body.currency,
+            payload=body.payload,
+        )
+    except Exception as error:
+        raise map_error(error) from error
+
+
+@router.get("/marketplace/loyalty", tags=["marketplace"])
+def marketplace_loyalty_endpoint(actor_ctx: ActorContext = Depends(get_actor_context)) -> Any:
+    try:
+        return get_warehouse_service().get_marketplace_loyalty(actor_ctx.actor_id)
+    except Exception as error:
+        raise map_error(error) from error
+
+
+@router.get("/supplier/marketplace-orders", tags=["supplier-self"])
+def list_supplier_marketplace_orders_endpoint(
+    status_filter: str | None = Query(default=None, alias="status"),
+    limit: int = 50,
+    offset: int = 0,
+    actor_ctx: ActorContext = Depends(get_actor_context),
+) -> Any:
+    if actor_ctx.supplier_id is None:
+        raise HTTPException(status_code=403, detail={"code": "forbidden", "message": "No supplier linked", "details": {}})
+    try:
+        safe_limit, safe_offset = pagination_meta(limit, offset)
+        return get_warehouse_service().list_supplier_marketplace_orders(
+            actor_ctx.supplier_id, status=status_filter, limit=safe_limit, offset=safe_offset
+        )
+    except Exception as error:
+        raise map_error(error) from error
+
+
+@router.get("/supplier/marketplace-orders/{order_id}", tags=["supplier-self"])
+def get_supplier_marketplace_order_endpoint(
+    order_id: int,
+    actor_ctx: ActorContext = Depends(get_actor_context),
+) -> Any:
+    if actor_ctx.supplier_id is None:
+        raise HTTPException(status_code=403, detail={"code": "forbidden", "message": "No supplier linked", "details": {}})
+    try:
+        return get_warehouse_service().get_supplier_marketplace_order(actor_ctx.supplier_id, order_id)
+    except Exception as error:
+        raise map_error(error) from error
+
+
+@router.patch("/supplier/marketplace-orders/{order_id}/status", tags=["supplier-self"])
+def update_supplier_marketplace_order_status_endpoint(
+    order_id: int,
+    body: SupplierMarketplaceOrderStatusUpdate,
+    actor_ctx: ActorContext = Depends(get_actor_context),
+    idempotency_store: IdempotencyStore = Depends(get_idempotency_store),
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+) -> Any:
+    if actor_ctx.supplier_id is None:
+        raise HTTPException(status_code=403, detail={"code": "forbidden", "message": "No supplier linked", "details": {}})
+    try:
+        svc = get_warehouse_service()
+        result, _ = run_idempotent(
+            idempotency_key=idempotency_key,
+            store=idempotency_store,
+            actor_id=actor_ctx.actor_id,
+            method="PATCH",
+            path=f"/api/v1/supplier/marketplace-orders/{order_id}/status",
+            payload={"order_id": order_id, "body": body},
+            response_status=status.HTTP_200_OK,
+            resource_type="supplier_marketplace_order_status",
+            operation=lambda: svc.update_supplier_marketplace_order_status(
+                actor_ctx.supplier_id,
+                order_id,
+                status=body.status,
+                cancel_reason=body.cancel_reason,
+            ),
+        )
+        return result
+    except Exception as error:
+        raise map_error(error) from error
+
+
+@router.get("/supplier/marketplace-wallet", tags=["supplier-self"])
+def get_supplier_marketplace_wallet_endpoint(
+    actor_ctx: ActorContext = Depends(get_actor_context),
+) -> Any:
+    if actor_ctx.supplier_id is None:
+        raise HTTPException(status_code=403, detail={"code": "forbidden", "message": "No supplier linked", "details": {}})
+    try:
+        return get_warehouse_service().get_supplier_marketplace_wallet(actor_ctx.supplier_id)
+    except Exception as error:
+        raise map_error(error) from error
+
+
+@router.get("/supplier/marketplace-wallet/ledger", tags=["supplier-self"])
+def list_supplier_marketplace_ledger_endpoint(
+    limit: int = 50,
+    offset: int = 0,
+    actor_ctx: ActorContext = Depends(get_actor_context),
+) -> Any:
+    if actor_ctx.supplier_id is None:
+        raise HTTPException(status_code=403, detail={"code": "forbidden", "message": "No supplier linked", "details": {}})
+    try:
+        safe_limit, safe_offset = pagination_meta(limit, offset)
+        return get_warehouse_service().list_supplier_marketplace_ledger(
+            actor_ctx.supplier_id, limit=safe_limit, offset=safe_offset
+        )
     except Exception as error:
         raise map_error(error) from error
 
@@ -6147,7 +7952,6 @@ def set_price_tiers(
 @router.get("/marketplace/catalog/{item_id}/price-tiers", tags=["marketplace"])
 def get_public_price_tiers(
     item_id: int,
-    actor_ctx: ActorContext = Depends(get_actor_context),
 ) -> Any:
     """Public endpoint: price tiers for a catalog item (visible to buyers)."""
     try:
@@ -6159,7 +7963,6 @@ def get_public_price_tiers(
 @router.get("/marketplace/compare", tags=["marketplace"])
 def compare_catalog_items(
     ids: str,
-    actor_ctx: ActorContext = Depends(get_actor_context),
 ) -> Any:
     """Compare up to 6 catalog items side-by-side. Pass ids as comma-separated: ?ids=1,2,3"""
     try:
