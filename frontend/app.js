@@ -421,6 +421,61 @@ const TRANSLATIONS = {
   }
 };
 
+// ── SVG icons (вместо эмодзи) ─────────────────────────────────────────────
+const ICONS = {
+  camera: '<path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/>',
+  dice: '<rect x="3" y="3" width="18" height="18" rx="3"/><circle cx="8.5" cy="8.5" r="1"/><circle cx="15.5" cy="8.5" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="8.5" cy="15.5" r="1"/><circle cx="15.5" cy="15.5" r="1"/>',
+  print: '<polyline points="6 9 6 2 18 2 18 9"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8"/>',
+  file: '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/>',
+  download: '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>',
+  send: '<line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/>',
+  truck: '<rect x="1" y="3" width="15" height="13"/><polygon points="16 8 20 8 23 11 23 16 16 16 16 8"/><circle cx="5.5" cy="18.5" r="2.5"/><circle cx="18.5" cy="18.5" r="2.5"/>',
+  cart: '<circle cx="9" cy="21" r="1"/><circle cx="20" cy="21" r="1"/><path d="M1 1h4l2.68 13.39a2 2 0 0 0 2 1.61h9.72a2 2 0 0 0 2-1.61L23 6H6"/>',
+  chat: '<path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/>',
+  lock: '<rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/>',
+  chart: '<line x1="12" y1="20" x2="12" y2="10"/><line x1="18" y1="20" x2="18" y2="4"/><line x1="6" y1="20" x2="6" y2="16"/>',
+  paperclip: '<path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/>',
+  image: '<rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/>',
+  users: '<path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/>',
+  cpu: '<rect x="4" y="4" width="16" height="16" rx="2" ry="2"/><rect x="9" y="9" width="6" height="6"/><line x1="9" y1="1" x2="9" y2="4"/><line x1="15" y1="1" x2="15" y2="4"/><line x1="9" y1="20" x2="9" y2="23"/><line x1="15" y1="20" x2="15" y2="23"/><line x1="20" y1="9" x2="23" y2="9"/><line x1="20" y1="14" x2="23" y2="14"/><line x1="1" y1="9" x2="4" y2="9"/><line x1="1" y1="14" x2="4" y2="14"/>',
+  landmark: '<line x1="3" y1="22" x2="21" y2="22"/><line x1="6" y1="18" x2="6" y2="11"/><line x1="10" y1="18" x2="10" y2="11"/><line x1="14" y1="18" x2="14" y2="11"/><line x1="18" y1="18" x2="18" y2="11"/><polygon points="12 2 20 7 4 7"/>',
+  search: '<circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>',
+  phone: '<path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"/>',
+  mail: '<path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/>',
+  pin: '<path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/>',
+  bag: '<path d="M6 2L3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4z"/><line x1="3" y1="6" x2="21" y2="6"/><path d="M16 10a4 4 0 0 1-8 0"/>',
+  building: '<rect x="4" y="2" width="16" height="20" rx="2"/><path d="M9 22v-4h6v4"/><line x1="8" y1="6" x2="10" y2="6"/><line x1="14" y1="6" x2="16" y2="6"/><line x1="8" y1="10" x2="10" y2="10"/><line x1="14" y1="10" x2="16" y2="10"/><line x1="8" y1="14" x2="10" y2="14"/><line x1="14" y1="14" x2="16" y2="14"/>',
+  tag: '<path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/><line x1="7" y1="7" x2="7.01" y2="7"/>',
+  clipboard: '<path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><rect x="8" y="2" width="8" height="4" rx="1" ry="1"/>',
+  inbox: '<polyline points="22 12 16 12 14 15 10 15 8 12 2 12"/><path d="M5.45 5.11L2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/>',
+  trophy: '<path d="M6 9H4.5a2.5 2.5 0 0 1 0-5H6"/><path d="M18 9h1.5a2.5 2.5 0 0 0 0-5H18"/><path d="M4 22h16"/><path d="M10 14.66V17c0 .55-.47.98-.97 1.21C7.85 18.75 7 20.24 7 22"/><path d="M14 14.66V17c0 .55.47.98.97 1.21C16.15 18.75 17 20.24 17 22"/><path d="M18 2H6v7a6 6 0 0 0 12 0V2z"/>',
+  coins: '<circle cx="8" cy="8" r="6"/><path d="M18.09 10.37A6 6 0 1 1 10.34 18"/><path d="M7 6h1v4"/><path d="M16.71 13.88l.7.71-2.82 2.82"/>',
+  star: '<polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/>',
+  lifebuoy: '<circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="4"/><line x1="4.93" y1="4.93" x2="9.17" y2="9.17"/><line x1="14.83" y1="14.83" x2="19.07" y2="19.07"/><line x1="14.83" y1="9.17" x2="19.07" y2="4.93"/><line x1="4.93" y1="19.07" x2="9.17" y2="14.83"/>',
+  box: '<path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/>',
+  link: '<path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>',
+  check: '<polyline points="20 6 9 17 4 12"/>',
+  x: '<circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/>',
+  party: '<path d="M12 3l1.9 5.8a2 2 0 0 0 1.3 1.3L21 12l-5.8 1.9a2 2 0 0 0-1.3 1.3L12 21l-1.9-5.8a2 2 0 0 0-1.3-1.3L3 12l5.8-1.9a2 2 0 0 0 1.3-1.3z"/>',
+  zap: '<polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/>',
+  refresh: '<polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>',
+  external: '<path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/>',
+  close: '<line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>',
+  clock: '<circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>',
+  edit: '<path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>',
+  play: '<polygon points="5 3 19 12 5 21 5 3"/>',
+  offline: '<line x1="1" y1="1" x2="23" y2="23"/><path d="M16.72 11.06A10.94 10.94 0 0 1 19 12.55"/><path d="M5 12.55a10.94 10.94 0 0 1 5.17-2.39"/><path d="M10.71 5.05A16 16 0 0 1 22.58 9"/><path d="M1.42 9a15.91 15.91 0 0 1 4.7-2.88"/><path d="M8.53 16.11a6 6 0 0 1 6.95 0"/><line x1="12" y1="20" x2="12.01" y2="20"/>',
+};
+
+function icon(name, size, cls) {
+  const body = ICONS[name] || "";
+  if (!body) return "";
+  const w = size && size > 0 ? ` width="${size}" height="${size}"` : "";
+  const c = cls ? ` class="sk-ic ${cls}"` : ` class="sk-ic"`;
+  return `<svg${c}${w} viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${body}</svg>`;
+}
+
+
 let _lang = localStorage.getItem("sklad_lang") || "ru";
 
 function t(text) {
@@ -1032,7 +1087,7 @@ function applyActorProfile(profile) {
       const banner = document.createElement("div");
       banner.id = "supplier-access-banner";
       banner.style.cssText = "background:#16a34a;color:#fff;text-align:center;padding:10px 16px;font-size:14px;font-weight:500;";
-      banner.textContent = "🎉 Ваша заявка поставщика одобрена! Перейдите на tetis1.kz и снова откройте Склад — переключатель «Режим: Поставщик» появится автоматически.";
+      banner.innerHTML = `${icon("party")} Ваша заявка поставщика одобрена! Перейдите на tetis1.kz и снова откройте Склад — переключатель «Режим: Поставщик» появится автоматически.`;
       document.body.insertAdjacentElement("afterbegin", banner);
     }
   } else if (existingBanner) {
@@ -2298,8 +2353,8 @@ function catalogEditConfig(kind, row) {
         { label: "Страховой запас", name: "safety_stock", type: "number", step: "0.001", min: "0", value: row.safety_stock || "0" },
         { label: "ПКУ / контролируемый товар", name: "is_controlled", type: "select", options: staticOptions([["false", "Нет"], ["true", "Да"]], "Выберите значение"), value: row.is_controlled ? "true" : "false" },
         { label: "Штрихкод", name: "barcode", value: row.barcode || "", suffixActions: [
-          { action: "scan-for-barcode-field", icon: "📷", title: "Сканировать штрихкод" },
-          { action: "generate-barcode-field", icon: "🎲", title: "Сгенерировать EAN-13" },
+          { action: "scan-for-barcode-field", icon: icon("camera"), title: "Сканировать штрихкод" },
+          { action: "generate-barcode-field", icon: icon("dice"), title: "Сгенерировать EAN-13" },
         ] },
         { label: "Сертификат", name: "certificate_ref", value: row.certificate_ref || "" },
         { label: "Описание", name: "description", type: "textarea", full: true, value: row.description || "" },
@@ -2544,13 +2599,13 @@ function showCatalogEditModal(kind, id) {
         <div class="cert-upload-zone" id="cert-upload-zone-${escapeAttr(String(row.id))}">
           <input type="file" id="cert-file-input-${escapeAttr(String(row.id))}" accept=".pdf,.jpg,.jpeg,.png,.webp" />
           <span class="cert-file-label" id="cert-file-label-${escapeAttr(String(row.id))}">
-            ${isFile ? '📄 Файл загружен' : 'PDF, JPG или PNG · до 10 МБ'}
+            ${isFile ? icon('file') + ' Файл загружен' : 'PDF, JPG или PNG · до 10 МБ'}
           </span>
           <button type="button" class="cert-btn" id="cert-upload-btn-${escapeAttr(String(row.id))}">
             ${isFile ? 'Заменить' : 'Выбрать файл'}
           </button>
         </div>
-        ${isFile ? `<div style="margin-top:4px;display:flex;align-items:center;gap:8px"><a href="${escapeAttr(existingCert)}" target="_blank" rel="noopener" class="cert-preview-link">📄 Просмотреть сертификат ↗</a><button type="button" class="cert-remove-btn" id="cert-remove-btn-${escapeAttr(String(row.id))}">✕ Удалить</button></div>` : ''}
+        ${isFile ? `<div style="margin-top:4px;display:flex;align-items:center;gap:8px"><a href="${escapeAttr(existingCert)}" target="_blank" rel="noopener" class="cert-preview-link">${icon("file")} Просмотреть сертификат ↗</a><button type="button" class="cert-remove-btn" id="cert-remove-btn-${escapeAttr(String(row.id))}">✕ Удалить</button></div>` : ''}
       `;
       certWrap.after(uploadZone);
 
@@ -2565,7 +2620,7 @@ function showCatalogEditModal(kind, id) {
         fileInput.addEventListener("change", async () => {
           const file = fileInput.files[0];
           if (!file) return;
-          fileLabel.textContent = `⏳ Загружаем: ${file.name}`;
+          fileLabel.innerHTML = `${icon("clock")} Загружаем: ${escapeHtml(file.name)}`;
           uploadBtn.disabled = true;
           try {
             const formData = new FormData();
@@ -2588,12 +2643,12 @@ function showCatalogEditModal(kind, id) {
             if (!resp.ok) throw new Error(result.detail?.message || result.detail || "Ошибка загрузки");
             const newUrl = result.certificate_url;
             certField.value = newUrl;
-            fileLabel.textContent = `✅ ${file.name}`;
+            fileLabel.innerHTML = `${icon("check")} ${escapeHtml(file.name)}`;
             uploadBtn.textContent = "Заменить";
             showAlert("Сертификат загружен");
             await loadAll();
           } catch (err) {
-            fileLabel.textContent = `❌ Ошибка: ${err.message}`;
+            fileLabel.innerHTML = `${icon("x")} Ошибка: ${escapeHtml(err.message)}`;
             showAlert(`Ошибка загрузки: ${err.message}`, "error");
           } finally {
             uploadBtn.disabled = false;
@@ -2653,7 +2708,7 @@ function showCatalogEditModal(kind, id) {
         <div class="cert-upload-zone" id="photo-upload-zone-${escapeAttr(String(row.id))}">
           <input type="file" id="photo-file-input-${escapeAttr(String(row.id))}" accept=".jpg,.jpeg,.png,.webp" />
           <span class="cert-file-label" id="photo-file-label-${escapeAttr(String(row.id))}">
-            ${existingImage ? "🖼 Фото загружено" : "JPG, PNG или WEBP · до 8 МБ"}
+            ${existingImage ? icon('image') + ' Фото загружено' : 'JPG, PNG или WEBP · до 8 МБ'}
           </span>
           <button type="button" class="cert-btn" id="photo-upload-btn-${escapeAttr(String(row.id))}">
             ${existingImage ? "Заменить" : "Выбрать файл"}
@@ -2676,7 +2731,7 @@ function showCatalogEditModal(kind, id) {
         photoInput.addEventListener("change", async () => {
           const file = photoInput.files[0];
           if (!file) return;
-          photoLabel.textContent = `⏳ Загружаем: ${file.name}`;
+          photoLabel.innerHTML = `${icon("clock")} Загружаем: ${escapeHtml(file.name)}`;
           photoUploadBtn.disabled = true;
           try {
             const formData = new FormData();
@@ -2697,12 +2752,12 @@ function showCatalogEditModal(kind, id) {
             });
             const result = await resp.json();
             if (!resp.ok) throw new Error(result.detail?.message || result.detail || "Ошибка загрузки");
-            photoLabel.textContent = `✅ ${file.name}`;
+            photoLabel.innerHTML = `${icon("check")} ${escapeHtml(file.name)}`;
             photoUploadBtn.textContent = "Заменить";
             showAlert("Фото товара загружено");
             await loadAll();
           } catch (err) {
-            photoLabel.textContent = `❌ Ошибка: ${err.message}`;
+            photoLabel.innerHTML = `${icon("x")} Ошибка: ${escapeHtml(err.message)}`;
             showAlert(`Ошибка загрузки: ${err.message}`, "error");
           } finally {
             photoUploadBtn.disabled = false;
@@ -2745,12 +2800,9 @@ async function deleteCatalogEntry(kind, id, button) {
     return;
   }
   const label = kind === "category" ? "категорию" : "товар";
-  const isDeletion = kind === "product";
   const ok = await confirmAction(
-    isDeletion
-      ? `Удалить товар «${row.name}» из справочника? Он исчезнет из форм прихода и списания. История партий и документов сохранится.`
-      : `Скрыть ${label} «${row.name}»? Новые операции больше не будут предлагать эту запись, но история документов сохранится.`,
-    { title: isDeletion ? "Удалить товар" : "Скрыть запись", confirmText: isDeletion ? "Удалить" : "Скрыть", tone: "danger" },
+    `Скрыть ${label} «${row.name}»? Новые операции больше не будут предлагать эту запись, но история документов сохранится.`,
+    { title: "Скрыть запись", confirmText: "Скрыть", tone: "danger" },
   );
   if (!ok) return;
   try {
@@ -3331,7 +3383,7 @@ function balancesTable(rows, empty = "Данных пока нет") {
       const offers = findMarketplaceOffersForProduct(row.product_id);
       if (!offers.length) return "";
       const best = offers.reduce((a, b) => a.unit_price <= b.unit_price ? a : b);
-      return `<button class="secondary compact-action" style="white-space:nowrap" data-show-pr-offers="${row.product_id}" title="${offers.length} предложений от ${fmtMoneyKzt(best.unit_price)} тг">📦 ${offers.length}</button>`;
+      return `<button class="secondary compact-action" style="white-space:nowrap" data-show-pr-offers="${row.product_id}" title="${offers.length} предложений от ${fmtMoneyKzt(best.unit_price)} тг">${icon("box")} ${offers.length}</button>`;
     }},
   ], rows, searchEmptyText(empty))}
   <div id="pr-offers-panel-balances" style="display:none;margin-top:12px"></div>`;
@@ -3531,7 +3583,7 @@ function renderStock() {
         <h2 style="margin:0 0 .75rem">${t("Сканер штрихкода")}</h2>
         ${cameraAvailable ? `
           <button class="primary" data-action="toggle-scanner" type="button" style="width:100%;margin-bottom:.75rem">
-            📷 ${t("Запустить камеру")}
+            ${icon("camera")} ${t("Запустить камеру")}
           </button>
         ` : `<p style="color:#dc2626;font-size:.85rem;margin-bottom:.75rem">${t("Камера недоступна в этом браузере")}</p>`}
         <div style="border-top:1px solid #e5e7eb;padding-top:.75rem">
@@ -3559,7 +3611,7 @@ function renderStock() {
           <h2>${t("Текущие остатки")}${bp ? ` — ${escapeHtml(bp.name)}` : ""}</h2>
           <div class="row-actions">
             <button class="secondary" data-export-report="balances">${t("Выгрузить CSV")}</button>
-            <a href="${`${API}/balances/pdf${warehouseFilterParam() ? '?' + warehouseFilterParam() : ''}`}" target="_blank" class="secondary" style="display:inline-block;padding:.35rem .7rem;border:1px solid #d1d5db;border-radius:6px;font-size:.82rem;text-decoration:none;color:#374151">📄 PDF</a>
+            <a href="${`${API}/balances/pdf${warehouseFilterParam() ? '?' + warehouseFilterParam() : ''}`}" target="_blank" class="secondary" style="display:inline-block;padding:.35rem .7rem;border:1px solid #d1d5db;border-radius:6px;font-size:.82rem;text-decoration:none;color:#374151">${icon("file")} PDF</a>
             <button class="secondary" data-action="reload">${t("Обновить")}</button>
           </div>
         </div>
@@ -3616,8 +3668,8 @@ function renderCatalog() {
         { label: "Страховой запас", name: "safety_stock", type: "number", step: "0.001", min: "0", value: "0" },
         { label: "ПКУ / контролируемый товар", name: "is_controlled", type: "select", options: staticOptions([["false", "Нет"], ["true", "Да"]], "Выберите значение"), value: "false" },
         { label: "Штрихкод", name: "barcode", suffixActions: [
-          { action: "scan-for-barcode-field", icon: "📷", title: "Сканировать штрихкод" },
-          { action: "generate-barcode-field", icon: "🎲", title: "Сгенерировать EAN-13" },
+          { action: "scan-for-barcode-field", icon: icon("camera"), title: "Сканировать штрихкод" },
+          { action: "generate-barcode-field", icon: icon("dice"), title: "Сгенерировать EAN-13" },
         ] },
         { label: "Сертификат", name: "certificate_ref" },
         { label: "Описание", name: "description", type: "textarea", full: true },
@@ -3661,7 +3713,7 @@ function renderCatalog() {
           <h2>${t("Товары")}</h2>
           <div class="row-actions">
             ${state.data.products.filter(p=>p.label_needs_reprint).length > 0
-              ? `<button class="secondary" data-action="mass-reprint-labels">🔴 Перепечатать (${state.data.products.filter(p=>p.label_needs_reprint).length})</button>` : ""}
+              ? `<button class="secondary" data-action="mass-reprint-labels">${icon("print")} Перепечатать (${state.data.products.filter(p=>p.label_needs_reprint).length})</button>` : ""}
             <button class="secondary" data-export-report="products">CSV</button>
           </div>
           <label style="display:flex;align-items:center;gap:.35rem;font-size:.82rem;font-weight:400;cursor:pointer">
@@ -3679,16 +3731,16 @@ function renderCatalog() {
         { label: "Штрихкод", render: (row) => escapeHtml(row.barcode || "—") },
         { label: "Сертификат", render: (row) => row.certificate_ref
           ? (row.certificate_ref.startsWith("http") || row.certificate_ref.startsWith("/uploads/")
-            ? `<a href="${escapeAttr(row.certificate_ref)}" target="_blank" rel="noopener" class="cert-preview-link">📄 Открыть ↗</a>`
+            ? `<a href="${escapeAttr(row.certificate_ref)}" target="_blank" rel="noopener" class="cert-preview-link">${icon("file")} Открыть ↗</a>`
             : escapeHtml(row.certificate_ref))
           : '<span style="color:#f59e0b;font-size:.78rem">Не загружен</span>' },
         { label: "Точка заказа", render: (row) => qty(row.reorder_point) },
         { label: "Страховой запас", render: (row) => qty(row.safety_stock) },
         { label: "ПКУ", render: (row) => row.is_controlled ? badge("да") : "нет" },
-        { label: "", render: (row) => `<button class="secondary compact-action" type="button" data-print-product-label="${escapeAttr(row.id)}">${row.label_needs_reprint ? "🔴 Перепечатать" : "Этикетка"}</button>` },
+        { label: "", render: (row) => `<button class="secondary compact-action" type="button" data-print-product-label="${escapeAttr(row.id)}">${row.label_needs_reprint ? icon("print") + " Перепечатать" : "Этикетка"}</button>` },
         { label: "", render: (row) => `<button class="secondary compact-action" type="button" data-show-barcode="${escapeAttr(row.id)}">Штрихкод</button>` },
         { label: "", render: (row) => `<button class="secondary compact-action" type="button" data-edit-catalog="product" data-edit-id="${escapeAttr(row.id)}">Исправить</button>` },
-        { label: "", render: (row) => `<button class="danger compact-action" type="button" data-delete-catalog="product" data-delete-id="${escapeAttr(row.id)}" title="Удалить товар из справочника">Удалить</button>` },
+        { label: "", render: (row) => `<button class="danger compact-action" type="button" data-delete-catalog="product" data-delete-id="${escapeAttr(row.id)}">Скрыть</button>` },
       ], filteredRows((state.ui?.reprintFilterOn ? state.data.products.filter(p => p.label_needs_reprint) : state.data.products), (row) => [row.id, row.name, row.sku, row.unit, row.barcode, row.certificate_ref, row.description, rawNameById("categories", row.category_id)]), "Товаров пока нет. Создайте категорию и новый товар в форме слева.")}
       </div>
       <div class="table-panel span-5"><h2>${t("Справочник")}</h2>${table([
@@ -3715,7 +3767,7 @@ function renderReceipts() {
     <div class="grid">
       ${receiptPrerequisites()}
       <div class="form-panel span-5">
-        <div class="toolbar"><h2>${t("Приемка сразу в остатки")}</h2>${cameraAvail ? `<button class="secondary" type="button" data-action="scan-for-receipt" style="font-size:.8rem">📷 ${t("Сканировать товар")}</button>` : ""}</div>
+        <div class="toolbar"><h2>${t("Приемка сразу в остатки")}</h2>${cameraAvail ? `<button class="secondary" type="button" data-action="scan-for-receipt" style="font-size:.8rem">${icon("camera")} ${t("Сканировать товар")}</button>` : ""}</div>
         ${form("receipt-form", [
         { label: "Товар", name: "product_id", type: "select", options: optionsFrom("products", "Выберите товар"), required: true },
         { label: "Поставщик", name: "supplier_id", type: "select", options: optionsFrom("suppliers", "Выберите поставщика"), required: true },
@@ -3740,12 +3792,7 @@ function renderReceipts() {
         { label: "Статус", render: (row) => badge(row.status) },
         { label: "", render: (row) => `<button class="secondary compact-action" type="button" data-print-batch-price-label="${escapeAttr(row.id)}">Ценник</button>` },
         { label: "", render: (row) => `<button class="secondary compact-action" type="button" data-print-receipt-batch="${escapeAttr(row.id)}">Ордер</button>` },
-        { label: "", render: (row) => {
-            const rev = (state.data.quarantineReviews?.items || []).find(r => r.batch_id === row.id && ["pending","in_review"].includes(r.status));
-            return (row.status === "quarantine" && rev
-              ? `<button class="primary compact-action" type="button" data-quarantine-review="${escapeAttr(rev.id)}" data-quarantine-next-status="approved" title="Одобрить и сделать партию доступной">&#10003; Допустить</button> `
-              : "") + batchButton(row.id, "Открыть");
-          }},
+        { label: "", render: (row) => batchButton(row.id, "Открыть") },
       ], filteredRows(state.data.batches, (row) => [row.id, rawNameById("products", row.product_id), rawNameById("suppliers", row.supplier_id), row.lot, row.serial_number, row.expires_on, row.status]), "Партий пока нет. Сначала создайте товар, поставщика и примите товар на склад.")}</div>
     </div>
   `;
@@ -3927,8 +3974,8 @@ function tabletWriteoffForm() {
   const filterProd = state.ui.batchFilterProductId
     ? state.data.products.find((p) => Number(p.id) === Number(state.ui.batchFilterProductId))
     : null;
-  const filterBar = filterProd ? `<div style="display:flex;align-items:center;gap:.5rem;margin-bottom:.5rem;background:#fef9c3;padding:.4rem .75rem;border-radius:6px;font-size:.85rem"><span>📦 ${escapeHtml(filterProd.name)}</span><button type="button" class="secondary compact-action" data-action="clear-batch-filter">✕</button></div>` : "";
-  const scanBtn = cameraAvailTW ? `<button type="button" class="secondary" data-action="scan-for-batch-filter" style="font-size:.8rem;margin-bottom:.5rem;width:100%">📷 Найти товар сканером</button>` : "";
+  const filterBar = filterProd ? `<div style="display:flex;align-items:center;gap:.5rem;margin-bottom:.5rem;background:#fef9c3;padding:.4rem .75rem;border-radius:6px;font-size:.85rem"><span>${icon("box")} ${escapeHtml(filterProd.name)}</span><button type="button" class="secondary compact-action" data-action="clear-batch-filter">✕</button></div>` : "";
+  const scanBtn = cameraAvailTW ? `<button type="button" class="secondary" data-action="scan-for-batch-filter" style="font-size:.8rem;margin-bottom:.5rem;width:100%">${icon("camera")} Найти товар сканером</button>` : "";
   return scanBtn + filterBar + form("tablet-writeoff-form", [
     { label: "Партия", name: "batch_id", type: "select", options: batchOptions("Выберите партию с остатком", { productId: state.ui.batchFilterProductId }), required: true, full: true },
     { label: "Склад", name: "warehouse_id", type: "select", options: optionsFrom("warehouses", "Автоматически по партии"), required: true, batchWarehouseField: "warehouse_id" },
@@ -3986,7 +4033,7 @@ function renderOperations() {
     <div class="grid">
       ${needsStockNotice("Перейти к приходу")}
       <div class="form-panel span-3">
-        <div class="toolbar"><h2>${t("Списание по ближайшему сроку")}</h2>${!!(navigator.mediaDevices&&navigator.mediaDevices.getUserMedia) ? `<button class="secondary" type="button" data-action="scan-for-fefo" style="font-size:.8rem">📷 ${t("Сканировать товар")}</button>` : ""}</div>
+        <div class="toolbar"><h2>${t("Списание по ближайшему сроку")}</h2>${!!(navigator.mediaDevices&&navigator.mediaDevices.getUserMedia) ? `<button class="secondary" type="button" data-action="scan-for-fefo" style="font-size:.8rem">${icon("camera")} ${t("Сканировать товар")}</button>` : ""}</div>
         ${form("fefo-form", [
         { label: "Товар", name: "product_id", type: "select", options: optionsFrom("products", "Выберите товар"), required: true },
         { label: "Склад", name: "warehouse_id", type: "select", options: optionsFrom("warehouses", "Выберите склад"), required: true },
@@ -4409,7 +4456,7 @@ function renderPurchaseRequests() {
             <button class="secondary" data-export-report="purchaseRequests">Выгрузить CSV</button>
             <button class="secondary" data-action="download-purchase-pdf">Скачать PDF</button>
             <button class="primary" data-action="generate-purchase-requests">Сформировать автозаявки</button>
-            <button class="secondary" data-action="ai-analyze-purchases" id="ai-analyze-btn" title="AI анализ рисков закупок">🤖 AI анализ</button>
+            <button class="secondary" data-action="ai-analyze-purchases" id="ai-analyze-btn" title="AI анализ рисков закупок">${icon("cpu")} AI анализ</button>
             <button class="secondary" data-action="reload">Обновить</button>
           </div>
         </div>
@@ -4426,7 +4473,7 @@ function renderPurchaseRequests() {
               const govCls = { demand: "warning", accepting: "ok", closed: "", feedback: "ok" };
               const gl = govLabels[row.gov_status] || row.gov_status || "Спрос";
               const gc = govCls[row.gov_status] || "";
-              s += ` <span class="badge ${gc}" title="Гос. закупка" style="font-size:.72rem">🏛 ${gl}</span>`;
+              s += ` <span class="badge ${gc}" title="Гос. закупка" style="font-size:.72rem">${icon("landmark")} ${gl}</span>`;
             }
             if (row.condition_accepted && row.condition_accepted !== "any") {
               s += ` <span class="badge" style="font-size:.72rem">${row.condition_accepted === "new" ? "Только новый" : "Б/У ОК"}</span>`;
@@ -4435,9 +4482,9 @@ function renderPurchaseRequests() {
           }},
           { label: "Предложения", render: (row) => {
             const offers = findMarketplaceOffersForProduct(row.product_id);
-            if (!offers.length) return `<button class="secondary" style="font-size:.75rem;padding:.2rem .6rem" data-goto-marketplace="${rawNameById("products", row.product_id)}">🔍 Найти</button>`;
+            if (!offers.length) return `<button class="secondary" style="font-size:.75rem;padding:.2rem .6rem" data-goto-marketplace="${rawNameById("products", row.product_id)}">${icon("search")} Найти</button>`;
             const best = offers.reduce((a, b) => a.unit_price <= b.unit_price ? a : b);
-            return `<button class="secondary" style="font-size:.75rem;padding:.2rem .6rem;white-space:nowrap" data-show-pr-offers="${row.product_id}" data-pr-id="${row.id}">📦 ${offers.length} · от ${fmtMoneyKzt(best.unit_price)} тг</button>`;
+            return `<button class="secondary" style="font-size:.75rem;padding:.2rem .6rem;white-space:nowrap" data-show-pr-offers="${row.product_id}" data-pr-id="${row.id}">${icon("box")} ${offers.length} · от ${fmtMoneyKzt(best.unit_price)} тг</button>`;
           }},
           { label: "Создано", render: (row) => dateText(row.created_at) },
           { label: "", render: (row) => {
@@ -4449,7 +4496,7 @@ function renderPurchaseRequests() {
             if (row.is_gov_procurement && row.gov_status && row.gov_status !== "feedback") {
               const nextLabels = { demand: "→ Приём", accepting: "→ Закрыть", closed: "Добавить фидбэк" };
               const nl = nextLabels[row.gov_status];
-              if (nl) btns += `<button class="secondary" style="font-size:.75rem" data-gov-advance="${row.id}" data-gov-status="${row.gov_status}">🏛 ${nl}</button>`;
+              if (nl) btns += `<button class="secondary" style="font-size:.75rem" data-gov-advance="${row.id}" data-gov-status="${row.gov_status}">${icon("landmark")} ${nl}</button>`;
             }
             return btns ? `<div class="row-actions">${btns}</div>` : "";
           }},
@@ -4469,9 +4516,9 @@ function renderPurchaseRequests() {
             const offers = findMarketplaceOffersForProduct(pid);
             if (offers.length) {
               const best = offers.reduce((a, b) => a.unit_price <= b.unit_price ? a : b);
-              return `<button class="secondary" style="font-size:.75rem;padding:.2rem .6rem;white-space:nowrap" data-show-pr-offers="${pid}">📦 ${offers.length} · от ${fmtMoneyKzt(best.unit_price)} тг</button>`;
+              return `<button class="secondary" style="font-size:.75rem;padding:.2rem .6rem;white-space:nowrap" data-show-pr-offers="${pid}">${icon("box")} ${offers.length} · от ${fmtMoneyKzt(best.unit_price)} тг</button>`;
             }
-            return `<button class="secondary" style="font-size:.75rem;padding:.2rem .6rem" data-goto-marketplace="${escapeAttr(name)}">🔍 Найти</button>`;
+            return `<button class="secondary" style="font-size:.75rem;padding:.2rem .6rem" data-goto-marketplace="${escapeAttr(name)}">${icon("search")} Найти</button>`;
           }},
         ], filteredRows(suggestions, (row) => [row.product_name, row.sku, rawNameById("warehouses", row.warehouse_id), row.quantity, row.reason]), "Автоматических рекомендаций пока нет. Они появятся после ABC/XYZ анализа и настроенных точек заказа.")}
       </div>
@@ -4527,7 +4574,7 @@ function renderInventory() {
         { label: "Начата", render: (row) => dateText(row.started_at) },
         { label: "Проведена", render: (row) => dateText(row.posted_at) },
       ], filteredRows(state.data.inventorySessions, (row) => [row.id, rawNameById("warehouses", row.warehouse_id), row.status, row.started_by, row.started_at, row.posted_at]), "Проверок склада пока нет. Выберите склад и начните инвентаризацию.")}</div>
-      <div class="table-panel span-12"><div class="toolbar"><h2>${t("Товары в выбранной проверке")}</h2>${selectedSession && !!(navigator.mediaDevices&&navigator.mediaDevices.getUserMedia) ? `<button class="secondary" type="button" data-action="scan-for-inventory" style="font-size:.8rem">📷 ${t("Найти товар")}</button>` : ""}</div>${selectedSession ? table([
+      <div class="table-panel span-12"><div class="toolbar"><h2>${t("Товары в выбранной проверке")}</h2>${selectedSession && !!(navigator.mediaDevices&&navigator.mediaDevices.getUserMedia) ? `<button class="secondary" type="button" data-action="scan-for-inventory" style="font-size:.8rem">${icon("camera")} ${t("Найти товар")}</button>` : ""}</div>${selectedSession ? table([
         { label: "Номер строки", key: "id" },
         { label: "Товар", render: (row) => nameById("products", row.product_id) },
         { label: "Партия", render: (row) => batchDetailLabel(row.batch_id) },
@@ -5447,7 +5494,7 @@ function renderMarketplace() {
     </div>
     <div class="marketplace-results-row">
       <div style="color:var(--muted);font-size:.85rem">Найдено позиций: ${mp.total}</div>
-      ${filter.search ? `<button class="secondary" style="font-size:.82rem" id="mp-bulk-inquire-btn" title="Отправить запрос всем поставщикам у которых есть этот товар">📤 Запросить у всех поставщиков</button>` : ""}
+      ${filter.search ? `<button class="secondary" style="font-size:.82rem" id="mp-bulk-inquire-btn" title="Отправить запрос всем поставщикам у которых есть этот товар">${icon("send")} Запросить у всех поставщиков</button>` : ""}
     </div>
     ${(state.data.catalogTaxonomy||[]).length ? `
       <div class="marketplace-category-rail">
@@ -5457,7 +5504,7 @@ function renderMarketplace() {
     <div class="marketplace-grid">
       ${mp.items.length ? mp.items.map(itemCard).join("") : `
         <div style="grid-column:1/-1;text-align:center;padding:40px 16px;color:var(--muted)">
-          <div style="font-size:2.5rem;margin-bottom:8px">🛒</div>
+          <div style="font-size:2.5rem;margin-bottom:8px">${icon("cart", 40, "empty")}</div>
           <div>Ничего не найдено.<br>Попробуйте изменить запрос.</div>
         </div>`}
     </div>
@@ -5562,21 +5609,21 @@ function renderMarketplaceSuppliers(suppliers, filter) {
           <div style="display:flex;justify-content:space-between;align-items:flex-start">
             <div>
               <strong style="font-size:1rem">${escapeHtml(s.name || "")}</strong>
-              ${s.is_preferred ? `<span style="font-size:.75rem;color:var(--success,#16a34a);margin-left:6px">⭐ Предпочтительный</span>` : ""}
+              ${s.is_preferred ? `<span style="font-size:.75rem;color:var(--success,#16a34a);margin-left:6px">${icon("star")} Предпочтительный</span>` : ""}
               <div style="font-size:.82rem;color:var(--muted)">${escapeHtml(s.city || "")}${s.delivery_days ? ` · доставка ${s.delivery_days} дн.` : ""}</div>
             </div>
             ${s.rating != null ? `<div style="text-align:center;background:var(--surface-2,#f5f5f5);padding:4px 8px;border-radius:8px"><div style="font-size:1rem;font-weight:700;color:var(--accent)">${rating}</div><div style="font-size:.7rem;color:var(--muted)">★</div></div>` : ""}
           </div>
           ${cats.length ? `<div style="display:flex;flex-wrap:wrap;gap:4px">${cats.map((c) => `<span style="font-size:.75rem;background:var(--surface-2,#eef);padding:2px 8px;border-radius:10px;color:var(--accent)">${escapeHtml(c)}</span>`).join("")}</div>` : ""}
           <div style="font-size:.85rem;color:var(--muted);display:flex;gap:12px">
-            ${s.catalog_items_count ? `<span>🛍️ ${s.catalog_items_count} тов.</span>` : ""}
-            ${s.phone ? `<a href="tel:${escapeAttr(s.phone)}" style="color:var(--accent)">📞 ${escapeHtml(s.phone)}</a>` : ""}
+            ${s.catalog_items_count ? `<span>${icon("bag")}️ ${s.catalog_items_count} тов.</span>` : ""}
+            ${s.phone ? `<a href="tel:${escapeAttr(s.phone)}" style="color:var(--accent)">${icon("phone")} ${escapeHtml(s.phone)}</a>` : ""}
           </div>
           ${s.min_price != null ? `<div style="font-size:.82rem;color:var(--muted)">Цены: от ${fmtMoneyKzt(s.min_price)} до ${fmtMoneyKzt(s.max_price)} тг</div>` : ""}
           <button class="secondary" style="font-size:.82rem;margin-top:auto" data-mp-supplier-catalog="${s.id}">Посмотреть каталог →</button>
         </div>`;
       }).join("") : `<div style="grid-column:1/-1;text-align:center;padding:40px;color:var(--muted)">
-        <div style="font-size:2.5rem;margin-bottom:8px">🏢</div>
+        <div style="font-size:2.5rem;margin-bottom:8px">${icon("building", 40, "empty")}</div>
         <div>Поставщиков не найдено</div>
       </div>`}
     </div>`;
@@ -5587,14 +5634,14 @@ function renderCart(cart) {
   const hasInactiveItems = cartHasInactiveItems(items);
   if (!items.length) return `
     <div class="panel" style="text-align:center;padding:40px 16px">
-      <div style="font-size:2.5rem;margin-bottom:8px">🛒</div>
+      <div style="font-size:2.5rem;margin-bottom:8px">${icon("cart", 40, "empty")}</div>
       <div style="color:var(--muted)">Корзина пуста.<br>Добавьте товары из каталога.</div>
       <button class="primary" style="margin-top:16px" data-mp-tab="catalog">Перейти в каталог</button>
     </div>`;
   return `
     ${items.map((it) => `
       <div class="panel" style="display:flex;gap:12px;align-items:center;margin-bottom:10px;flex-wrap:wrap" id="cart-item-${it.id}">
-        ${it.image_url ? `<img src="${escapeAttr(it.image_url)}" alt="" style="width:64px;height:64px;object-fit:cover;border-radius:6px" />` : `<div style="width:64px;height:64px;border-radius:6px;background:var(--surface-2,#f0f0f0);display:flex;align-items:center;justify-content:center;font-size:1.5rem">🛍️</div>`}
+        ${it.image_url ? `<img src="${escapeAttr(it.image_url)}" alt="" style="width:64px;height:64px;object-fit:cover;border-radius:6px" />` : `<div style="width:64px;height:64px;border-radius:6px;background:var(--surface-2,#f0f0f0);display:flex;align-items:center;justify-content:center;font-size:1.5rem">${icon("bag")}️</div>`}
         <div style="flex:1;min-width:160px">
           <div style="font-weight:600">${escapeHtml(it.product_name)}</div>
           <div style="font-size:.82rem;color:var(--muted)">${escapeHtml(it.supplier_name || "")} · ${fmtMoneyKzt(it.unit_price)} тг/${escapeHtml(it.unit)}</div>
@@ -5824,7 +5871,7 @@ function renderMyInquiries(items) {
   if (!items.length) return `
     ${filterBar}
     <div class="panel" style="text-align:center;padding:40px 16px">
-      <div style="font-size:2.5rem;margin-bottom:8px">📋</div>
+      <div style="font-size:2.5rem;margin-bottom:8px">${icon("clipboard", 40, "empty")}</div>
       <div style="color:var(--muted)">${hasActiveFilters ? "По выбранным фильтрам заявок нет.<br>Сбросьте фильтры или выберите другой источник/статус." : "Вы ещё не отправляли запросы поставщикам.<br>Найдите нужный товар в каталоге и нажмите «Запросить»."}</div>
       ${hasActiveFilters ? `<button class="secondary" style="margin-top:16px" id="mp-inquiry-empty-reset">Сбросить фильтры</button>` : `<button class="primary" style="margin-top:16px" data-mp-tab="catalog">Перейти в каталог</button>`}
     </div>`;
@@ -5863,21 +5910,21 @@ function renderMyInquiries(items) {
         </div>` : ""}
       ${inq.status === "responded" ? `
         <div style="display:flex;gap:8px;margin-top:4px;flex-wrap:wrap">
-          <button class="secondary" style="font-size:.82rem" data-inquiry-chat="${inq.id}" data-chat-role="buyer">💬 Переписка</button>
-          <button class="primary" style="font-size:.82rem" data-create-po="${inq.id}" data-inquiry-json='${JSON.stringify({product_name:inq.product_name,supplier_name:inq.supplier_name,quantity:inq.quantity,unit:inq.unit,unit_price:inq.unit_price})}'>📄 Заказ (PO)</button>
+          <button class="secondary" style="font-size:.82rem" data-inquiry-chat="${inq.id}" data-chat-role="buyer">${icon("chat")} Переписка</button>
+          <button class="primary" style="font-size:.82rem" data-create-po="${inq.id}" data-inquiry-json='${JSON.stringify({product_name:inq.product_name,supplier_name:inq.supplier_name,quantity:inq.quantity,unit:inq.unit,unit_price:inq.unit_price})}'>${icon("file")} Заказ (PO)</button>
           <button class="primary" style="font-size:.82rem;background:var(--success,#16a34a)" data-inquiry-mark="${inq.id}" data-status="ordered">✓ Оформить заказ</button>
           <button class="secondary" style="font-size:.82rem" data-inquiry-mark="${inq.id}" data-status="closed">Закрыть</button>
         </div>` : ""}
       ${inq.status === "ordered" ? `
         <div style="display:flex;gap:8px;margin-top:4px;flex-wrap:wrap">
-          <button class="secondary" style="font-size:.82rem" data-inquiry-chat="${inq.id}" data-chat-role="buyer">💬 Переписка</button>
-          <button class="secondary" style="font-size:.82rem" data-create-po="${inq.id}" data-inquiry-json='${JSON.stringify({product_name:inq.product_name,supplier_name:inq.supplier_name,quantity:inq.quantity,unit:inq.unit,unit_price:inq.unit_price})}'>📄 Заказ (PO)</button>
-          <button class="secondary" style="font-size:.82rem" data-escrow-action="${inq.id}" data-action="reserve" title="Зарезервировать средства в escrow">🔒 Escrow резерв</button>
+          <button class="secondary" style="font-size:.82rem" data-inquiry-chat="${inq.id}" data-chat-role="buyer">${icon("chat")} Переписка</button>
+          <button class="secondary" style="font-size:.82rem" data-create-po="${inq.id}" data-inquiry-json='${JSON.stringify({product_name:inq.product_name,supplier_name:inq.supplier_name,quantity:inq.quantity,unit:inq.unit,unit_price:inq.unit_price})}'>${icon("file")} Заказ (PO)</button>
+          <button class="secondary" style="font-size:.82rem" data-escrow-action="${inq.id}" data-action="reserve" title="Зарезервировать средства в escrow">${icon("lock")} Escrow резерв</button>
           <button class="primary" style="font-size:.82rem;background:var(--success,#16a34a)" data-escrow-action="${inq.id}" data-action="release" title="Подтвердить получение и освободить escrow">✓ Товар получен</button>
         </div>` : ""}
       ${inq.status === "pending" ? `
         <div style="display:flex;gap:8px;margin-top:4px">
-          <button class="secondary" style="font-size:.82rem" data-inquiry-chat="${inq.id}" data-chat-role="buyer">💬 Переписка</button>
+          <button class="secondary" style="font-size:.82rem" data-inquiry-chat="${inq.id}" data-chat-role="buyer">${icon("chat")} Переписка</button>
           <button class="secondary" style="font-size:.82rem" data-inquiry-mark="${inq.id}" data-status="closed">Отменить запрос</button>
         </div>` : ""}
     </div>`;
@@ -5898,7 +5945,7 @@ function showPOModal(inquiryId, inquiryData) {
 
   overlay.innerHTML = `<div style="background:var(--surface,#fff);width:100%;max-width:540px;border-radius:12px;max-height:90vh;overflow-y:auto">
     <div style="display:flex;justify-content:space-between;align-items:center;padding:16px 20px;border-bottom:1px solid var(--line)">
-      <strong>📄 Заказ на поставку</strong>
+      <strong>${icon("file")} Заказ на поставку</strong>
       <button id="po-modal-close" class="secondary" style="font-size:.82rem">✕</button>
     </div>
     <div style="padding:16px 20px">
@@ -5984,7 +6031,7 @@ function showPriceTiersModal(itemId, unit) {
   overlay.style.cssText = "position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:9999;display:flex;align-items:center;justify-content:center;padding:16px";
   overlay.innerHTML = `<div style="background:var(--surface,#fff);width:100%;max-width:480px;border-radius:12px;max-height:90vh;overflow-y:auto">
     <div style="display:flex;justify-content:space-between;align-items:center;padding:14px 16px;border-bottom:1px solid var(--line)">
-      <strong>📊 Объёмные цены</strong>
+      <strong>${icon("chart")} Объёмные цены</strong>
       <button id="tiers-close" class="secondary" style="font-size:.82rem">✕</button>
     </div>
     <div id="tiers-body" style="padding:14px 16px">
@@ -6074,7 +6121,7 @@ function showBulkInquiryModal(productName) {
   overlay.innerHTML = `
     <div style="background:var(--surface,#fff);border-radius:12px;padding:24px;max-width:440px;width:100%;box-shadow:0 8px 32px rgba(0,0,0,.2)">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
-        <h3 style="margin:0">📤 Массовый запрос</h3>
+        <h3 style="margin:0">${icon("send")} Массовый запрос</h3>
         <button id="bulk-inquiry-close" style="background:none;border:none;font-size:1.4rem;cursor:pointer;color:var(--muted);padding:0 4px">&times;</button>
       </div>
       <p style="color:var(--muted);font-size:.9rem;margin-bottom:16px">
@@ -6146,7 +6193,7 @@ function showShipmentFromInquiryModal(inquiry) {
   overlay.innerHTML = `
     <div style="background:var(--surface,#fff);border-radius:12px;padding:24px;max-width:440px;width:100%;box-shadow:0 8px 32px rgba(0,0,0,.2)">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
-        <h3 style="margin:0">🚚 Создать поставку</h3>
+        <h3 style="margin:0">${icon("truck")} Создать поставку</h3>
         <button id="ship-inq-close" style="background:none;border:none;font-size:1.4rem;cursor:pointer;color:var(--muted)">&times;</button>
       </div>
       <div style="background:var(--surface-2,#f5f5f5);padding:10px 12px;border-radius:8px;margin-bottom:14px;font-size:.88rem">
@@ -6229,7 +6276,7 @@ function showInquiryModal(item, purchaseRequestId = null) {
         ${item.stock_qty != null ? `<div><div style="font-size:.75rem;color:var(--muted)">В наличии</div><div style="font-weight:600">${item.stock_qty} ${escapeHtml(item.unit)}</div></div>` : ""}
       </div>
       <div style="font-size:.85rem;margin-bottom:12px;color:var(--muted)">Контакты: ${escapeHtml(item.supplier_phone || "")} · ${escapeHtml(item.supplier_email || "")}</div>
-      ${purchaseRequestId ? `<div style="font-size:.82rem;background:var(--accent-bg,#eff6ff);color:var(--accent,#2563eb);border-radius:6px;padding:6px 10px;margin-bottom:8px">🔗 Привязать к заявке на закупку #${purchaseRequestId}</div>` : ""}
+      ${purchaseRequestId ? `<div style="font-size:.82rem;background:var(--accent-bg,#eff6ff);color:var(--accent,#2563eb);border-radius:6px;padding:6px 10px;margin-bottom:8px">${icon("link")} Привязать к заявке на закупку #${purchaseRequestId}</div>` : ""}
       <form id="inquiry-modal-form" style="display:grid;gap:10px">
         <label style="font-size:.88rem">Количество (${escapeHtml(item.unit)})
           <input type="number" name="quantity" value="${item.min_order_qty || 1}" min="${item.min_order_qty || 1}" step="1" required />
@@ -6329,7 +6376,7 @@ async function showProductDetailModal(itemId) {
           </table>
         </div>` : ""}
       <div style="display:flex;gap:8px;margin:12px 0;flex-wrap:wrap">
-        <button class="primary" id="pd-cart-add">🛒 В корзину</button>
+        <button class="primary" id="pd-cart-add">${icon("cart")} В корзину</button>
         <button class="secondary" id="pd-order">Запросить</button>
       </div>
       <hr style="border:none;border-top:1px solid var(--line,#eee);margin:16px 0" />
@@ -6420,15 +6467,15 @@ async function showSupplierProfileModal(supplierId) {
       <div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:12px;margin-bottom:12px">
         <div>
           <h2 style="margin:0 0 4px">${escapeHtml(s.name)} ${s.is_verified ? `<span style="font-size:.8rem;background:var(--success,#16a34a);color:#fff;border-radius:10px;padding:2px 10px;vertical-align:middle">✓ Проверенный поставщик</span>` : ""}</h2>
-          <div style="color:var(--muted);font-size:.9rem">${escapeHtml(s.city || "")}${s.delivery_days ? ` · доставка ${s.delivery_days} дн.` : ""}${s.is_preferred ? ` · ⭐ предпочтительный` : ""}</div>
+          <div style="color:var(--muted);font-size:.9rem">${escapeHtml(s.city || "")}${s.delivery_days ? ` · доставка ${s.delivery_days} дн.` : ""}${s.is_preferred ? ` · ${icon("star")} предпочтительный` : ""}</div>
         </div>
         ${s.reviews_avg != null ? `<div style="text-align:center;background:var(--surface-2,#f5f5f5);padding:8px 14px;border-radius:10px"><div style="font-size:1.3rem;font-weight:700;color:var(--accent)">${s.reviews_avg}</div><div style="color:var(--warning,#f59e0b)">${starRow(s.reviews_avg)}</div><div style="font-size:.75rem;color:var(--muted)">${s.reviews_count} отзывов</div></div>` : ""}
       </div>
       <div style="display:flex;gap:16px;flex-wrap:wrap;margin-bottom:14px;font-size:.88rem;color:var(--muted)">
-        ${s.phone ? `<a href="tel:${escapeAttr(s.phone)}" style="color:var(--accent)">📞 ${escapeHtml(s.phone)}</a>` : ""}
-        ${s.email ? `<span>✉️ ${escapeHtml(s.email)}</span>` : ""}
-        ${s.address ? `<span>📍 ${escapeHtml(s.address)}</span>` : ""}
-        ${s.catalog_items_count != null ? `<span>🛍️ ${s.catalog_items_count} товаров</span>` : ""}
+        ${s.phone ? `<a href="tel:${escapeAttr(s.phone)}" style="color:var(--accent)">${icon("phone")} ${escapeHtml(s.phone)}</a>` : ""}
+        ${s.email ? `<span>${icon("mail")}️ ${escapeHtml(s.email)}</span>` : ""}
+        ${s.address ? `<span>${icon("pin")} ${escapeHtml(s.address)}</span>` : ""}
+        ${s.catalog_items_count != null ? `<span>${icon("bag")}️ ${s.catalog_items_count} товаров</span>` : ""}
         ${s.min_price != null ? `<span>Цены от ${fmtMoneyKzt(s.min_price)} до ${fmtMoneyKzt(s.max_price)} тг</span>` : ""}
       </div>
       <div style="font-weight:600;margin-bottom:8px">Каталог поставщика</div>
@@ -6909,7 +6956,7 @@ function renderAuctions() {
       ${a.winner_supplier_id ? ` · <b>Победитель: поставщик #${a.winner_supplier_id}, ${Number(a.winner_bid).toLocaleString("ru-RU")} тг</b>` : ""}
     </div>
     <div style="display:flex;gap:.5rem;flex-wrap:wrap">
-      ${a.status==="draft" ? `<button class="primary" data-action="start-auction" data-id="${a.id}" style="font-size:.82rem">▶ Запустить</button>` : ""}
+      ${a.status==="draft" ? `<button class="primary" data-action="start-auction" data-id="${a.id}" style="font-size:.82rem">${icon("play")} Запустить</button>` : ""}
       ${a.status==="active" ? `<div style="display:flex;gap:.5rem;align-items:center;flex-wrap:wrap">
         <select id="bid-supplier-${a.id}" style="width:auto;padding:.3rem;font-size:.82rem">
           <option value="">Поставщик...</option>
@@ -7185,16 +7232,16 @@ function renderSupport() {
   return `
     <div style="max-width:680px;margin:0 auto">
       <div class="panel" style="text-align:center;padding:32px 20px;margin-bottom:16px">
-        <div style="font-size:2.5rem;margin-bottom:8px">🛟</div>
+        <div style="font-size:2.5rem;margin-bottom:8px">${icon("lifebuoy", 40, "empty")}</div>
         <h2 style="margin:0 0 6px">Техподдержка</h2>
         <div style="color:var(--muted)">Раздел в разработке. Здесь появятся контакты, форма обращения и база знаний.</div>
       </div>
       <div class="panel" style="margin-bottom:16px">
         <div style="font-weight:600;margin-bottom:10px">Контакты</div>
         <div style="display:grid;gap:8px;color:var(--muted);font-size:.92rem">
-          <div>📞 Телефон: <em>будет добавлен</em></div>
-          <div>✉️ Email: <em>будет добавлен</em></div>
-          <div>💬 Telegram: <em>будет добавлен</em></div>
+          <div>${icon("phone")} Телефон: <em>будет добавлен</em></div>
+          <div>${icon("mail")}️ Email: <em>будет добавлен</em></div>
+          <div>${icon("chat")} Telegram: <em>будет добавлен</em></div>
         </div>
       </div>
       <div class="panel" style="margin-bottom:16px">
@@ -7510,7 +7557,7 @@ function renderSupplierAuctions() {
   }
   if (!auctions.length) return `
     <div class="panel" style="text-align:center;padding:32px 16px">
-      <div style="font-size:2rem;margin-bottom:8px">📋</div>
+      <div style="font-size:2rem;margin-bottom:8px">${icon("clipboard", 32, "empty")}</div>
       <div style="color:var(--muted)">Активных аукционов пока нет.<br>Новые появятся, как только склад разместит закупку.</div>
     </div>`;
   return auctions.map((a) => {
@@ -7524,7 +7571,7 @@ function renderSupplierAuctions() {
       <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;margin-bottom:6px">
         <div>
           <strong style="font-size:1.05rem">${escapeHtml(a.title)}</strong>
-          ${iWon ? `<span style="margin-left:8px;font-size:.8rem;color:var(--success,#16a34a);font-weight:600">🏆 Вы выиграли!</span>` : ""}
+          ${iWon ? `<span style="margin-left:8px;font-size:.8rem;color:var(--success,#16a34a);font-weight:600">${icon("trophy")} Вы выиграли!</span>` : ""}
         </div>
         <span class="badge ${st.cls}" style="white-space:nowrap">${st.label}</span>
       </div>
@@ -7539,7 +7586,7 @@ function renderSupplierAuctions() {
         ${a.min_price ? `<div><div style="font-size:.75rem;color:var(--muted)">Мин. цена</div><div style="font-weight:600">${fmtMoneyKzt(a.min_price)} тг</div></div>` : ""}
         ${a.step_amount ? `<div><div style="font-size:.75rem;color:var(--muted)">Шаг</div><div style="font-weight:600">${fmtMoneyKzt(a.step_amount)} тг</div></div>` : ""}
       </div>
-      ${a.ends_at ? `<div style="font-size:.8rem;color:var(--muted);margin-bottom:8px">⏱ Дедлайн: ${new Date(a.ends_at).toLocaleString("ru-KZ", {day:"2-digit",month:"2-digit",year:"numeric",hour:"2-digit",minute:"2-digit"})} (${deadline})</div>` : ""}
+      ${a.ends_at ? `<div style="font-size:.8rem;color:var(--muted);margin-bottom:8px">${icon("clock")} Дедлайн: ${new Date(a.ends_at).toLocaleString("ru-KZ", {day:"2-digit",month:"2-digit",year:"numeric",hour:"2-digit",minute:"2-digit"})} (${deadline})</div>` : ""}
       ${myBest !== null ? `<div style="font-size:.85rem;margin-bottom:8px;padding:6px 10px;background:var(--surface-2,#f0f7ff);border-radius:6px">Ваша лучшая ставка: <strong>${fmtMoneyKzt(myBest)} тг</strong></div>` : ""}
       ${a.status === "active" ? `
         <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
@@ -7562,7 +7609,7 @@ function renderSupplierMyBids() {
   const activeBids = entries.filter(([, bids]) => bids.length > 0);
   if (!activeBids.length) return `
     <div class="panel" style="text-align:center;padding:32px 16px">
-      <div style="font-size:2rem;margin-bottom:8px">🏷️</div>
+      <div style="font-size:2rem;margin-bottom:8px">${icon("tag", 32, "empty")}️</div>
       <div style="color:var(--muted)">Вы ещё не делали ставок.<br>Перейдите в «Аукционы» и сделайте первую ставку.</div>
     </div>`;
   const auctionMap = Object.fromEntries((state.data.supplierPortal.auctions || []).map((a) => [String(a.id), a]));
@@ -7578,7 +7625,7 @@ function renderSupplierMyBids() {
           <strong>${auction ? escapeHtml(auction.title) : `Аукцион #${auctionId}`}</strong>
           ${auction ? `<div style="font-size:.82rem;color:var(--muted)">${escapeHtml(auction.product_name || "")} · ${escapeHtml(String(auction.quantity))} ${escapeHtml(auction.unit)}</div>` : ""}
         </div>
-        ${iWon ? `<span style="color:var(--success,#16a34a);font-weight:700;font-size:.9rem">🏆 Победа!</span>` : (isActive ? `<span class="badge ok">Активен</span>` : `<span class="badge">${auction?.status || "—"}</span>`)}
+        ${iWon ? `<span style="color:var(--success,#16a34a);font-weight:700;font-size:.9rem">${icon("trophy")} Победа!</span>` : (isActive ? `<span class="badge ok">Активен</span>` : `<span class="badge">${auction?.status || "—"}</span>`)}
       </div>
       <div style="display:flex;gap:16px;margin-bottom:8px">
         <div><div style="font-size:.75rem;color:var(--muted)">Лучшая ставка</div><div style="font-weight:700;color:var(--accent)">${fmtMoneyKzt(myBest)} тг</div></div>
@@ -7600,7 +7647,7 @@ function renderSupplierPriceHistory() {
   const rows = state.data.supplierPortal.priceHistory;
   if (!rows.length) return `
     <div class="panel" style="text-align:center;padding:32px 16px">
-      <div style="font-size:2rem;margin-bottom:8px">💰</div>
+      <div style="font-size:2rem;margin-bottom:8px">${icon("coins", 32, "empty")}</div>
       <div style="color:var(--muted)">История цен пока пуста.<br>Она формируется автоматически из принятых поставок.</div>
     </div>`;
   return `
@@ -7629,7 +7676,7 @@ function renderSupplierShipments() {
   };
   if (!rows.length) return `
     <div class="panel" style="text-align:center;padding:32px 16px">
-      <div style="font-size:2rem;margin-bottom:8px">🚚</div>
+      <div style="font-size:2rem;margin-bottom:8px">${icon("truck", 32, "empty")}</div>
       <div style="color:var(--muted)">Активных поставок нет.<br>Они появятся, когда склад создаст заявку на вашу поставку.</div>
     </div>`;
   return rows.map((s) => {
@@ -7680,7 +7727,7 @@ function renderSupplierReviews() {
   const rows = state.data.supplierPortal.reviews;
   if (!rows.length) return `
     <div class="panel" style="text-align:center;padding:32px 16px">
-      <div style="font-size:2rem;margin-bottom:8px">⭐</div>
+      <div style="font-size:2rem;margin-bottom:8px">${icon("star", 32, "empty")}</div>
       <div style="color:var(--muted)">Отзывов пока нет.<br>Они появятся после завершения первых поставок.</div>
     </div>`;
   const avgRating = (rows.reduce((s, r) => s + (r.rating || 0), 0) / rows.length).toFixed(1);
@@ -7723,7 +7770,7 @@ function renderSupplierOrders() {
   };
   if (!items.length) return `
     <div class="panel" style="text-align:center;padding:32px 16px">
-      <div style="font-size:2rem;margin-bottom:8px">📋</div>
+      <div style="font-size:2rem;margin-bottom:8px">${icon("clipboard", 32, "empty")}</div>
       <div style="color:var(--muted)">Нет завершённых заказов.<br>Здесь появятся запросы со статусом «Заказано» или «Завершён».</div>
     </div>`;
   const totalRevenue = items.reduce((s, o) => s + Number(o.total_amount || 0), 0);
@@ -7842,7 +7889,7 @@ function renderSupplierInquiries() {
   if (!items.length) return `
     ${filterBar}
     <div class="panel" style="text-align:center;padding:32px 16px">
-      <div style="font-size:2rem;margin-bottom:8px">📨</div>
+      <div style="font-size:2rem;margin-bottom:8px">${icon("inbox", 32, "empty")}</div>
       <div style="color:var(--muted)">${hasActiveFilters ? "По выбранным фильтрам входящих запросов нет.<br>Сбросьте фильтры или выберите другой источник/статус." : "Входящих запросов нет.<br>Они появятся, когда склад запросит ваш товар из каталога."}</div>
       ${hasActiveFilters ? `<button class="secondary" style="margin-top:16px" id="supplier-inquiry-empty-reset">Сбросить фильтры</button>` : ""}
     </div>`;
@@ -7875,7 +7922,7 @@ function renderSupplierInquiries() {
           <strong>Ваш ответ:</strong> ${escapeHtml(inq.supplier_response)}
         </div>` : ""}
       <div style="display:flex;gap:8px;margin-top:8px">
-        <button class="secondary" style="font-size:.82rem" data-inquiry-chat="${inq.id}" data-chat-role="supplier">💬 Переписка</button>
+        <button class="secondary" style="font-size:.82rem" data-inquiry-chat="${inq.id}" data-chat-role="supplier">${icon("chat")} Переписка</button>
       </div>
       ${inq.status === "pending" ? `
         <details style="margin-top:8px">
@@ -7888,7 +7935,7 @@ function renderSupplierInquiries() {
       ${inq.status === "responded" ? `
         <div style="margin-top:8px">
           <button class="primary" style="font-size:.82rem" data-create-shipment-inq='${JSON.stringify({id:inq.id, product_name:inq.product_name, quantity:inq.quantity, unit:inq.unit, warehouse_name:inq.warehouse_name, actor_id:inq.actor_id})}'>
-            🚚 Создать поставку
+            ${icon("truck")} Создать поставку
           </button>
         </div>` : ""}
     </div>`;
@@ -7941,8 +7988,8 @@ function renderSupplierMyCatalog() {
         <button class="${item.is_active ? "secondary" : "primary"}" style="font-size:.82rem" data-catalog-toggle="${item.id}" data-catalog-active="${item.is_active}">
           ${item.is_active ? "Скрыть" : "Опубликовать"}
         </button>
-        ${item.image_url ? "" : `<label class="secondary" style="font-size:.82rem;padding:.35rem .9rem;border-radius:6px;cursor:pointer;border:1px solid var(--line)">📷 Фото<input type="file" accept="image/*" style="display:none" data-catalog-upload-image="${item.id}" /></label>`}
-        <button class="secondary" style="font-size:.82rem" data-catalog-tiers="${item.id}" data-catalog-unit="${escapeAttr(item.unit||"")}">📊 Объём</button>
+        ${item.image_url ? "" : `<label class="secondary" style="font-size:.82rem;padding:.35rem .9rem;border-radius:6px;cursor:pointer;border:1px solid var(--line)">${icon("camera")} Фото<input type="file" accept="image/*" style="display:none" data-catalog-upload-image="${item.id}" /></label>`}
+        <button class="secondary" style="font-size:.82rem" data-catalog-tiers="${item.id}" data-catalog-unit="${escapeAttr(item.unit||"")}">${icon("chart")} Объём</button>
         <button class="danger" style="font-size:.82rem" data-catalog-delete="${item.id}">Удалить</button>
       </div>
       <div id="catalog-edit-form-${item.id}" style="display:none;margin-top:12px">
@@ -8011,7 +8058,7 @@ function renderSupplierMyCatalog() {
         <option value="hidden" ${catalogStatusFilter === "hidden" ? "selected" : ""}>Только скрытые</option>
       </select>
       <button class="secondary" style="font-size:.82rem" id="catalog-bulk-price-btn">% Цены</button>
-      <button class="secondary" style="font-size:.82rem" id="catalog-import-btn">📥 CSV</button>
+      <button class="secondary" style="font-size:.82rem" id="catalog-import-btn">${icon("download")} CSV</button>
       <button class="primary" id="catalog-add-btn">+ Добавить</button>
     </div>
     <div id="catalog-bulk-price-panel" style="display:none;margin-bottom:12px">
@@ -8090,7 +8137,7 @@ function renderSupplierMyCatalog() {
     </div>
     ${filteredItems.length ? filteredItems.map(itemCard).join("") : `
       <div class="panel" style="text-align:center;padding:32px 16px">
-        <div style="font-size:2.5rem;margin-bottom:8px">${items.length ? "🔍" : "🛍️"}</div>
+        <div style="font-size:2.5rem;margin-bottom:8px">${items.length ? icon("search", 40, "empty") : icon("bag", 40, "empty")}</div>
         <div style="color:var(--muted)">${items.length ? "Ничего не найдено по вашему поиску." : "Ваш каталог пуст.<br>Нажмите «+ Добавить товар», чтобы опубликовать первую позицию."}</div>
       </div>`}`;
 }
@@ -8129,11 +8176,11 @@ function renderSupplierProfile() {
   const statsCard = stats ? `
     <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(110px,1fr));gap:8px;margin-bottom:12px">
       ${[
-        ["🛍️", stats.catalog_active, "Товаров в каталоге"],
-        ["📨", stats.inquiries_pending, "Новых запросов"],
-        ["🚚", stats.shipments_active, "Поставок в пути"],
-        ["🏆", stats.auctions_won, "Выиграно аукционов"],
-        ["⭐", stats.reviews_avg != null ? Number(stats.reviews_avg).toFixed(1) : "—", "Рейтинг"],
+        [icon("bag", 26), stats.catalog_active, "Товаров в каталоге"],
+        [icon("inbox", 26), stats.inquiries_pending, "Новых запросов"],
+        [icon("truck", 26), stats.shipments_active, "Поставок в пути"],
+        [icon("trophy", 26), stats.auctions_won, "Выиграно аукционов"],
+        [icon("star", 26), stats.reviews_avg != null ? Number(stats.reviews_avg).toFixed(1) : "—", "Рейтинг"],
       ].map(([icon, val, label]) => `
         <div class="panel" style="text-align:center;padding:12px 8px">
           <div style="font-size:1.4rem">${icon}</div>
@@ -8159,7 +8206,7 @@ function renderSupplierProfile() {
       ${p.bank_details ? `<div style="background:var(--surface-2,#f5f5f5);border-radius:6px;padding:10px 12px;font-size:.88rem;white-space:pre-wrap;margin-bottom:10px"><span style="color:var(--muted);display:block;font-size:.78rem;margin-bottom:4px">Банковские реквизиты</span>${escapeHtml(p.bank_details)}</div>` : ""}
       ${p.notes ? `<div style="font-size:.9rem;color:var(--muted)">${escapeHtml(p.notes)}</div>` : ""}
       <hr style="margin:16px 0">
-      ${p.is_verified ? `<div style="background:#f0fff4;border:1px solid #16a34a;border-radius:8px;padding:10px 14px;margin-bottom:12px;display:flex;align-items:center;gap:8px"><span style="font-size:1.2rem">✅</span><div><strong style="color:#16a34a">Поставщик верифицирован</strong>${p.verified_at ? `<div style="font-size:.78rem;color:var(--muted)">${String(p.verified_at).slice(0,10)}</div>` : ""}</div></div>` : `<div style="background:#fffbeb;border:1px solid #f59e0b;border-radius:8px;padding:10px 14px;margin-bottom:12px;display:flex;align-items:center;gap:10px"><span style="font-size:1.2rem">⏳</span><div><strong style="color:#92400e">Верификация не пройдена</strong><div style="font-size:.8rem;color:var(--muted);margin-top:2px">Загрузите документы ниже чтобы получить значок верифицированного поставщика</div></div></div>`}
+      ${p.is_verified ? `<div style="background:#f0fff4;border:1px solid #16a34a;border-radius:8px;padding:10px 14px;margin-bottom:12px;display:flex;align-items:center;gap:8px"><span style="font-size:1.2rem">${icon("check", 18, "")}</span><div><strong style="color:#16a34a">Поставщик верифицирован</strong>${p.verified_at ? `<div style="font-size:.78rem;color:var(--muted)">${String(p.verified_at).slice(0,10)}</div>` : ""}</div></div>` : `<div style="background:#fffbeb;border:1px solid #f59e0b;border-radius:8px;padding:10px 14px;margin-bottom:12px;display:flex;align-items:center;gap:10px"><span style="font-size:1.2rem">${icon("clock", 18, "")}</span><div><strong style="color:#92400e">Верификация не пройдена</strong><div style="font-size:.8rem;color:var(--muted);margin-top:2px">Загрузите документы ниже чтобы получить значок верифицированного поставщика</div></div></div>`}
       <details>
         <summary style="cursor:pointer;font-weight:600;color:var(--accent)">Редактировать контактную информацию</summary>
         <form id="supplier-profile-edit-form" style="margin-top:10px;display:grid;gap:8px">
@@ -8182,7 +8229,7 @@ function renderSupplierProfile() {
       </details>
     </div>
     <div class="panel" style="margin-bottom:12px">
-      <h4 style="margin:0 0 10px">📋 Документы для верификации</h4>
+      <h4 style="margin:0 0 10px">${icon("clipboard")} Документы для верификации</h4>
       ${(state.data.supplierPortal.verificationDocs||[]).length ? (state.data.supplierPortal.verificationDocs||[]).map((d) => `
         <div style="display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid var(--line)">
           <div>
@@ -8201,7 +8248,7 @@ function renderSupplierProfile() {
           <option value="other">Другое</option>
         </select>
         <label class="primary" style="cursor:pointer;display:inline-block;padding:.5rem 1rem;border-radius:6px;font-size:.88rem;text-align:center">
-          📎 Выбрать файл
+          ${icon("paperclip")} Выбрать файл
           <input type="file" id="vdoc-file-input" style="display:none" accept=".pdf,.jpg,.jpeg,.png,.doc,.docx" />
         </label>
       </div>
@@ -8288,7 +8335,7 @@ function bindSupplierActions() {
       render();
     } catch (err) {
       alert(err.message || "Ошибка при загрузке");
-      if (label) label.textContent = "📎 Выбрать файл";
+      if (label) label.innerHTML = `${icon("paperclip")} Выбрать файл`;
     }
   });
 
@@ -8737,14 +8784,14 @@ function updateBecomeSupplierButton() {
   const latest = apps[0];
   if (!latest) return;
   const STATUS_LABELS = {
-    pending: "⏳ Заявка на рассмотрении",
-    needs_changes: "✏️ Требуются исправления",
-    rejected: "❌ Заявка отклонена",
+    pending: `${icon("clock")} Заявка на рассмотрении`,
+    needs_changes: `${icon("edit")} Требуются исправления`,
+    rejected: `${icon("x")} Заявка отклонена`,
     approved: null,
   };
   const label = STATUS_LABELS[latest.status];
   if (!label) return;
-  btn.textContent = label;
+  btn.innerHTML = label;
   btn.classList.remove("primary");
   btn.classList.add(latest.status === "rejected" ? "danger" : "secondary");
 }
@@ -8791,7 +8838,6 @@ function applyDensity() {
 async function loadAll() {
   // Standalone (non-tetis, non-/sklad) требует логин перед загрузкой
   const _isStandaloneGuard = !(
-    window.location.pathname.startsWith("/sklad") ||
     window.location.hostname === "tetis1.kz" ||
     window.location.hostname === "www.tetis1.kz"
   );
@@ -9778,7 +9824,7 @@ function bindActions() {
       panel.innerHTML = `
         <div class="panel">
           <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
-            <strong>📦 Предложения поставщиков: «${escapeHtml(productName)}»</strong>
+            <strong>${icon("box")} Предложения поставщиков: «${escapeHtml(productName)}»</strong>
             <button class="secondary" style="font-size:.78rem" id="pr-offers-close">✕ Закрыть</button>
           </div>
           <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:10px">
@@ -10212,7 +10258,7 @@ function bindActions() {
       const resultEl = document.getElementById("ai-analysis-result");
       try {
         setPending(btn, true, "Анализирую");
-        if (resultEl) { resultEl.style.display = "block"; resultEl.innerHTML = "⏳ ИИ анализирует заявки..."; }
+        if (resultEl) { resultEl.style.display = "block"; resultEl.innerHTML = `${icon("clock")} ИИ анализирует заявки...`; }
         const wf = warehouseFilterParam();
         const warehouseId = wf ? Number(new URLSearchParams(wf).get("warehouse_id")) || null : null;
         const result = await request("/ai/analyze-purchases", {
@@ -10225,7 +10271,7 @@ function bindActions() {
           `<td style="padding:4px;color:${decisionColor[r.decision]||"#374151"};font-weight:600">${escapeHtml(r.decision||"")}</td>` +
           `<td style="padding:4px;font-size:.82rem;color:#6b7280">${escapeHtml(r.reason||"")}</td></tr>`
         ).join("");
-        const html = `<b>🤖 AI анализ закупок</b>` +
+        const html = `<b>${icon("cpu")} AI анализ закупок</b>` +
           (result.summary ? `<p style="margin:.5rem 0;color:#374151">${escapeHtml(result.summary)}</p>` : "") +
           (rows ? `<table style="width:100%;border-collapse:collapse;margin-top:.5rem">` +
             `<thead><tr style="border-bottom:1px solid #bae6fd">` +
